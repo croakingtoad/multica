@@ -63,6 +63,15 @@ func TestPluginsV1DefaultsOff(t *testing.T) {
 	}
 }
 
+func TestProjectPlansDefaultsOff(t *testing.T) {
+	if ProjectPlansEnabled(context.Background(), nil) {
+		t.Fatal("project_plans must stay disabled unless explicitly enabled")
+	}
+	if _, published := EvaluateFrontendPublicFlags(context.Background(), nil)[ProjectPlans]; published {
+		t.Fatal("project_plans is server-internal until its public surface ships")
+	}
+}
+
 func TestPluginSubFlagsAreNotPublished(t *testing.T) {
 	flags := EvaluateFrontendPublicFlags(context.Background(), nil)
 	for _, retired := range []string{"private_plugins_v1", "remote_mcp_plugins_v1"} {
