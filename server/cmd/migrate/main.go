@@ -274,6 +274,22 @@ var concurrentIndexCleanups = map[string]string{
 	"438_agent_runtime_online_last_seen_index":                  "idx_agent_runtime_online_last_seen",
 	"439_agent_runtime_offline_last_seen_index":                 "idx_agent_runtime_offline_last_seen",
 	"440_github_pr_head_sha_index":                              "idx_github_pull_request_head_sha",
+	"442_project_plan_project_version_key":                      "project_plan_project_version_key",
+	"443_project_plan_project_id_active_idx":                    "project_plan_project_id_active_idx",
+	"444_project_plan_workspace_id_idx":                         "project_plan_workspace_id_idx",
+	"445_project_plan_source_issue_id_idx":                      "project_plan_source_issue_id_idx",
+	"446_project_plan_kind_idx":                                 "project_plan_kind_idx",
+	"447_project_plan_phase_plan_position_key":                  "project_plan_phase_plan_position_key",
+	"448_project_plan_part_phase_position_key":                  "project_plan_part_phase_position_key",
+	"449_project_plan_part_plan_phase_idx":                      "project_plan_part_plan_phase_idx",
+	"450_project_plan_part_issue_plan_issue_key":                "project_plan_part_issue_plan_issue_key",
+	"451_project_plan_part_issue_plan_part_issue_idx":           "project_plan_part_issue_plan_part_issue_idx",
+	"452_project_plan_part_issue_issue_id_idx":                  "project_plan_part_issue_issue_id_idx",
+	"453_project_plan_dependency_edge_key":                      "project_plan_dependency_edge_key",
+	"454_project_plan_dependency_blocked_phase_idx":             "project_plan_dependency_blocked_phase_idx",
+	"455_project_plan_dependency_blocked_part_idx":              "project_plan_dependency_blocked_part_idx",
+	"456_project_plan_dependency_blocking_phase_idx":            "project_plan_dependency_blocking_phase_idx",
+	"457_project_plan_dependency_blocking_part_idx":             "project_plan_dependency_blocking_part_idx",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction
