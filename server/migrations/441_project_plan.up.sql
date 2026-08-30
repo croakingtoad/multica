@@ -9,7 +9,7 @@
 -- after an explicit export. No existing project or issue data is modified.
 
 CREATE TABLE project_plan_kind (
-    key TEXT PRIMARY KEY CHECK (key ~ '^[a-z][a-z0-9_]*$'),
+    key TEXT NOT NULL CHECK (key ~ '^[a-z][a-z0-9_]*$'),
     display_name TEXT NOT NULL CHECK (char_length(display_name) >= 1),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -22,7 +22,7 @@ VALUES
     ('sprint', 'Sprint');
 
 CREATE TABLE project_plan (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL,
     project_id UUID NOT NULL,
     version INTEGER NOT NULL CHECK (version >= 1),
@@ -63,7 +63,7 @@ CREATE TABLE project_plan (
 );
 
 CREATE TABLE project_plan_phase (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     project_plan_id UUID NOT NULL,
     title TEXT NOT NULL CHECK (char_length(title) >= 1),
     description TEXT NOT NULL DEFAULT '',
@@ -76,7 +76,7 @@ CREATE TABLE project_plan_phase (
 );
 
 CREATE TABLE project_plan_part (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     project_plan_id UUID NOT NULL,
     project_plan_phase_id UUID NOT NULL,
     title TEXT NOT NULL CHECK (char_length(title) >= 1),
@@ -91,7 +91,7 @@ CREATE TABLE project_plan_part (
 );
 
 CREATE TABLE project_plan_part_issue (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     project_plan_id UUID NOT NULL,
     project_plan_part_id UUID NOT NULL,
     issue_id UUID,
@@ -102,7 +102,7 @@ CREATE TABLE project_plan_part_issue (
 );
 
 CREATE TABLE project_plan_dependency (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     project_plan_id UUID NOT NULL,
     blocked_phase_id UUID,
     blocked_part_id UUID,

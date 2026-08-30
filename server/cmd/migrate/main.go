@@ -290,6 +290,12 @@ var concurrentIndexCleanups = map[string]string{
 	"455_project_plan_dependency_blocked_part_idx":              "project_plan_dependency_blocked_part_idx",
 	"456_project_plan_dependency_blocking_phase_idx":            "project_plan_dependency_blocking_phase_idx",
 	"457_project_plan_dependency_blocking_part_idx":             "project_plan_dependency_blocking_part_idx",
+	"458_project_plan_kind_key_index":                           "idx_project_plan_kind_key",
+	"459_project_plan_id_index":                                 "idx_project_plan_id",
+	"460_project_plan_phase_id_index":                           "idx_project_plan_phase_id",
+	"461_project_plan_part_id_index":                            "idx_project_plan_part_id",
+	"462_project_plan_part_issue_id_index":                      "idx_project_plan_part_issue_id",
+	"463_project_plan_dependency_id_index":                      "idx_project_plan_dependency_id",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction
