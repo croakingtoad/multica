@@ -28,6 +28,155 @@ FOR UPDATE;
 SELECT * FROM project_plan
 WHERE id = $1 AND workspace_id = $2;
 
+-- name: GetActiveProjectPlanForRead :one
+SELECT id, workspace_id, project_id, version, kind, origin, title, description,
+       attributes, source_issue_id, source_issue_revision,
+       source_description_snapshot, source_content_sha256,
+       created_by_type, created_by_id, superseded_at, created_at, updated_at
+FROM project_plan
+WHERE project_id = $1
+  AND workspace_id = $2
+  AND superseded_at IS NULL;
+
+-- name: GetProjectPlanForRead :one
+SELECT id, workspace_id, project_id, version, kind, origin, title, description,
+       attributes, source_issue_id, source_issue_revision,
+       source_description_snapshot, source_content_sha256,
+       created_by_type, created_by_id, superseded_at, created_at, updated_at
+FROM project_plan
+WHERE id = $1
+  AND project_id = $2
+  AND workspace_id = $3;
+
+-- name: ListProjectPlanRollups :many
+WITH part_rollup AS (
+    SELECT
+        part.id,
+        part.project_plan_id,
+        part.project_plan_phase_id,
+        part.title,
+        part.description,
+        part.acceptance_criteria,
+        part.attributes,
+        part.position,
+        part.created_at,
+        part.updated_at,
+        COUNT(link.id)::bigint AS membership_rows,
+        COUNT(issue.id) FILTER (
+            WHERE issue_effective_status(issue.workspace_id, issue.status) <> 'cancelled'
+        )::bigint AS tasks_total,
+        COUNT(issue.id) FILTER (
+            WHERE issue_effective_status(issue.workspace_id, issue.status) = 'done'
+        )::bigint AS tasks_done,
+        COUNT(issue.id) FILTER (
+            WHERE issue_effective_status(issue.workspace_id, issue.status)
+                NOT IN ('backlog', 'todo', 'cancelled')
+        )::bigint AS tasks_started
+    FROM project_plan_part AS part
+    LEFT JOIN project_plan_part_issue AS link
+      ON link.project_plan_id = part.project_plan_id
+     AND link.project_plan_part_id = part.id
+    LEFT JOIN issue
+      ON issue.id = link.issue_id
+     AND issue.workspace_id = sqlc.arg('workspace_id')
+     AND issue.project_id = sqlc.arg('project_id')
+    WHERE part.project_plan_id = sqlc.arg('project_plan_id')
+    GROUP BY
+        part.id,
+        part.project_plan_id,
+        part.project_plan_phase_id,
+        part.title,
+        part.description,
+        part.acceptance_criteria,
+        part.attributes,
+        part.position,
+        part.created_at,
+        part.updated_at
+)
+SELECT
+    phase.id AS phase_id,
+    phase.title AS phase_title,
+    phase.description AS phase_description,
+    phase.attributes AS phase_attributes,
+    phase.position AS phase_position,
+    phase.created_at AS phase_created_at,
+    phase.updated_at AS phase_updated_at,
+    part.id AS part_id,
+    part.title AS part_title,
+    part.description AS part_description,
+    part.acceptance_criteria AS part_acceptance_criteria,
+    part.attributes AS part_attributes,
+    part.position AS part_position,
+    part.created_at AS part_created_at,
+    part.updated_at AS part_updated_at,
+    COALESCE(part.membership_rows, 0)::bigint AS part_membership_rows,
+    COALESCE(part.tasks_total, 0)::bigint AS part_tasks_total,
+    COALESCE(part.tasks_done, 0)::bigint AS part_tasks_done,
+    COALESCE(part.tasks_started, 0)::bigint AS part_tasks_started,
+    COALESCE(SUM(part.tasks_total) OVER (PARTITION BY phase.id), 0)::bigint AS phase_tasks_total,
+    COALESCE(SUM(part.tasks_done) OVER (PARTITION BY phase.id), 0)::bigint AS phase_tasks_done,
+    COALESCE(SUM(part.tasks_total) OVER (), 0)::bigint AS plan_tasks_total,
+    COALESCE(SUM(part.tasks_done) OVER (), 0)::bigint AS plan_tasks_done,
+    COUNT(part.id) OVER ()::bigint AS plan_parts_total,
+    COUNT(part.id) FILTER (WHERE part.membership_rows > 0) OVER ()::bigint AS plan_parts_covered,
+    COUNT(part.id) FILTER (WHERE part.membership_rows = 0) OVER ()::bigint AS plan_parts_without_tasks
+FROM project_plan_phase AS phase
+LEFT JOIN part_rollup AS part
+  ON part.project_plan_id = phase.project_plan_id
+ AND part.project_plan_phase_id = phase.id
+WHERE phase.project_plan_id = sqlc.arg('project_plan_id')
+ORDER BY phase.position, part.position NULLS LAST, part.id;
+
+-- name: ListProjectPlanIssueDetails :many
+SELECT
+    link.project_plan_part_id,
+    issue.id AS issue_id,
+    COALESCE(issue.number, link.issue_number_snapshot)::integer AS issue_number,
+    COALESCE(issue.title, link.issue_title_snapshot)::text AS issue_title,
+    issue.status AS issue_status,
+    CASE
+        WHEN issue.id IS NULL THEN 'deleted'
+        ELSE issue_effective_status(issue.workspace_id, issue.status)
+    END::text AS issue_status_category,
+    issue.assignee_type,
+    issue.assignee_id,
+    (issue.id IS NULL)::boolean AS issue_deleted,
+    workspace.issue_prefix
+FROM project_plan_part_issue AS link
+JOIN workspace ON workspace.id = sqlc.arg('workspace_id')
+LEFT JOIN issue
+  ON issue.id = link.issue_id
+ AND issue.workspace_id = sqlc.arg('workspace_id')
+ AND issue.project_id = sqlc.arg('project_id')
+WHERE link.project_plan_id = sqlc.arg('project_plan_id')
+ORDER BY link.project_plan_part_id, link.created_at, link.id;
+
+-- name: ListProjectPlanDependenciesForRead :many
+SELECT id, project_plan_id, blocked_phase_id, blocked_part_id,
+       blocking_phase_id, blocking_part_id, created_at, updated_at
+FROM project_plan_dependency
+WHERE project_plan_id = $1
+ORDER BY created_at, id;
+
+-- name: ListProjectPlanUncoveredParts :many
+SELECT
+    part.id AS part_id,
+    part.title AS part_title,
+    phase.id AS phase_id,
+    phase.title AS phase_title,
+    phase.position AS phase_position,
+    part.position AS part_position
+FROM project_plan_part AS part
+JOIN project_plan_phase AS phase
+  ON phase.project_plan_id = part.project_plan_id
+ AND phase.id = part.project_plan_phase_id
+LEFT JOIN project_plan_part_issue AS link
+  ON link.project_plan_id = part.project_plan_id
+ AND link.project_plan_part_id = part.id
+WHERE part.project_plan_id = $1
+  AND link.id IS NULL
+ORDER BY phase.position, part.position, part.id;
+
 -- name: GetActiveProjectPlanForWrite :one
 SELECT * FROM project_plan
 WHERE project_id = $1 AND workspace_id = $2 AND superseded_at IS NULL

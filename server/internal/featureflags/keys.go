@@ -23,9 +23,9 @@ const (
 	// gate pinned Task/Run execution: disabling discovery and management must not
 	// mutate an immutable execution manifest that is already in flight.
 	PluginsV1 = "plugins_v1"
-	// ProjectPlans gates the server-internal plan repository and write service.
-	// It stays unpublished until the read API and UI exist; callers without an
-	// configured flag service therefore fail closed.
+	// ProjectPlans gates the plan repository plus its read and write services.
+	// It stays unpublished until the UI exists; callers without a configured
+	// flag service therefore fail closed.
 	ProjectPlans = "project_plans"
 	// agentBuilderCompat is no longer a release flag. Keep publishing the key
 	// as enabled so installed desktop clients that still gate the AI creation

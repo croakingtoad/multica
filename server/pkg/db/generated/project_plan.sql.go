@@ -499,6 +499,48 @@ func (q *Queries) DeleteProjectPlanPhases(ctx context.Context, projectPlanID pgt
 	return err
 }
 
+const getActiveProjectPlanForRead = `-- name: GetActiveProjectPlanForRead :one
+SELECT id, workspace_id, project_id, version, kind, origin, title, description,
+       attributes, source_issue_id, source_issue_revision,
+       source_description_snapshot, source_content_sha256,
+       created_by_type, created_by_id, superseded_at, created_at, updated_at
+FROM project_plan
+WHERE project_id = $1
+  AND workspace_id = $2
+  AND superseded_at IS NULL
+`
+
+type GetActiveProjectPlanForReadParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetActiveProjectPlanForRead(ctx context.Context, arg GetActiveProjectPlanForReadParams) (ProjectPlan, error) {
+	row := q.db.QueryRow(ctx, getActiveProjectPlanForRead, arg.ProjectID, arg.WorkspaceID)
+	var i ProjectPlan
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Version,
+		&i.Kind,
+		&i.Origin,
+		&i.Title,
+		&i.Description,
+		&i.Attributes,
+		&i.SourceIssueID,
+		&i.SourceIssueRevision,
+		&i.SourceDescriptionSnapshot,
+		&i.SourceContentSha256,
+		&i.CreatedByType,
+		&i.CreatedByID,
+		&i.SupersededAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getActiveProjectPlanForWrite = `-- name: GetActiveProjectPlanForWrite :one
 SELECT id, workspace_id, project_id, version, kind, origin, title, description, attributes, source_issue_id, source_issue_revision, source_description_snapshot, source_content_sha256, created_by_type, created_by_id, superseded_at, created_at, updated_at FROM project_plan
 WHERE project_id = $1 AND workspace_id = $2 AND superseded_at IS NULL
@@ -561,6 +603,49 @@ type GetProjectPlanParams struct {
 
 func (q *Queries) GetProjectPlan(ctx context.Context, arg GetProjectPlanParams) (ProjectPlan, error) {
 	row := q.db.QueryRow(ctx, getProjectPlan, arg.ID, arg.WorkspaceID)
+	var i ProjectPlan
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Version,
+		&i.Kind,
+		&i.Origin,
+		&i.Title,
+		&i.Description,
+		&i.Attributes,
+		&i.SourceIssueID,
+		&i.SourceIssueRevision,
+		&i.SourceDescriptionSnapshot,
+		&i.SourceContentSha256,
+		&i.CreatedByType,
+		&i.CreatedByID,
+		&i.SupersededAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getProjectPlanForRead = `-- name: GetProjectPlanForRead :one
+SELECT id, workspace_id, project_id, version, kind, origin, title, description,
+       attributes, source_issue_id, source_issue_revision,
+       source_description_snapshot, source_content_sha256,
+       created_by_type, created_by_id, superseded_at, created_at, updated_at
+FROM project_plan
+WHERE id = $1
+  AND project_id = $2
+  AND workspace_id = $3
+`
+
+type GetProjectPlanForReadParams struct {
+	ID          pgtype.UUID `json:"id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetProjectPlanForRead(ctx context.Context, arg GetProjectPlanForReadParams) (ProjectPlan, error) {
+	row := q.db.QueryRow(ctx, getProjectPlanForRead, arg.ID, arg.ProjectID, arg.WorkspaceID)
 	var i ProjectPlan
 	err := row.Scan(
 		&i.ID,
@@ -775,6 +860,118 @@ func (q *Queries) ListProjectPlanDependenciesForClone(ctx context.Context, proje
 	return items, nil
 }
 
+const listProjectPlanDependenciesForRead = `-- name: ListProjectPlanDependenciesForRead :many
+SELECT id, project_plan_id, blocked_phase_id, blocked_part_id,
+       blocking_phase_id, blocking_part_id, created_at, updated_at
+FROM project_plan_dependency
+WHERE project_plan_id = $1
+ORDER BY created_at, id
+`
+
+func (q *Queries) ListProjectPlanDependenciesForRead(ctx context.Context, projectPlanID pgtype.UUID) ([]ProjectPlanDependency, error) {
+	rows, err := q.db.Query(ctx, listProjectPlanDependenciesForRead, projectPlanID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProjectPlanDependency{}
+	for rows.Next() {
+		var i ProjectPlanDependency
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectPlanID,
+			&i.BlockedPhaseID,
+			&i.BlockedPartID,
+			&i.BlockingPhaseID,
+			&i.BlockingPartID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectPlanIssueDetails = `-- name: ListProjectPlanIssueDetails :many
+SELECT
+    link.project_plan_part_id,
+    issue.id AS issue_id,
+    COALESCE(issue.number, link.issue_number_snapshot)::integer AS issue_number,
+    COALESCE(issue.title, link.issue_title_snapshot)::text AS issue_title,
+    issue.status AS issue_status,
+    CASE
+        WHEN issue.id IS NULL THEN 'deleted'
+        ELSE issue_effective_status(issue.workspace_id, issue.status)
+    END::text AS issue_status_category,
+    issue.assignee_type,
+    issue.assignee_id,
+    (issue.id IS NULL)::boolean AS issue_deleted,
+    workspace.issue_prefix
+FROM project_plan_part_issue AS link
+JOIN workspace ON workspace.id = $1
+LEFT JOIN issue
+  ON issue.id = link.issue_id
+ AND issue.workspace_id = $1
+ AND issue.project_id = $2
+WHERE link.project_plan_id = $3
+ORDER BY link.project_plan_part_id, link.created_at, link.id
+`
+
+type ListProjectPlanIssueDetailsParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+	ProjectPlanID pgtype.UUID `json:"project_plan_id"`
+}
+
+type ListProjectPlanIssueDetailsRow struct {
+	ProjectPlanPartID   pgtype.UUID `json:"project_plan_part_id"`
+	IssueID             pgtype.UUID `json:"issue_id"`
+	IssueNumber         int32       `json:"issue_number"`
+	IssueTitle          string      `json:"issue_title"`
+	IssueStatus         pgtype.Text `json:"issue_status"`
+	IssueStatusCategory string      `json:"issue_status_category"`
+	AssigneeType        pgtype.Text `json:"assignee_type"`
+	AssigneeID          pgtype.UUID `json:"assignee_id"`
+	IssueDeleted        bool        `json:"issue_deleted"`
+	IssuePrefix         string      `json:"issue_prefix"`
+}
+
+func (q *Queries) ListProjectPlanIssueDetails(ctx context.Context, arg ListProjectPlanIssueDetailsParams) ([]ListProjectPlanIssueDetailsRow, error) {
+	rows, err := q.db.Query(ctx, listProjectPlanIssueDetails, arg.WorkspaceID, arg.ProjectID, arg.ProjectPlanID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectPlanIssueDetailsRow{}
+	for rows.Next() {
+		var i ListProjectPlanIssueDetailsRow
+		if err := rows.Scan(
+			&i.ProjectPlanPartID,
+			&i.IssueID,
+			&i.IssueNumber,
+			&i.IssueTitle,
+			&i.IssueStatus,
+			&i.IssueStatusCategory,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.IssueDeleted,
+			&i.IssuePrefix,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectPlanPartIDs = `-- name: ListProjectPlanPartIDs :many
 SELECT id FROM project_plan_part
 WHERE project_plan_id = $1 AND project_plan_phase_id = $2
@@ -928,6 +1125,224 @@ func (q *Queries) ListProjectPlanPhasesForClone(ctx context.Context, projectPlan
 			&i.Position,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectPlanRollups = `-- name: ListProjectPlanRollups :many
+WITH part_rollup AS (
+    SELECT
+        part.id,
+        part.project_plan_id,
+        part.project_plan_phase_id,
+        part.title,
+        part.description,
+        part.acceptance_criteria,
+        part.attributes,
+        part.position,
+        part.created_at,
+        part.updated_at,
+        COUNT(link.id)::bigint AS membership_rows,
+        COUNT(issue.id) FILTER (
+            WHERE issue_effective_status(issue.workspace_id, issue.status) <> 'cancelled'
+        )::bigint AS tasks_total,
+        COUNT(issue.id) FILTER (
+            WHERE issue_effective_status(issue.workspace_id, issue.status) = 'done'
+        )::bigint AS tasks_done,
+        COUNT(issue.id) FILTER (
+            WHERE issue_effective_status(issue.workspace_id, issue.status)
+                NOT IN ('backlog', 'todo', 'cancelled')
+        )::bigint AS tasks_started
+    FROM project_plan_part AS part
+    LEFT JOIN project_plan_part_issue AS link
+      ON link.project_plan_id = part.project_plan_id
+     AND link.project_plan_part_id = part.id
+    LEFT JOIN issue
+      ON issue.id = link.issue_id
+     AND issue.workspace_id = $2
+     AND issue.project_id = $3
+    WHERE part.project_plan_id = $1
+    GROUP BY
+        part.id,
+        part.project_plan_id,
+        part.project_plan_phase_id,
+        part.title,
+        part.description,
+        part.acceptance_criteria,
+        part.attributes,
+        part.position,
+        part.created_at,
+        part.updated_at
+)
+SELECT
+    phase.id AS phase_id,
+    phase.title AS phase_title,
+    phase.description AS phase_description,
+    phase.attributes AS phase_attributes,
+    phase.position AS phase_position,
+    phase.created_at AS phase_created_at,
+    phase.updated_at AS phase_updated_at,
+    part.id AS part_id,
+    part.title AS part_title,
+    part.description AS part_description,
+    part.acceptance_criteria AS part_acceptance_criteria,
+    part.attributes AS part_attributes,
+    part.position AS part_position,
+    part.created_at AS part_created_at,
+    part.updated_at AS part_updated_at,
+    COALESCE(part.membership_rows, 0)::bigint AS part_membership_rows,
+    COALESCE(part.tasks_total, 0)::bigint AS part_tasks_total,
+    COALESCE(part.tasks_done, 0)::bigint AS part_tasks_done,
+    COALESCE(part.tasks_started, 0)::bigint AS part_tasks_started,
+    COALESCE(SUM(part.tasks_total) OVER (PARTITION BY phase.id), 0)::bigint AS phase_tasks_total,
+    COALESCE(SUM(part.tasks_done) OVER (PARTITION BY phase.id), 0)::bigint AS phase_tasks_done,
+    COALESCE(SUM(part.tasks_total) OVER (), 0)::bigint AS plan_tasks_total,
+    COALESCE(SUM(part.tasks_done) OVER (), 0)::bigint AS plan_tasks_done,
+    COUNT(part.id) OVER ()::bigint AS plan_parts_total,
+    COUNT(part.id) FILTER (WHERE part.membership_rows > 0) OVER ()::bigint AS plan_parts_covered,
+    COUNT(part.id) FILTER (WHERE part.membership_rows = 0) OVER ()::bigint AS plan_parts_without_tasks
+FROM project_plan_phase AS phase
+LEFT JOIN part_rollup AS part
+  ON part.project_plan_id = phase.project_plan_id
+ AND part.project_plan_phase_id = phase.id
+WHERE phase.project_plan_id = $1
+ORDER BY phase.position, part.position NULLS LAST, part.id
+`
+
+type ListProjectPlanRollupsParams struct {
+	ProjectPlanID pgtype.UUID `json:"project_plan_id"`
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+}
+
+type ListProjectPlanRollupsRow struct {
+	PhaseID                pgtype.UUID        `json:"phase_id"`
+	PhaseTitle             string             `json:"phase_title"`
+	PhaseDescription       string             `json:"phase_description"`
+	PhaseAttributes        []byte             `json:"phase_attributes"`
+	PhasePosition          int32              `json:"phase_position"`
+	PhaseCreatedAt         pgtype.Timestamptz `json:"phase_created_at"`
+	PhaseUpdatedAt         pgtype.Timestamptz `json:"phase_updated_at"`
+	PartID                 pgtype.UUID        `json:"part_id"`
+	PartTitle              pgtype.Text        `json:"part_title"`
+	PartDescription        pgtype.Text        `json:"part_description"`
+	PartAcceptanceCriteria pgtype.Text        `json:"part_acceptance_criteria"`
+	PartAttributes         []byte             `json:"part_attributes"`
+	PartPosition           pgtype.Int4        `json:"part_position"`
+	PartCreatedAt          pgtype.Timestamptz `json:"part_created_at"`
+	PartUpdatedAt          pgtype.Timestamptz `json:"part_updated_at"`
+	PartMembershipRows     int64              `json:"part_membership_rows"`
+	PartTasksTotal         int64              `json:"part_tasks_total"`
+	PartTasksDone          int64              `json:"part_tasks_done"`
+	PartTasksStarted       int64              `json:"part_tasks_started"`
+	PhaseTasksTotal        int64              `json:"phase_tasks_total"`
+	PhaseTasksDone         int64              `json:"phase_tasks_done"`
+	PlanTasksTotal         int64              `json:"plan_tasks_total"`
+	PlanTasksDone          int64              `json:"plan_tasks_done"`
+	PlanPartsTotal         int64              `json:"plan_parts_total"`
+	PlanPartsCovered       int64              `json:"plan_parts_covered"`
+	PlanPartsWithoutTasks  int64              `json:"plan_parts_without_tasks"`
+}
+
+func (q *Queries) ListProjectPlanRollups(ctx context.Context, arg ListProjectPlanRollupsParams) ([]ListProjectPlanRollupsRow, error) {
+	rows, err := q.db.Query(ctx, listProjectPlanRollups, arg.ProjectPlanID, arg.WorkspaceID, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectPlanRollupsRow{}
+	for rows.Next() {
+		var i ListProjectPlanRollupsRow
+		if err := rows.Scan(
+			&i.PhaseID,
+			&i.PhaseTitle,
+			&i.PhaseDescription,
+			&i.PhaseAttributes,
+			&i.PhasePosition,
+			&i.PhaseCreatedAt,
+			&i.PhaseUpdatedAt,
+			&i.PartID,
+			&i.PartTitle,
+			&i.PartDescription,
+			&i.PartAcceptanceCriteria,
+			&i.PartAttributes,
+			&i.PartPosition,
+			&i.PartCreatedAt,
+			&i.PartUpdatedAt,
+			&i.PartMembershipRows,
+			&i.PartTasksTotal,
+			&i.PartTasksDone,
+			&i.PartTasksStarted,
+			&i.PhaseTasksTotal,
+			&i.PhaseTasksDone,
+			&i.PlanTasksTotal,
+			&i.PlanTasksDone,
+			&i.PlanPartsTotal,
+			&i.PlanPartsCovered,
+			&i.PlanPartsWithoutTasks,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectPlanUncoveredParts = `-- name: ListProjectPlanUncoveredParts :many
+SELECT
+    part.id AS part_id,
+    part.title AS part_title,
+    phase.id AS phase_id,
+    phase.title AS phase_title,
+    phase.position AS phase_position,
+    part.position AS part_position
+FROM project_plan_part AS part
+JOIN project_plan_phase AS phase
+  ON phase.project_plan_id = part.project_plan_id
+ AND phase.id = part.project_plan_phase_id
+LEFT JOIN project_plan_part_issue AS link
+  ON link.project_plan_id = part.project_plan_id
+ AND link.project_plan_part_id = part.id
+WHERE part.project_plan_id = $1
+  AND link.id IS NULL
+ORDER BY phase.position, part.position, part.id
+`
+
+type ListProjectPlanUncoveredPartsRow struct {
+	PartID        pgtype.UUID `json:"part_id"`
+	PartTitle     string      `json:"part_title"`
+	PhaseID       pgtype.UUID `json:"phase_id"`
+	PhaseTitle    string      `json:"phase_title"`
+	PhasePosition int32       `json:"phase_position"`
+	PartPosition  int32       `json:"part_position"`
+}
+
+func (q *Queries) ListProjectPlanUncoveredParts(ctx context.Context, projectPlanID pgtype.UUID) ([]ListProjectPlanUncoveredPartsRow, error) {
+	rows, err := q.db.Query(ctx, listProjectPlanUncoveredParts, projectPlanID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectPlanUncoveredPartsRow{}
+	for rows.Next() {
+		var i ListProjectPlanUncoveredPartsRow
+		if err := rows.Scan(
+			&i.PartID,
+			&i.PartTitle,
+			&i.PhaseID,
+			&i.PhaseTitle,
+			&i.PhasePosition,
+			&i.PartPosition,
 		); err != nil {
 			return nil, err
 		}
