@@ -7,13 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/featureflag"
 )
 
@@ -237,6 +241,137 @@ func TestSecondActivePlanReturnsTypedError(t *testing.T) {
 	}
 }
 
+func TestConcurrentActivePlanCreationAllowsExactlyOne(t *testing.T) {
+	fixture := newPlanTestFixture(t)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+
+	for _, title := range []string{"Concurrent first", "Concurrent second"} {
+		title := title
+		go func() {
+			ready.Done()
+			<-start
+			_, err := fixture.service.CreateManual(context.Background(), CreateManualParams{
+				WorkspaceID: fixture.workspaceID, ProjectID: fixture.projectID, Kind: "prd",
+				Title: title, CreatedBy: fixture.actor(),
+			})
+			results <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	var successes, activePlanErrors int
+	for range 2 {
+		err := <-results
+		if err == nil {
+			successes++
+			continue
+		}
+		if got := planErrorKind(t, err); got != ErrorActivePlanExists {
+			t.Fatalf("error kind = %q, want %q", got, ErrorActivePlanExists)
+		}
+		activePlanErrors++
+	}
+	if successes != 1 || activePlanErrors != 1 {
+		t.Fatalf("successes/active-plan errors = %d/%d, want 1/1", successes, activePlanErrors)
+	}
+
+	var activeRows int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM project_plan
+		WHERE workspace_id = $1 AND project_id = $2 AND superseded_at IS NULL
+	`, fixture.workspaceID, fixture.projectID).Scan(&activeRows); err != nil {
+		t.Fatalf("count active plans: %v", err)
+	}
+	if activeRows != 1 {
+		t.Fatalf("active plan rows = %d, want 1", activeRows)
+	}
+}
+
+func TestProjectPlanSourceProvenanceConstraintRejectsInvalidRows(t *testing.T) {
+	fixture := newPlanTestFixture(t)
+	issueID := fixture.issue(t, "Provenance source", "Exact source")
+	queries := db.New(fixture.pool)
+	validDigest := hex.EncodeToString(make([]byte, sha256.Size))
+
+	validIssueParams := func() db.CreateProjectPlanParams {
+		return db.CreateProjectPlanParams{
+			WorkspaceID: fixture.workspaceID, ProjectID: fixture.projectID,
+			Version: 1, Kind: "prd", Origin: "issue", Title: "Invalid provenance",
+			SourceIssueID:             issueID,
+			SourceIssueRevision:       pgtype.Int8{Int64: 1, Valid: true},
+			SourceDescriptionSnapshot: pgtype.Text{String: "Exact source", Valid: true},
+			SourceContentSha256:       pgtype.Text{String: validDigest, Valid: true},
+			CreatedByType:             "member", CreatedByID: fixture.userID,
+		}
+	}
+	validManualParams := func() db.CreateProjectPlanParams {
+		return db.CreateProjectPlanParams{
+			WorkspaceID: fixture.workspaceID, ProjectID: fixture.projectID,
+			Version: 1, Kind: "prd", Origin: "manual", Title: "Invalid provenance",
+			CreatedByType: "member", CreatedByID: fixture.userID,
+		}
+	}
+
+	tests := []struct {
+		name   string
+		params func() db.CreateProjectPlanParams
+	}{
+		{name: "issue missing revision", params: func() db.CreateProjectPlanParams {
+			params := validIssueParams()
+			params.SourceIssueRevision = pgtype.Int8{}
+			return params
+		}},
+		{name: "issue missing snapshot", params: func() db.CreateProjectPlanParams {
+			params := validIssueParams()
+			params.SourceDescriptionSnapshot = pgtype.Text{}
+			return params
+		}},
+		{name: "issue missing digest", params: func() db.CreateProjectPlanParams {
+			params := validIssueParams()
+			params.SourceContentSha256 = pgtype.Text{}
+			return params
+		}},
+		{name: "manual with source issue", params: func() db.CreateProjectPlanParams {
+			params := validManualParams()
+			params.SourceIssueID = issueID
+			return params
+		}},
+		{name: "manual with source revision", params: func() db.CreateProjectPlanParams {
+			params := validManualParams()
+			params.SourceIssueRevision = pgtype.Int8{Int64: 1, Valid: true}
+			return params
+		}},
+		{name: "manual with source snapshot", params: func() db.CreateProjectPlanParams {
+			params := validManualParams()
+			params.SourceDescriptionSnapshot = pgtype.Text{String: "Exact source", Valid: true}
+			return params
+		}},
+		{name: "manual with source digest", params: func() db.CreateProjectPlanParams {
+			params := validManualParams()
+			params.SourceContentSha256 = pgtype.Text{String: validDigest, Valid: true}
+			return params
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := queries.CreateProjectPlan(context.Background(), test.params())
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) {
+				t.Fatalf("error = %T %v, want PostgreSQL constraint error", err, err)
+			}
+			if pgErr.Code != "23514" || pgErr.ConstraintName != "project_plan_source_provenance_check" {
+				t.Fatalf("PostgreSQL error = %s/%s, want 23514/project_plan_source_provenance_check",
+					pgErr.Code, pgErr.ConstraintName)
+			}
+		})
+	}
+}
+
 func TestSupersedeClonesStructureAndKeepsPriorMappings(t *testing.T) {
 	fixture := newPlanTestFixture(t)
 	oldPlanID := fixture.createManual(t, "Version one")
@@ -328,6 +463,70 @@ func TestDeleteImpactAndDeleteLeaveIssuesIntact(t *testing.T) {
 	}
 	if planRows != 0 {
 		t.Fatalf("plan structure retained %d rows", planRows)
+	}
+}
+
+func TestDeletePlanRollsBackEveryRowWhenCascadeFails(t *testing.T) {
+	fixture := newPlanTestFixture(t)
+	planID := fixture.createManual(t, "Rollback plan")
+	phaseTitle := fmt.Sprintf("projectplan rollback sentinel %d", time.Now().UnixNano())
+	phaseID := fixture.addPhase(t, planID, phaseTitle, 0)
+	partID := fixture.addPart(t, planID, phaseID, "Rollback part", 0)
+	issueID := fixture.issue(t, "Rollback issue", "Must remain")
+	if _, err := fixture.service.LinkIssue(context.Background(), fixture.workspaceID, planID, partID, issueID); err != nil {
+		t.Fatalf("LinkIssue: %v", err)
+	}
+	if _, err := fixture.pool.Exec(context.Background(), `
+		INSERT INTO project_plan_dependency (
+			project_plan_id, blocked_part_id, blocking_phase_id
+		) VALUES ($1, $2, $3)
+	`, planID, partID, phaseID); err != nil {
+		t.Fatalf("seed dependency: %v", err)
+	}
+
+	suffix := time.Now().UnixNano()
+	functionName := pgx.Identifier{fmt.Sprintf("project_plan_rollback_%d", suffix)}.Sanitize()
+	triggerName := pgx.Identifier{fmt.Sprintf("project_plan_rollback_%d", suffix)}.Sanitize()
+	if _, err := fixture.pool.Exec(context.Background(), fmt.Sprintf(`
+		CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN
+			RAISE EXCEPTION 'injected project plan phase delete failure';
+		END
+		$body$
+	`, functionName)); err != nil {
+		t.Fatalf("create rollback function: %v", err)
+	}
+	if _, err := fixture.pool.Exec(context.Background(), fmt.Sprintf(`
+		CREATE TRIGGER %s BEFORE DELETE ON project_plan_phase
+		FOR EACH ROW WHEN (OLD.project_plan_id = '%s'::uuid)
+		EXECUTE FUNCTION %s()
+	`, triggerName, util.UUIDToString(planID), functionName)); err != nil {
+		_, _ = fixture.pool.Exec(context.Background(), fmt.Sprintf("DROP FUNCTION %s()", functionName))
+		t.Fatalf("create rollback trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.pool.Exec(context.Background(), fmt.Sprintf("DROP TRIGGER %s ON project_plan_phase", triggerName))
+		_, _ = fixture.pool.Exec(context.Background(), fmt.Sprintf("DROP FUNCTION %s()", functionName))
+	})
+
+	if _, err := fixture.service.DeletePlan(context.Background(), fixture.workspaceID, planID); err == nil {
+		t.Fatal("DeletePlan succeeded despite injected mid-cascade failure")
+	}
+
+	var structureRows, issueRows int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT
+			(SELECT COUNT(*) FROM project_plan WHERE id = $1) +
+			(SELECT COUNT(*) FROM project_plan_phase WHERE project_plan_id = $1) +
+			(SELECT COUNT(*) FROM project_plan_part WHERE project_plan_id = $1) +
+			(SELECT COUNT(*) FROM project_plan_part_issue WHERE project_plan_id = $1) +
+			(SELECT COUNT(*) FROM project_plan_dependency WHERE project_plan_id = $1),
+			(SELECT COUNT(*) FROM issue WHERE id = $2)
+	`, planID, issueID).Scan(&structureRows, &issueRows); err != nil {
+		t.Fatalf("count rows after rollback: %v", err)
+	}
+	if structureRows != 5 || issueRows != 1 {
+		t.Fatalf("plan/issue rows after rollback = %d/%d, want 5/1", structureRows, issueRows)
 	}
 }
 
