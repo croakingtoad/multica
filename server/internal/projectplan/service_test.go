@@ -77,16 +77,22 @@ func newPlanTestFixture(t *testing.T) *planTestFixture {
 
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM project_plan_dependency WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM project_plan_part_issue WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM project_plan_part WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM project_plan_phase WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM project_plan WHERE workspace_id = $1`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM issue WHERE workspace_id = $1`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM project WHERE id = $1`, projectID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM member WHERE workspace_id = $1`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM "user" WHERE id = $1`, userID)
+		cleanup := func(name, query string, args ...any) {
+			t.Helper()
+			if _, err := pool.Exec(cleanupCtx, query, args...); err != nil {
+				t.Errorf("cleanup %s: %v", name, err)
+			}
+		}
+		cleanup("project plan dependencies", `DELETE FROM project_plan_dependency WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
+		cleanup("project plan issue links", `DELETE FROM project_plan_part_issue WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
+		cleanup("project plan parts", `DELETE FROM project_plan_part WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
+		cleanup("project plan phases", `DELETE FROM project_plan_phase WHERE project_plan_id IN (SELECT id FROM project_plan WHERE workspace_id = $1)`, workspaceID)
+		cleanup("project plans", `DELETE FROM project_plan WHERE workspace_id = $1`, workspaceID)
+		cleanup("issues", `DELETE FROM issue WHERE workspace_id = $1`, workspaceID)
+		cleanup("project", `DELETE FROM project WHERE id = $1`, projectID)
+		cleanup("members", `DELETE FROM member WHERE workspace_id = $1`, workspaceID)
+		cleanup("workspace", `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		cleanup("user", `DELETE FROM "user" WHERE id = $1`, userID)
 	})
 
 	provider := featureflag.NewStaticProvider()
@@ -396,8 +402,12 @@ func TestDeletePhaseAndPartPerformApplicationCascades(t *testing.T) {
 	partID := fixture.addPart(t, planID, phaseID, "Delete with phase", 0)
 	keptPartID := fixture.addPart(t, planID, keptPhaseID, "Delete directly", 0)
 	issueID := fixture.issue(t, "Cascade survivor", "")
+	directIssueID := fixture.issue(t, "Direct cascade survivor", "")
 	if _, err := fixture.service.LinkIssue(context.Background(), fixture.workspaceID, planID, partID, issueID); err != nil {
 		t.Fatalf("LinkIssue: %v", err)
+	}
+	if _, err := fixture.service.LinkIssue(context.Background(), fixture.workspaceID, planID, keptPartID, directIssueID); err != nil {
+		t.Fatalf("LinkIssue direct part: %v", err)
 	}
 	if _, err := fixture.pool.Exec(context.Background(),
 		`INSERT INTO project_plan_dependency (
@@ -424,18 +434,31 @@ func TestDeletePhaseAndPartPerformApplicationCascades(t *testing.T) {
 	if removedRows != 0 {
 		t.Fatalf("phase cascade retained %d rows", removedRows)
 	}
+	if _, err := fixture.pool.Exec(context.Background(),
+		`INSERT INTO project_plan_dependency (
+			project_plan_id, blocked_part_id, blocking_phase_id
+		) VALUES ($1, $2, $3)`, planID, keptPartID, keptPhaseID,
+	); err != nil {
+		t.Fatalf("seed direct-part dependency: %v", err)
+	}
 	if err := fixture.service.DeletePart(context.Background(), fixture.workspaceID, planID, keptPartID); err != nil {
 		t.Fatalf("DeletePart: %v", err)
 	}
-	var issueCount, partCount int
-	if err := fixture.pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM issue WHERE id = $1`, issueID).Scan(&issueCount); err != nil {
-		t.Fatalf("count issue: %v", err)
+	var issueCount, removedPartRows int
+	if err := fixture.pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM issue WHERE id = $1 OR id = $2`, issueID, directIssueID).Scan(&issueCount); err != nil {
+		t.Fatalf("count issues: %v", err)
 	}
-	if err := fixture.pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM project_plan_part WHERE id = $1`, keptPartID).Scan(&partCount); err != nil {
-		t.Fatalf("count part: %v", err)
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT
+			(SELECT COUNT(*) FROM project_plan_part WHERE id = $1) +
+			(SELECT COUNT(*) FROM project_plan_part_issue WHERE project_plan_part_id = $1) +
+			(SELECT COUNT(*) FROM project_plan_dependency WHERE blocked_part_id = $1 OR blocking_part_id = $1)`,
+		keptPartID,
+	).Scan(&removedPartRows); err != nil {
+		t.Fatalf("count part cascade: %v", err)
 	}
-	if issueCount != 1 || partCount != 0 {
-		t.Fatalf("issue/part counts = %d/%d, want 1/0", issueCount, partCount)
+	if issueCount != 2 || removedPartRows != 0 {
+		t.Fatalf("surviving issues/removed part rows = %d/%d, want 2/0", issueCount, removedPartRows)
 	}
 }
 
