@@ -185,12 +185,18 @@
     "tooltip_table": "テーブル表示",
     "tooltip_gantt": "ガント表示",
     "tooltip_swimlane": "スイムレーン表示",
+    "tooltip_plan_document": "計画書表示",
+    "tooltip_plan_pipeline": "計画パイプライン表示",
+    "tooltip_plan_coverage": "計画カバレッジ表示",
     "section": "表示",
     "board": "ボード",
     "list": "リスト",
     "table": "テーブル",
     "gantt": "ガント",
-    "swimlane": "スイムレーン"
+    "swimlane": "スイムレーン",
+    "plan_document": "計画書",
+    "plan_pipeline": "計画パイプライン",
+    "plan_coverage": "計画カバレッジ"
   },
   "table": {
     "select_all": "表示中のタスクをすべて選択",
@@ -553,6 +559,67 @@
     "title": "フィルター条件に一致するタスクがありません",
     "hint": "フィルターを変更または解除すると、このビューのタスクが表示されます。",
     "clear_button": "フィルターを解除"
+  },
+  "plan": {
+    "error": {
+      "title": "計画を読み込めませんでした",
+      "hint": "リクエストが失敗しました。計画はまだ存在している可能性があります。再試行してください。",
+      "retry": "再試行"
+    },
+    "coverage_state": {
+      "complete": "完了",
+      "in_progress": "進行中",
+      "not_started": "未着手",
+      "no_tasks_yet": "タスク未作成",
+      "covered_no_active_tasks": "カバー済み・進行中のタスクなし"
+    },
+    "coverage_hint": {
+      "no_tasks_yet": "計画には記載されていますが、まだタスクが作成されていません。",
+      "covered_no_active_tasks": "関連するタスクはすべてキャンセルまたは削除されました。この部分は現在の作業に反映されていません。"
+    },
+    "phase_rollup": "{{done}}/{{total}} タスク · {{percent}}%",
+    "part_gap_more_other": "他 {{count}} 件のギャップ",
+    "superseded_banner": "この計画バージョンは {{date}} に置き換えられました。以下のタスク状況はスナップショットではなくライブです。",
+    "document": {
+      "subtitle": "バージョン {{version}} · フェーズ {{phaseCount}} 件",
+      "stat_percent": "完了",
+      "stat_tasks": "タスク完了",
+      "stat_gaps": "部分が未分解"
+    },
+    "pipeline": {
+      "stat_percent": "完了",
+      "stat_tasks": "タスク",
+      "stat_gaps": "部分が未分解",
+      "gate_covered": "ゲート: {{total}} 部分中 {{covered}} 部分がカバー済み",
+      "blocked_on_phase": "{{title}} でブロック中",
+      "blocked_on_part": "{{title}}（{{phase}}）でブロック中",
+      "blocked_missing": "存在しない依存関係でブロックされています",
+      "lane_status": {
+        "complete": "完了",
+        "blocked": "ブロック中",
+        "in_progress": "進行中",
+        "not_started": "未着手"
+      }
+    },
+    "coverage": {
+      "tile_percent": "計画完了率",
+      "tile_tasks": "タスク完了",
+      "tile_parts_covered": "部分がカバー済み",
+      "tile_gaps": "部分がタスク未作成",
+      "risk_banner_title_other": "{{total}} 件中 {{count}} 件の計画部分がタスクに分解されていません",
+      "risk_banner_hint": "これらは計画上では識別されていますが、現在のタスクトラッカーには表示されていません。",
+      "risk_chip_more_other": "他 {{count}} 件",
+      "col_part": "計画部分",
+      "col_coverage": "カバー状況",
+      "col_progress": "進捗",
+      "col_assignees": "担当者",
+      "not_decomposed": "—未分解—",
+      "no_assignees": "—"
+    }
+  },
+  "plan_empty": {
+    "title": "計画はまだありません",
+    "hint": "このプロジェクトにはまだ計画がありません。計画を作成すると、計画書・パイプライン・カバレッジの各表示に実際の内容が表示されます。"
   },
   "agent_live": {
     "is_working": "{{name}} が作業中",

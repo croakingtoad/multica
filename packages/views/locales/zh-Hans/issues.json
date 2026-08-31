@@ -185,12 +185,18 @@
     "tooltip_table": "表格视图",
     "tooltip_gantt": "甘特图",
     "tooltip_swimlane": "泳道视图",
+    "tooltip_plan_document": "计划文档视图",
+    "tooltip_plan_pipeline": "计划流程视图",
+    "tooltip_plan_coverage": "计划覆盖率视图",
     "section": "视图",
     "board": "看板",
     "list": "列表",
     "table": "表格",
     "gantt": "甘特图",
-    "swimlane": "泳道"
+    "swimlane": "泳道",
+    "plan_document": "计划文档",
+    "plan_pipeline": "计划流程",
+    "plan_coverage": "计划覆盖率"
   },
   "table": {
     "select_all": "选择所有可见任务",
@@ -553,6 +559,67 @@
     "title": "没有符合筛选条件的任务",
     "hint": "调整或清除筛选条件，就能看到这个视图里的任务。",
     "clear_button": "清除筛选"
+  },
+  "plan_empty": {
+    "title": "暂无计划",
+    "hint": "此项目还没有计划。创建计划后，文档、流程和覆盖率视图才会显示实际内容。"
+  },
+  "plan": {
+    "error": {
+      "title": "计划加载失败",
+      "hint": "请求失败了。计划可能仍然存在——请重试。",
+      "retry": "重试"
+    },
+    "coverage_state": {
+      "complete": "已完成",
+      "in_progress": "进行中",
+      "not_started": "未开始",
+      "no_tasks_yet": "暂无任务",
+      "covered_no_active_tasks": "已覆盖·无活跃任务"
+    },
+    "coverage_hint": {
+      "no_tasks_yet": "已在计划中识别，但尚未创建任务。",
+      "covered_no_active_tasks": "关联的任务都已取消或删除，此部分未在当前工作中体现。"
+    },
+    "phase_rollup": "{{done}}/{{total}} 个任务 · {{percent}}%",
+    "part_gap_more_other": "还有 {{count}} 个缺口",
+    "superseded_banner": "此计划版本已于 {{date}} 被取代。下方的任务状态为实时状态，而非快照。",
+    "document": {
+      "subtitle": "第 {{version}} 版 · {{phaseCount}} 个阶段",
+      "stat_percent": "已完成",
+      "stat_tasks": "个任务已完成",
+      "stat_gaps": "个部分尚未拆解"
+    },
+    "pipeline": {
+      "stat_percent": "已完成",
+      "stat_tasks": "个任务",
+      "stat_gaps": "个部分未拆解",
+      "gate_covered": "关口：{{total}} 个部分中已覆盖 {{covered}} 个",
+      "blocked_on_phase": "被 {{title}} 阻塞",
+      "blocked_on_part": "被 {{title}}（{{phase}}）阻塞",
+      "blocked_missing": "被一个已不存在的依赖项阻塞",
+      "lane_status": {
+        "complete": "已完成",
+        "blocked": "已阻塞",
+        "in_progress": "进行中",
+        "not_started": "未开始"
+      }
+    },
+    "coverage": {
+      "tile_percent": "计划完成度",
+      "tile_tasks": "个任务已完成",
+      "tile_parts_covered": "个部分已覆盖",
+      "tile_gaps": "个部分暂无任务",
+      "risk_banner_title_other": "{{total}} 个计划部分中有 {{count}} 个尚未拆解为任务",
+      "risk_banner_hint": "这些内容已在计划中识别，但目前在任务跟踪器中不可见。",
+      "risk_chip_more_other": "还有 {{count}} 个",
+      "col_part": "计划部分",
+      "col_coverage": "覆盖状态",
+      "col_progress": "进度",
+      "col_assignees": "负责人",
+      "not_decomposed": "——尚未拆解——",
+      "no_assignees": "——"
+    }
   },
   "agent_live": {
     "is_working": "{{name}} 在工作",

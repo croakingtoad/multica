@@ -103,6 +103,7 @@ import type {
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
+  ProjectPlanOverview,
   Label,
   IssueProperty,
   IssuePropertyValue,
@@ -382,6 +383,7 @@ import {
   LabelSchema,
   ListLabelsResponseSchema,
   ListIssueStatusesResponseSchema,
+  ProjectPlanOverviewSchema,
   IssueStatusEntrySchema,
   IssuePropertySchema,
   ListPropertiesResponseSchema,
@@ -3604,6 +3606,43 @@ export class ApiClient {
     await this.fetch(`/api/projects/${projectId}/resources/${resourceId}`, {
       method: "DELETE",
     });
+  }
+
+  /**
+   * The project's active plan read model (LOCO-549), or `null` for a genuine
+   * "no active plan" 404. A schema-validation failure throws rather than
+   * falling back to a default, so a malformed response surfaces as an error
+   * state and never gets mistaken for "no plan" — see Addition 2 on LOCO-549.
+   */
+  async getActiveProjectPlan(projectId: string): Promise<ProjectPlanOverview | null> {
+    let raw: unknown;
+    try {
+      raw = await this.fetch<unknown>(`/api/projects/${projectId}/plan`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+    const parsed = ProjectPlanOverviewSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`GET /api/projects/{id}/plan: response failed schema validation`);
+    }
+    return parsed.data;
+  }
+
+  /** A specific retained plan version, with live (not snapshotted) issue status. */
+  async getProjectPlan(projectId: string, planId: string): Promise<ProjectPlanOverview | null> {
+    let raw: unknown;
+    try {
+      raw = await this.fetch<unknown>(`/api/projects/${projectId}/plans/${planId}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+    const parsed = ProjectPlanOverviewSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`GET /api/projects/{id}/plans/{planId}: response failed schema validation`);
+    }
+    return parsed.data;
   }
 
   // Labels

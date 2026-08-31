@@ -3,6 +3,8 @@ package featureflags
 import (
 	"context"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/featureflag"
 )
 
 func TestResourceLabelsCompatDecisionStaysEnabled(t *testing.T) {
@@ -60,6 +62,29 @@ func TestPluginsV1DefaultsOff(t *testing.T) {
 	flags := EvaluateFrontendPublicFlags(context.Background(), nil)
 	if flags[PluginsV1] {
 		t.Fatal("plugins_v1 must stay disabled unless explicitly enabled")
+	}
+}
+
+func TestProjectPlansDefaultsOff(t *testing.T) {
+	if ProjectPlansEnabled(context.Background(), nil) {
+		t.Fatal("project_plans must stay disabled unless explicitly enabled")
+	}
+	publishedValue, published := EvaluateFrontendPublicFlags(context.Background(), nil)[ProjectPlans]
+	if !published {
+		t.Fatal("project_plans must be published for the frontend")
+	}
+	if publishedValue {
+		t.Fatal("published project_plans must stay disabled unless explicitly enabled")
+	}
+}
+
+func TestProjectPlansPublishedValueTracksService(t *testing.T) {
+	provider := featureflag.NewStaticProvider()
+	provider.Set(ProjectPlans, featureflag.Rule{Default: true})
+	flags := featureflag.NewService(provider)
+
+	if !EvaluateFrontendPublicFlags(context.Background(), flags)[ProjectPlans] {
+		t.Fatal("published project_plans must reflect an enabled flag service")
 	}
 }
 
