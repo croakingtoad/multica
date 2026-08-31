@@ -389,19 +389,40 @@ diagnose_database() {
 }
 
 ensure_database() {
-  local admin_url=""
+  local admin_url="" probe_error="" reached_system_id="" compose_system_id=""
   if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
     admin_url="$(admin_database_url "$DATABASE_URL")"
   fi
 
   # Preferred path: create through the same connection string the application
   # uses, so "created" and "reachable" cannot describe two different servers.
-  if [ -n "$admin_url" ] && PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
+  if [ -n "$admin_url" ]; then
+    probe_error="$(mktemp)"
+  fi
+  if [ -n "$admin_url" ] && PGCONNECT_TIMEOUT=3 psql "$admin_url" -v VERBOSITY=verbose -tAc 'SELECT 1' >/dev/null 2>"$probe_error"; then
+    rm -f "$probe_error"
+    reached_system_id="$(PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT system_identifier FROM pg_control_system()' 2>/dev/null || true)"
+    compose_system_id="$(docker compose exec -T postgres \
+      psql -U "${POSTGRES_USER:-multica}" -d postgres -tAc \
+      'SELECT system_identifier FROM pg_control_system()' 2>/dev/null || true)"
+    if [ -z "$reached_system_id" ] || [ "$reached_system_id" != "$compose_system_id" ]; then
+      diagnose_database || true
+      die "Refusing to create ${POSTGRES_DB}: DATABASE_URL does not reach this Compose project's PostgreSQL."
+    fi
     if ! PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1; then
       psql "$admin_url" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${POSTGRES_DB}\"" >/dev/null
       info "Created database ${POSTGRES_DB} through DATABASE_URL."
     fi
   else
+    if [ -n "$probe_error" ] && {
+      grep -Eq '28P01|28000|SQLSTATE[[:space:]]+28|password authentication failed|authentication failed|no password supplied' "$probe_error" \
+        || { command -v pg_isready >/dev/null 2>&1 && pg_isready -d "$admin_url" >/dev/null 2>&1; }
+    }; then
+      rm -f "$probe_error"
+      diagnose_database || true
+      die "Database authentication failed; refusing to start or reuse a Compose PostgreSQL service."
+    fi
+    [ -z "$probe_error" ] || rm -f "$probe_error"
     info "Nothing is answering on ${POSTGRES_PORT:-5432} yet; starting the shared container."
     bash "$REPO_ROOT/scripts/ensure-postgres.sh" "$ENV_FILE" | sed 's/^/    /'
   fi
