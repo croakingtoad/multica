@@ -113,6 +113,101 @@ rewritten="$(bash -c 'source "$1"; database_url_with_name "$2" "$3"' _ \
 [ "$rewritten" = 'postgres://dev:p%40ss@127.0.0.1:55432/new_db?sslmode=require&application_name=dev' ] \
   || fail "database URL rewrite changed more than the database name: $rewritten"
 
+isolated_settings="$(bash -c '
+  source "$1"
+  printf "%s|%s|%s" \
+    "$(postgres_port_for_offset 321)" \
+    "$(compose_project_for_name ephemeral-321)" \
+    "$(database_url_with_port_and_name "$2" 25753 dev_db)"
+' _ "$root_dir/scripts/dev-env.sh" \
+  'postgres://dev:p%40ss@127.0.0.1:5432/old_db?sslmode=require')"
+[ "$isolated_settings" = '25753|multica_ephemeral-321|postgres://dev:p%40ss@127.0.0.1:25753/dev_db?sslmode=require' ] \
+  || fail "ephemeral PostgreSQL settings were not derived together: $isolated_settings"
+
+redacted="$(bash -c 'source "$1"; redact_database_url "$2"' _ \
+  "$root_dir/scripts/dev-env.sh" 'postgres://dev:real-secret@127.0.0.1:5432/dev')"
+case "$redacted" in
+  *real-secret*) fail "database URL diagnostics exposed the password" ;;
+  'postgres://dev:REDACTED@127.0.0.1:5432/dev') ;;
+  *) fail "database URL redaction returned $redacted" ;;
+esac
+
+# A pgx probe is mandatory even when neither host PostgreSQL client is on PATH.
+# Only its dedicated "connection refused" result may enter the Compose fallback;
+# authentication, timeout, build and unknown failures all fail closed.
+probe_root="$tmp_dir/probe-root"
+probe_bin="$tmp_dir/probe-bin"
+fallback_marker="$tmp_dir/ensure-postgres-called"
+mkdir -p "$probe_root/scripts" "$probe_root/server" "$probe_bin"
+cat > "$probe_bin/go" <<'EOF'
+#!/usr/bin/env bash
+case "${POSTGRES_PROBE_RESULT:-failure}" in
+  refused) echo "nothing-listening" ;;
+  *) echo "pgx probe could not verify the listener" >&2; exit 1 ;;
+esac
+EOF
+cat > "$probe_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+cat > "$probe_root/scripts/ensure-postgres.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s:%s\n' "\$COMPOSE_PROJECT_NAME" "\$POSTGRES_PORT" > "$fallback_marker"
+EOF
+chmod +x "$probe_bin/go" "$probe_bin/docker" "$probe_root/scripts/ensure-postgres.sh"
+
+probe_path="$probe_bin:/usr/bin:/bin"
+if PATH="$probe_path" command -v psql >/dev/null 2>&1 \
+  || PATH="$probe_path" command -v pg_isready >/dev/null 2>&1; then
+  fail "database guard test PATH unexpectedly contains psql or pg_isready"
+fi
+
+status=0
+PATH="$probe_path" POSTGRES_PROBE_RESULT=failure REPO_ROOT="$probe_root" \
+  DATABASE_URL='postgres://multica:wrong@127.0.0.1:25432/multica?sslmode=disable' \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "unverifiable pgx result reached the Compose fallback"
+[ ! -e "$fallback_marker" ] || fail "unverifiable pgx result started PostgreSQL"
+require_contains "$out" "pgx probe could not verify the listener"
+
+PATH="$probe_path" POSTGRES_PROBE_RESULT=refused REPO_ROOT="$probe_root" \
+  DATABASE_URL='postgres://multica:multica@127.0.0.1:25432/multica?sslmode=disable' \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 ENV_FILE=.env \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 \
+  || fail "a positively refused connection did not reach the Compose fallback"
+[ "$(cat "$fallback_marker")" = 'multica_ephemeral_321:25432' ] \
+  || fail "Compose fallback did not receive the upstream project and port"
+
+# ensure-postgres sources the checkout env file in a subprocess. It must retain
+# the explicit Make override instead of silently restoring the file's port.
+ensure_bin="$tmp_dir/ensure-bin"
+ensure_env="$tmp_dir/ensure.env"
+ensure_port_marker="$tmp_dir/ensure-port"
+mkdir -p "$ensure_bin"
+cat > "$ensure_env" <<'EOF'
+POSTGRES_DB=multica
+POSTGRES_USER=multica
+POSTGRES_PASSWORD=multica
+POSTGRES_PORT=5432
+DATABASE_URL=postgres://multica:multica@localhost:5432/multica?sslmode=disable
+EOF
+cat > "$ensure_bin/docker" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" compose up "*) printf '%s\n' "\$POSTGRES_PORT" > "$ensure_port_marker" ;;
+  *" psql "*) printf '1\n' ;;
+esac
+EOF
+chmod +x "$ensure_bin/docker"
+PATH="$ensure_bin:$PATH" MULTICA_POSTGRES_PORT_OVERRIDE=25432 \
+  bash "$root_dir/scripts/ensure-postgres.sh" "$ensure_env" > "$out" 2>&1 \
+  || fail "ensure-postgres rejected an explicit PostgreSQL port"
+[ "$(cat "$ensure_port_marker")" = 25432 ] \
+  || fail "ensure-postgres restored the env-file PostgreSQL port"
+
 # ---------------------------------------------------------------------------
 # A registered environment is visible to both renderings, and the JSON one
 # parses — agents read it, so a stray log line in it is a broken contract.
