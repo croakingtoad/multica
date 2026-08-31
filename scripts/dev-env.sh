@@ -437,6 +437,22 @@ redact_database_url() {
   ' "$1" 2>/dev/null || printf '<invalid>'
 }
 
+compose_postgres_system_id() {
+  docker compose exec -T postgres \
+    psql -U "${POSTGRES_USER:-multica}" -d postgres -Atqc \
+    'SELECT system_identifier::text FROM pg_control_system()' 2>/dev/null || true
+}
+
+run_postgres_probe() {
+  local mode=$1 admin_url=$2 database=$3 expected_system_id=$4 endpoint_file=$5
+  (
+    cd "$REPO_ROOT/server" && \
+      DATABASE_URL="$admin_url" POSTGRES_DB="$database" \
+      EXPECTED_SYSTEM_ID="$expected_system_id" POSTGRES_PROBE_ENDPOINT_FILE="$endpoint_file" \
+      POSTGRES_PROBE_MODE="$mode" POSTGRES_PORT="${POSTGRES_PORT:-5432}" go run ./cmd/postgres-probe
+  )
+}
+
 rewrite_database_endpoint() {
   local file="$REPO_ROOT/$1" port=$2 database=$3 tmp database_url escaped_database_url
   database_url="$(database_url_with_port_and_name "${DATABASE_URL:-}" "$port" "$database")" \
@@ -471,9 +487,7 @@ ensure_database() {
   admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
   [ -n "$admin_url" ] || die "The configured DATABASE_URL is not a valid URL."
 
-  compose_system_id="$(docker compose exec -T postgres \
-    psql -U "${POSTGRES_USER:-multica}" -d postgres -Atqc \
-    'SELECT system_identifier::text FROM pg_control_system()' 2>/dev/null || true)"
+  compose_system_id="$(compose_postgres_system_id)"
   probe_error="$(mktemp)"
   probe_stdout="$(mktemp)"
   probe_endpoint="$(mktemp)"
@@ -482,12 +496,8 @@ ensure_database() {
   # "nothing-listening" token means its TCP connection was refused, positively
   # establishing that nothing owns the Compose endpoint. Authentication,
   # timeout, DNS, build, endpoint and identity failures all abort instead.
-  if (
-    cd "$REPO_ROOT/server" && \
-      DATABASE_URL="$admin_url" POSTGRES_DB="$POSTGRES_DB" \
-      EXPECTED_SYSTEM_ID="$compose_system_id" POSTGRES_PROBE_ENDPOINT_FILE="$probe_endpoint" \
-      go run ./cmd/postgres-probe >"$probe_stdout" 2>"$probe_error"
-  ); then
+  if run_postgres_probe ensure "$admin_url" "$POSTGRES_DB" "$compose_system_id" "$probe_endpoint" \
+    >"$probe_stdout" 2>"$probe_error"; then
     probe_output="$(cat "$probe_stdout")"
     probe_output_bytes="$(wc -c < "$probe_stdout")"
     probe_result="$(printf '%s\n' "$probe_output" | sed -n '1p')"
@@ -1378,6 +1388,8 @@ cmd_down() {
 
 cmd_destroy() {
   local name="" assume_yes=0 reply admin_url failures=0
+  local compose_system_id expected_endpoint probe_endpoint probe_endpoint_value
+  local probe_error probe_output probe_result
   local expected_workspaces expected_desktop_data
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1395,28 +1407,36 @@ cmd_destroy() {
   fi
 
   export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export POSTGRES_PORT COMPOSE_PROJECT_NAME
   step "Destroying $NAME"
   local comp
   for comp in $ALL_COMPONENTS; do
     if ! stop_component "$comp"; then failures=$((failures + 1)); fi
   done
 
-  if command -v psql >/dev/null 2>&1; then
-    admin_url="$(admin_database_url "$DATABASE_URL")"
-    if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-      if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
-        ok "dropped database $DB_NAME"
-      else
-        warn "failed to drop database $DB_NAME; keeping its manifest"
-        failures=$((failures + 1))
-      fi
+  admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
+  [ -n "$admin_url" ] || die "The manifest's DATABASE_URL is invalid; refusing to drop $DB_NAME. Its manifest was kept."
+  compose_system_id="$(compose_postgres_system_id)"
+  expected_endpoint="127.0.0.1:${POSTGRES_PORT:-5432}"
+  probe_endpoint="$(mktemp)"
+  probe_error="$(mktemp)"
+  if probe_output="$(run_postgres_probe destroy "$admin_url" "$DB_NAME" "$compose_system_id" "$probe_endpoint" \
+    2>"$probe_error")"; then
+    probe_result="$(printf '%s\n' "$probe_output" | sed -n '1p')"
+    if [ "$probe_result" = dropped ]; then
+      rm -f "$probe_endpoint" "$probe_error"
+      probe_output="$(printf '%s\n' "$probe_output" | sed '1d')"
+      [ -z "$probe_output" ] || info "$probe_output"
     else
-      warn "Nothing answered on the database host; $DB_NAME was left in place."
-      failures=$((failures + 1))
+      printf 'Unexpected database destroy probe result: %s\n' "${probe_result:-<empty>}" >> "$probe_error"
     fi
-  else
-    warn "psql not found; $DB_NAME was left in place."
-    failures=$((failures + 1))
+  fi
+  if [ "${probe_result:-}" != dropped ]; then
+    probe_endpoint_value="$(cat "$probe_endpoint" 2>/dev/null || true)"
+    sed 's/^/    /' "$probe_error" >&2 || true
+    warn "Database destroy probe checked endpoint ${probe_endpoint_value:-<unverified>}; expected this environment's Compose PostgreSQL at $expected_endpoint."
+    rm -f "$probe_endpoint" "$probe_error"
+    die "Cannot verify the PostgreSQL target; refusing to drop $DB_NAME. Its manifest and other resources were kept."
   fi
 
   if rm -rf "$PROFILE_DIR"; then
@@ -1547,6 +1567,8 @@ cmd_gc() {
       [ -n "$reason" ] || exit 0
       if [ "$dry_run" = 1 ]; then
         printf '%s would be collected: %s\n' "$NAME" "$reason"
+      elif [ "$automatic" = 1 ] && [ "$OWNER" = human ]; then
+        warn "automatic cleanup skipped human-owned environment $NAME; $reason"
       else
         printf '%s: %s\n' "$NAME" "$reason"
         if ! bash "$REPO_ROOT/scripts/dev-env.sh" destroy "$NAME" --yes; then

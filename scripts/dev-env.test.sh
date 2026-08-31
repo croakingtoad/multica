@@ -47,14 +47,14 @@ dev_env() {
 }
 
 write_manifest() {
-  local name=$1 dir=$2 offset=$3
+  local name=$1 dir=$2 offset=$3 owner=${4:-agent}
   local profile="dev-dev-env-test-$offset"
   mkdir -p "$MULTICA_DEV_HOME/envs/$name/logs"
   cat > "$MULTICA_DEV_HOME/envs/$name/manifest.env" <<EOF
 NAME=$name
 DIR=$(printf '%q' "$dir")
 CREATED_AT=2026-01-01T00:00:00Z
-OWNER=agent
+OWNER=$owner
 TTL_HOURS=0
 ENV_FILE=.env.example
 OFFSET=$offset
@@ -148,6 +148,22 @@ write_probe_endpoint() {
 case "${POSTGRES_PROBE_RESULT:-failure}" in
   refused) write_probe_endpoint; printf %s "nothing-listening" ;;
   token-extra) write_probe_endpoint; printf 'nothing-listening\nunexpected-output' ;;
+  destroy-ready)
+    write_probe_endpoint
+    [ "${POSTGRES_PROBE_MODE:-ensure}" != destroy ] \
+      || printf '%s\n' "$POSTGRES_DB" > "$POSTGRES_DROP_MARKER"
+    printf 'dropped\nDropped database %s through verified DATABASE_URL.\n' "$POSTGRES_DB"
+    ;;
+  destroy-mismatch)
+    write_probe_endpoint
+    echo "DATABASE_URL reached 127.0.0.1:$POSTGRES_PORT, which is not this Compose project's PostgreSQL" >&2
+    exit 1
+    ;;
+  destroy-failure)
+    write_probe_endpoint
+    echo "drop development database: forced test failure" >&2
+    exit 1
+    ;;
   real)
     cd "$POSTGRES_PROBE_SOURCE"
     exec "$REAL_GO" run ./cmd/postgres-probe
@@ -165,7 +181,12 @@ printf '%s:%s\n' "\$COMPOSE_PROJECT_NAME" "\$POSTGRES_PORT" > "$fallback_marker"
 EOF
 chmod +x "$probe_bin/go" "$probe_bin/docker" "$probe_root/scripts/ensure-postgres.sh"
 
-probe_path="$probe_bin:/usr/bin:/bin"
+for probe_tool in awk basename bash cat chmod date dirname env grep head kill lsof \
+  mkdir mktemp mv node nohup ps rm sed seq sleep tr uname wc; do
+  probe_tool_path="$(command -v "$probe_tool" || true)"
+  [ -z "$probe_tool_path" ] || ln -s "$probe_tool_path" "$probe_bin/$probe_tool"
+done
+probe_path="$probe_bin"
 if PATH="$probe_path" command -v psql >/dev/null 2>&1 \
   || PATH="$probe_path" command -v pg_isready >/dev/null 2>&1; then
   fail "database guard test PATH unexpectedly contains psql or pg_isready"
@@ -334,22 +355,85 @@ if grep -Fq "probe-901 would be collected" "$out"; then
 fi
 [ -f "$MULTICA_DEV_HOME/envs/orphan-902/manifest.env" ] || fail "gc --dry-run deleted a manifest"
 
+# Destroy uses the same repo-owned identity probe as create, including when no
+# host PostgreSQL clients are installed. A mismatch must name the reached and
+# expected endpoints, retain every cleanup recipe, and keep DROP unreachable.
+destroy_drop_marker="$tmp_dir/destroy-drop-marker"
+write_manifest "destroy-mismatch-905" "$root_dir" 905
+mkdir -p "$MULTICA_DEV_PROFILES_HOME/dev-dev-env-test-905"
+mkdir -p "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces_dev-dev-env-test-905"
+mkdir -p "$MULTICA_DEV_DESKTOP_APP_DATA/Multica Canary destroy-mismatch-905"
+status=0
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-mismatch \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  dev_env destroy destroy-mismatch-905 --yes > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "destroy accepted a PostgreSQL identity mismatch"
+[ -f "$MULTICA_DEV_HOME/envs/destroy-mismatch-905/manifest.env" ] \
+  || fail "destroy discarded the manifest after an identity mismatch"
+[ -d "$MULTICA_DEV_PROFILES_HOME/dev-dev-env-test-905" ] \
+  || fail "destroy removed the profile after an identity mismatch"
+[ -d "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces_dev-dev-env-test-905" ] \
+  || fail "destroy removed daemon workspaces after an identity mismatch"
+[ -d "$MULTICA_DEV_DESKTOP_APP_DATA/Multica Canary destroy-mismatch-905" ] \
+  || fail "destroy removed Desktop data after an identity mismatch"
+[ ! -e "$destroy_drop_marker" ] || fail "destroy dropped after an identity mismatch"
+require_contains "$out" "reached 127.0.0.1:5432"
+require_contains "$out" "expected this environment's Compose PostgreSQL at 127.0.0.1:5432"
+
+# Automatic GC inherits the refusal and does not continue into broader cleanup.
+write_manifest "gc-mismatch-906" "$tmp_dir/deleted-gc-checkout" 906
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-mismatch \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  dev_env gc --auto > "$out" 2>&1 || fail "automatic gc did not handle a refused destroy"
+[ -f "$MULTICA_DEV_HOME/envs/gc-mismatch-906/manifest.env" ] \
+  || fail "automatic gc discarded the manifest after an identity mismatch"
+require_contains "$out" "automatic cleanup of gc-mismatch-906 failed; its manifest was kept for retry"
+
+# Defense in depth: unattended GC only reports human-owned collectibles.
+write_manifest "gc-human-907" "$tmp_dir/deleted-human-checkout" 907 human
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  dev_env gc --auto > "$out" 2>&1 || fail "automatic gc failed while reporting a human-owned environment"
+[ -f "$MULTICA_DEV_HOME/envs/gc-human-907/manifest.env" ] \
+  || fail "automatic gc destroyed a human-owned environment"
+require_contains "$out" "automatic cleanup skipped human-owned environment gc-human-907"
+
+# A positively matched target still drops and releases the manifest without
+# psql or pg_isready; the pgx probe owns the guarded DROP operation itself.
+write_manifest "destroy-ready-908" "$root_dir" 908
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  dev_env destroy destroy-ready-908 --yes > "$out" 2>&1 \
+  || fail "destroy rejected a positively matched PostgreSQL target"
+[ "$(cat "$destroy_drop_marker")" = multica_dev_env_test_908 ] \
+  || fail "the verified pgx path did not drop the expected database"
+[ ! -e "$MULTICA_DEV_HOME/envs/destroy-ready-908/manifest.env" ] \
+  || fail "successful destroy retained its manifest"
+require_contains "$out" "Dropped database multica_dev_env_test_908 through verified DATABASE_URL."
+
 # A failed database drop keeps the manifest and slot so cleanup can be retried;
 # destroy must never print success and forget the only deletion recipe.
 write_manifest "drop-fails-904" "$root_dir" 904
 status=0
-FAIL_DROP=1 dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || status=$?
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-failure \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "destroy succeeded after DROP DATABASE failed"
 [ -f "$MULTICA_DEV_HOME/envs/drop-fails-904/manifest.env" ] \
   || fail "destroy discarded the manifest after DROP DATABASE failed"
-require_contains "$out" "manifest and slot were kept"
-dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || fail "retrying destroy after database recovery failed"
+require_contains "$out" "manifest and other resources were kept"
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  dev_env destroy drop-fails-904 --yes > "$out" 2>&1 \
+  || fail "retrying destroy after database recovery failed"
 
 # ---------------------------------------------------------------------------
 # destroy consumes the manifest: the slot is free afterwards, which is what
 # makes the registry an allocator rather than a second place to leak.
 # ---------------------------------------------------------------------------
-dev_env destroy probe-901 --yes > "$out" 2>&1 || fail "destroy must succeed"
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  dev_env destroy probe-901 --yes > "$out" 2>&1 || fail "destroy must succeed"
 [ ! -d "$MULTICA_DEV_HOME/envs/probe-901" ] || fail "destroy left the environment directory behind"
 
 dev_env list > "$out" 2>&1 || fail "list must succeed after destroy"
@@ -358,6 +442,7 @@ if grep -Fq "probe-901" "$out"; then
 fi
 
 # Declining the confirmation is a successful no-op, not a failure.
+write_manifest "orphan-902" "$tmp_dir/deleted-checkout" 902
 printf 'n\n' | dev_env destroy orphan-902 > "$out" 2>&1 || fail "declining destroy must exit 0"
 require_contains "$out" "Cancelled."
 [ -d "$MULTICA_DEV_HOME/envs/orphan-902" ] || fail "declined destroy removed the environment anyway"
