@@ -2590,6 +2590,96 @@ describe("importSkillArchive", () => {
   });
 });
 
+describe("ApiClient project plan read (LOCO-549)", () => {
+  const jsonResponse = (body: unknown, status: number, statusText = "") =>
+    new Response(JSON.stringify(body), {
+      status,
+      statusText,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  // Every field here is one the Go read model always serializes (no
+  // `omitempty`) — this is the shape a healthy server actually sends.
+  function validOverview() {
+    return {
+      plan: {
+        id: "plan-1", workspace_id: "ws-1", project_id: "project-1", version: 1,
+        kind: "prd", origin: "orchestrator", title: "Launch Plan", description: "",
+        attributes: null, source_issue_id: null, superseded: false, superseded_at: null,
+        created_by_type: "agent", created_by_id: "agent-1", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+      },
+      rollup: { tasks_done: 1, tasks_total: 2, percent: 50, parts_covered: 1, parts_total: 1, parts_without_tasks: 0 },
+      phases: [
+        {
+          id: "phase-1", title: "Phase 1", description: "", attributes: null, position: 0,
+          rollup: { tasks_done: 1, tasks_total: 2, percent: 50 },
+          parts: [
+            {
+              id: "part-1", title: "Part 1", description: "", acceptance_criteria: "", attributes: null,
+              position: 0, coverage_state: "in_progress",
+              rollup: { tasks_done: 1, tasks_total: 2, percent: 50 },
+              issues: [
+                { id: "issue-1", number: 1, identifier: "LOCO-1", title: "Do it", status: "todo", status_category: "todo", assignee_type: null, assignee_id: null, deleted: false },
+              ],
+              created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+            },
+          ],
+          created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      dependencies: [
+        {
+          id: "dep-1",
+          blocked: { type: "phase", id: "phase-1", title: "Phase 1", missing: false },
+          blocking: { type: "phase", id: "phase-0", title: "Phase 0", missing: false },
+        },
+      ],
+      uncovered_parts: [],
+    };
+  }
+
+  it("resolves a well-formed response to the live overview", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(validOverview(), 200)));
+    const client = new ApiClient("https://api.example.test");
+
+    const overview = await client.getActiveProjectPlan("project-1");
+
+    expect(overview?.phases[0]?.parts[0]?.coverage_state).toBe("in_progress");
+  });
+
+  it("resolves to null on a genuine 404 (no active plan)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ error: "project plan not found" }, 404, "Not Found")),
+    );
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getActiveProjectPlan("project-1")).resolves.toBeNull();
+  });
+
+  // QC Critical #1/#2: a required field silently defaulting turns a
+  // truncated 200 into a fabricated plan (a manufactured zero rollup here)
+  // instead of failing validation.
+  it("rejects a response with an omitted required field instead of defaulting it", async () => {
+    const malformed = validOverview();
+    // @ts-expect-error -- deliberately building a malformed wire payload
+    delete malformed.rollup;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(malformed, 200)));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getActiveProjectPlan("project-1")).rejects.toThrow(/schema validation/i);
+  });
+
+  it("rejects a response with a coverage_state outside the 5-value enum instead of defaulting it", async () => {
+    const malformed = validOverview();
+    malformed.phases[0]!.parts[0]!.coverage_state = "bogus_state";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(malformed, 200)));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getActiveProjectPlan("project-1")).rejects.toThrow(/schema validation/i);
+  });
+});
+
 describe("clientErrorMessage", () => {
   it("returns a 4xx message, which handlers write for the user", () => {
     expect(clientErrorMessage(new ApiError("autopilot is not active", 400, "Bad Request")))

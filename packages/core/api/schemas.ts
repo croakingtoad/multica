@@ -1333,23 +1333,31 @@ export const EMPTY_SEARCH_PROJECTS_RESPONSE: SearchProjectsResponse = {
 
 // Project plan read model (LOCO-549). Mirrors `projectplan.Overview` — see
 // server/internal/projectplan/read.go. `.loose()` throughout so an older
-// client talking to a newer server keeps rendering on additive fields, per
-// the API compatibility rules; coverage_state/status/status_category stay
-// `z.string()` (not enums) so an unrecognized value still parses and falls
-// through the UI's default-bearing switches instead of failing the batch.
+// client talking to a newer server keeps rendering on ADDITIVE fields, per
+// the API compatibility rules — but every field the Go struct actually
+// serializes (no `omitempty`) is REQUIRED here, with no `.default()`. This
+// response has no `EMPTY_*` fallback (see the comment below): a `.default()`
+// on a required field would silently turn a truncated or malformed 200 into
+// a fabricated plan — a manufactured coverage state, a manufactured zero
+// rollup, a manufactured empty issue list — instead of failing validation
+// and surfacing as the error state. `coverage_state` is a closed enum of the
+// 5 server-computed states (LOCO-549 QC Critical #1/#2): widening it back to
+// `z.string()` would let an unrecognized value silently masquerade as one of
+// the five. The two `phase_id`/`phase_title` fields on DependencyNode are the
+// one legitimate `omitempty` in this model and stay `.optional()`.
 const ProjectPlanSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
   project_id: z.string(),
-  version: z.number().default(0),
+  version: z.number(),
   kind: z.string(),
   origin: z.string(),
   title: z.string(),
-  description: z.string().default(""),
-  attributes: z.unknown().default(null),
-  source_issue_id: z.string().nullable().default(null),
-  superseded: z.boolean().default(false),
-  superseded_at: z.string().nullable().default(null),
+  description: z.string(),
+  attributes: z.unknown(),
+  source_issue_id: z.string().nullable(),
+  superseded: z.boolean(),
+  superseded_at: z.string().nullable(),
   created_by_type: z.string(),
   created_by_id: z.string(),
   created_at: z.string(),
@@ -1357,65 +1365,74 @@ const ProjectPlanSchema = z.object({
 }).loose();
 
 const ProjectPlanRollupSchema = z.object({
-  tasks_done: z.number().default(0),
-  tasks_total: z.number().default(0),
-  percent: z.number().default(0),
-  parts_covered: z.number().default(0),
-  parts_total: z.number().default(0),
-  parts_without_tasks: z.number().default(0),
+  tasks_done: z.number(),
+  tasks_total: z.number(),
+  percent: z.number(),
+  parts_covered: z.number(),
+  parts_total: z.number(),
+  parts_without_tasks: z.number(),
 }).loose();
 
 const ProjectPlanTaskRollupSchema = z.object({
-  tasks_done: z.number().default(0),
-  tasks_total: z.number().default(0),
-  percent: z.number().default(0),
+  tasks_done: z.number(),
+  tasks_total: z.number(),
+  percent: z.number(),
 }).loose();
 
 const ProjectPlanIssueDetailSchema = z.object({
-  id: z.string().nullable().default(null),
-  number: z.number().default(0),
-  identifier: z.string().default(""),
-  title: z.string().default(""),
-  status: z.string().default(""),
-  status_category: z.string().default(""),
-  assignee_type: z.string().nullable().default(null),
-  assignee_id: z.string().nullable().default(null),
-  deleted: z.boolean().default(false),
+  id: z.string().nullable(),
+  number: z.number(),
+  identifier: z.string(),
+  title: z.string(),
+  status: z.string(),
+  status_category: z.string(),
+  assignee_type: z.string().nullable(),
+  assignee_id: z.string().nullable(),
+  deleted: z.boolean(),
 }).loose();
+
+const PROJECT_PLAN_COVERAGE_STATES = [
+  "no_tasks_yet",
+  "covered_no_active_tasks",
+  "not_started",
+  "in_progress",
+  "complete",
+] as const;
 
 const ProjectPlanPartSchema = z.object({
   id: z.string(),
-  title: z.string().default(""),
-  description: z.string().default(""),
-  acceptance_criteria: z.string().default(""),
-  attributes: z.unknown().default(null),
-  position: z.number().default(0),
-  coverage_state: z.string().default("no_tasks_yet"),
-  rollup: ProjectPlanTaskRollupSchema.default({ tasks_done: 0, tasks_total: 0, percent: 0 }),
-  issues: z.array(ProjectPlanIssueDetailSchema).default([]),
-  created_at: z.string().default(""),
-  updated_at: z.string().default(""),
+  title: z.string(),
+  description: z.string(),
+  acceptance_criteria: z.string(),
+  attributes: z.unknown(),
+  position: z.number(),
+  coverage_state: z.enum(PROJECT_PLAN_COVERAGE_STATES),
+  rollup: ProjectPlanTaskRollupSchema,
+  issues: z.array(ProjectPlanIssueDetailSchema),
+  created_at: z.string(),
+  updated_at: z.string(),
 }).loose();
 
 const ProjectPlanPhaseSchema = z.object({
   id: z.string(),
-  title: z.string().default(""),
-  description: z.string().default(""),
-  attributes: z.unknown().default(null),
-  position: z.number().default(0),
-  rollup: ProjectPlanTaskRollupSchema.default({ tasks_done: 0, tasks_total: 0, percent: 0 }),
-  parts: z.array(ProjectPlanPartSchema).default([]),
-  created_at: z.string().default(""),
-  updated_at: z.string().default(""),
+  title: z.string(),
+  description: z.string(),
+  attributes: z.unknown(),
+  position: z.number(),
+  rollup: ProjectPlanTaskRollupSchema,
+  parts: z.array(ProjectPlanPartSchema),
+  created_at: z.string(),
+  updated_at: z.string(),
 }).loose();
 
 const ProjectPlanDependencyNodeSchema = z.object({
   type: z.string(),
   id: z.string(),
-  title: z.string().default(""),
+  title: z.string(),
+  // The one legitimate `omitempty` pair in this model (server: DependencyNode).
   phase_id: z.string().nullable().optional(),
   phase_title: z.string().nullable().optional(),
-  missing: z.boolean().default(false),
+  missing: z.boolean(),
 }).loose();
 
 const ProjectPlanDependencySchema = z.object({
@@ -1426,21 +1443,18 @@ const ProjectPlanDependencySchema = z.object({
 
 const ProjectPlanUncoveredPartSchema = z.object({
   id: z.string(),
-  title: z.string().default(""),
-  position: z.number().default(0),
+  title: z.string(),
+  position: z.number(),
   phase_id: z.string(),
-  phase_title: z.string().default(""),
+  phase_title: z.string(),
 }).loose();
 
 export const ProjectPlanOverviewSchema = z.object({
   plan: ProjectPlanSchema,
-  rollup: ProjectPlanRollupSchema.default({
-    tasks_done: 0, tasks_total: 0, percent: 0,
-    parts_covered: 0, parts_total: 0, parts_without_tasks: 0,
-  }),
-  phases: z.array(ProjectPlanPhaseSchema).default([]),
-  dependencies: z.array(ProjectPlanDependencySchema).default([]),
-  uncovered_parts: z.array(ProjectPlanUncoveredPartSchema).default([]),
+  rollup: ProjectPlanRollupSchema,
+  phases: z.array(ProjectPlanPhaseSchema),
+  dependencies: z.array(ProjectPlanDependencySchema),
+  uncovered_parts: z.array(ProjectPlanUncoveredPartSchema),
 }).loose();
 
 // No EMPTY_* fallback: a plan read that fails schema validation must surface

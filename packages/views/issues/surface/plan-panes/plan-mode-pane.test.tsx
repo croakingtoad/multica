@@ -9,8 +9,9 @@
  * instead of shipping.
  */
 
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
@@ -18,6 +19,7 @@ import type { ProjectPlanOverview, ProjectPlanPart, ProjectPlanPhase } from "@mu
 import { NavigationProvider, type NavigationAdapter } from "../../../navigation";
 import { renderWithI18n } from "../../../test/i18n";
 import { PlanModePane } from "./plan-mode-pane";
+import { PlanDocumentPane } from "./plan-document-pane";
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -56,8 +58,12 @@ function makeOverview(overrides: Partial<ProjectPlanOverview> = {}): ProjectPlan
             id: "part-1", title: "Schema", description: "", acceptance_criteria: "", attributes: null,
             position: 0, coverage_state: "in_progress",
             rollup: { tasks_done: 1, tasks_total: 2, percent: 50 },
+            // Deliberately no "done"-status issue here: the coverage badge
+            // for a `complete` part also renders the label "Done" (see
+            // en/issues.json plan.coverage_state.complete), and the tests
+            // below assert on that label — an issue status chip with the
+            // same text would make `getByText("Done")` ambiguous.
             issues: [
-              { id: "issue-1", number: 1, identifier: "LOCO-1", title: "Define schema", status: "done", status_category: "done", assignee_type: null, assignee_id: null, deleted: false },
               { id: "issue-2", number: 2, identifier: "LOCO-2", title: "Validate schema", status: "todo", status_category: "todo", assignee_type: null, assignee_id: null, deleted: false },
             ],
             created_at: "", updated_at: "",
@@ -70,6 +76,25 @@ function makeOverview(overrides: Partial<ProjectPlanOverview> = {}): ProjectPlan
     uncovered_parts: [],
     ...overrides,
   };
+}
+
+/** Wraps a component with the same providers `renderPane` uses, minus the API mock — for panes given `overview` directly rather than through `usePlanOverview`. */
+function renderWithProviders(ui: ReactElement) {
+  setApiInstance({
+    listIssueStatuses: async () => ({
+      statuses: [
+        { id: "s-todo", workspace_id: "ws-1", key: "todo", name: "Todo", description: "", category: "todo", color: "#888", is_system: true, position: 0, archived_at: null, created_at: "", updated_at: "" },
+      ],
+      categories: [],
+      total: 1,
+    }),
+  } as unknown as ApiClient);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderWithI18n(
+    <QueryClientProvider client={qc}>
+      <NavigationProvider value={navigation}>{ui}</NavigationProvider>
+    </QueryClientProvider>,
+  );
 }
 
 function renderPane(
@@ -107,6 +132,11 @@ function makeFullOverview(): ProjectPlanOverview {
     { ...templatePart, id: "part-3", title: "Not started part", coverage_state: "not_started", rollup: { tasks_done: 0, tasks_total: 2, percent: 0 } },
     { ...templatePart, id: "part-4", title: "No tasks part", coverage_state: "no_tasks_yet", rollup: { tasks_done: 0, tasks_total: 0, percent: 0 }, issues: [] },
     { ...templatePart, id: "part-5", title: "Covered, no active tasks", coverage_state: "covered_no_active_tasks", rollup: { tasks_done: 0, tasks_total: 0, percent: 0 } },
+    // Same 0-done/2-total rollup as "Not started part" above — the API
+    // distinguishes these by `coverage_state` alone (some issue is actively
+    // started even though none are done), so the badge, not the progress
+    // bar, is what must tell them apart (LOCO-549 QC Critical #4).
+    { ...templatePart, id: "part-6", title: "In progress zero part", coverage_state: "in_progress", rollup: { tasks_done: 0, tasks_total: 2, percent: 0 } },
   ];
   const phase2: ProjectPlanPhase = {
     id: "phase-2", title: "Phase 2 — Rollout", description: "", attributes: null, position: 1,
@@ -156,23 +186,53 @@ describe("PlanModePane", () => {
     expect(screen.queryByTestId("plan-no-plan-state")).not.toBeInTheDocument();
   });
 
+  // Asserts on the state LABELS themselves, not just part titles — a
+  // regression that deleted or collapsed the badges (e.g. back to only
+  // rendering for the 2 gap states) would still leave every part title in
+  // the DOM and pass a title-only check, which is exactly what QC's Major
+  // #14 flagged. Each label appears at least once per state present.
   it("renders all 5 coverage states distinctly in the Pipeline pane, with dependency gating", async () => {
     renderPane(() => Promise.resolve(makeFullOverview()), "plan_pipeline");
     await waitFor(() => expect(screen.getByText("Launch Plan")).toBeInTheDocument());
-    expect(screen.getByText("Complete part")).toBeInTheDocument();
-    expect(screen.getByText("Not started part")).toBeInTheDocument();
-    expect(screen.getByText("No tasks part")).toBeInTheDocument();
-    expect(screen.getByText("Covered, no active tasks")).toBeInTheDocument();
+    expect(screen.getAllByText("Done").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Not started").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("In progress").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("No tasks yet").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Covered · no active tasks").length).toBeGreaterThan(0);
     expect(screen.getByText(/Blocked on Phase 1 — Foundations/)).toBeInTheDocument();
   });
 
   it("renders all 5 coverage states distinctly in the Coverage pane", async () => {
     renderPane(() => Promise.resolve(makeFullOverview()), "plan_coverage");
     await waitFor(() => expect(screen.getByText("Complete part")).toBeInTheDocument());
-    expect(screen.getByText("Not started part")).toBeInTheDocument();
-    // "No tasks part" appears twice — the table row and the risk-banner chip
-    // that surfaces every undecomposed part — both are real, expected content.
-    expect(screen.getAllByText("No tasks part").length).toBeGreaterThan(0);
-    expect(screen.getByText("Covered, no active tasks")).toBeInTheDocument();
+    expect(screen.getAllByText("Done").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Not started").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("In progress").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("No tasks yet").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Covered · no active tasks").length).toBeGreaterThan(0);
+  });
+
+  // The canonical regression case for QC Critical #4: two parts with the
+  // identical 0-done/2-total rollup (so an identical progress bar) must
+  // still read as different states because of the badge alone.
+  it("Document pane: renders a state badge for all 5 coverage states, distinguishing in_progress-at-0% from not_started-at-0%", () => {
+    renderWithProviders(<PlanDocumentPane overview={makeFullOverview()} />);
+
+    expect(screen.getAllByText("Done").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Not started").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("In progress").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("No tasks yet").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Covered · no active tasks").length).toBeGreaterThan(0);
+
+    const notStartedPart = screen.getByText("Not started part").closest("div")!;
+    const inProgressZeroPart = screen.getByText("In progress zero part").closest("div")!;
+    // Both parts show the identical "0/2" progress fraction...
+    expect(notStartedPart.textContent).toContain("0");
+    expect(inProgressZeroPart.textContent).toContain("0");
+    // ...but each carries its own distinct badge, not the other's.
+    expect(within(notStartedPart).getByText("Not started")).toBeInTheDocument();
+    expect(within(notStartedPart).queryByText("In progress")).not.toBeInTheDocument();
+    expect(within(inProgressZeroPart).getByText("In progress")).toBeInTheDocument();
+    expect(within(inProgressZeroPart).queryByText("Not started")).not.toBeInTheDocument();
   });
 });

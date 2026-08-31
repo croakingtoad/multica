@@ -3626,7 +3626,7 @@ export class ApiClient {
     if (!parsed.success) {
       throw new Error(`GET /api/projects/{id}/plan: response failed schema validation`);
     }
-    return parsed.data as ProjectPlanOverview;
+    return parsed.data;
   }
 
   /** A specific retained plan version, with live (not snapshotted) issue status. */
@@ -3642,7 +3642,7 @@ export class ApiClient {
     if (!parsed.success) {
       throw new Error(`GET /api/projects/{id}/plans/{planId}: response failed schema validation`);
     }
-    return parsed.data as ProjectPlanOverview;
+    return parsed.data;
   }
 
   // Labels

@@ -23,11 +23,17 @@ function PartBlock({ part }: { part: ProjectPlanPart }) {
     >
       <div className="flex items-center justify-between gap-3 mb-2">
         <h3 className={cn("text-title-sm font-semibold", isGapLike && "text-muted-foreground")}>{part.title}</h3>
-        {isGapLike ? (
+        <div className="flex items-center gap-2.5 min-w-0">
+          {/* The badge renders for all 5 states, not just the 2 gap states —
+              `in_progress` at 0 done and `not_started` at 0 done both show an
+              identical 0/N progress bar, so the bar alone cannot distinguish
+              them. The badge is what makes every state visually distinct
+              (LOCO-549 QC Critical #4). */}
+          {!isGapLike && (
+            <PlanProgressBar done={part.rollup.tasks_done} total={part.rollup.tasks_total} className="max-w-[140px]" />
+          )}
           <CoverageBadge state={part.coverage_state} />
-        ) : (
-          <PlanProgressBar done={part.rollup.tasks_done} total={part.rollup.tasks_total} className="max-w-[180px]" />
-        )}
+        </div>
       </div>
 
       {part.coverage_state === "no_tasks_yet" && (
