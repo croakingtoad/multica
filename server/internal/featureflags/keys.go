@@ -24,8 +24,7 @@ const (
 	// mutate an immutable execution manifest that is already in flight.
 	PluginsV1 = "plugins_v1"
 	// ProjectPlans gates the plan repository plus its read and write services.
-	// It stays unpublished until the UI exists; callers without a configured
-	// flag service therefore fail closed.
+	// It is published for the frontend Plan views and remains off by default.
 	ProjectPlans = "project_plans"
 	// agentBuilderCompat is no longer a release flag. Keep publishing the key
 	// as enabled so installed desktop clients that still gate the AI creation
@@ -48,6 +47,7 @@ var frontendPublicFlags = []string{
 	BillingWorkspaceSubscriptions,
 	ComposioMCPApps,
 	PluginsV1,
+	ProjectPlans,
 }
 
 func BillingWorkspaceSubscriptionsEnabled(ctx context.Context, flags *featureflag.Service) bool {
