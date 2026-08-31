@@ -165,7 +165,13 @@ printf '%s:%s\n' "\$COMPOSE_PROJECT_NAME" "\$POSTGRES_PORT" > "$fallback_marker"
 EOF
 chmod +x "$probe_bin/go" "$probe_bin/docker" "$probe_root/scripts/ensure-postgres.sh"
 
-probe_path="$probe_bin:/usr/bin:/bin"
+# Give the fixture only the tools its pgx-only path needs. In particular, do
+# not inherit host PostgreSQL clients from /usr/bin: some developer machines
+# install them there and some do not.
+for tool in bash cat dirname mktemp node rm sed wc; do
+  ln -s "$(command -v "$tool")" "$probe_bin/$tool"
+done
+probe_path="$probe_bin"
 if PATH="$probe_path" command -v psql >/dev/null 2>&1 \
   || PATH="$probe_path" command -v pg_isready >/dev/null 2>&1; then
   fail "database guard test PATH unexpectedly contains psql or pg_isready"
@@ -306,6 +312,26 @@ MULTICA_WORKSPACES_ROOT=/owner/workspaces \
 if bash -c 'source "$1"; api_started_after '\''{"status":"ok"}'\'' 1' _ "$root_dir/scripts/dev-env.sh"; then
   fail "legacy /health without started_at was accepted as current"
 fi
+
+# Turbo starts its package task in a nested process group. That listener is
+# still owned by the launcher's live process tree and must be accepted, then
+# pinned by PID for safe teardown.
+descendant_pid_file="$tmp_dir/descendant-pid"
+sh -c 'setsid sh -c '\''printf %s "$$" > "$1"; sleep 30'\'' _ "$1" & wait' _ "$descendant_pid_file" &
+ancestor_pid=$!
+for _ in $(seq 1 50); do
+  [ -s "$descendant_pid_file" ] && break
+  sleep 0.02
+done
+[ -s "$descendant_pid_file" ] || fail "nested process-group fixture did not start"
+descendant_pid="$(cat "$descendant_pid_file")"
+if ! bash -c 'source "$1"; process_descends_from "$2" "$3"' _ \
+  "$root_dir/scripts/dev-env.sh" "$descendant_pid" "$ancestor_pid"; then
+  kill -TERM -"$descendant_pid" "$ancestor_pid" 2>/dev/null || true
+  fail "nested process group was not recognized as launcher-owned"
+fi
+kill -TERM -"$descendant_pid" "$ancestor_pid" 2>/dev/null || true
+wait "$ancestor_pid" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Unknown names and components fail loudly instead of doing something else.

@@ -598,6 +598,19 @@ process_group_id() {
   ps -p "$1" -o pgid= 2>/dev/null | tr -d ' ' || true
 }
 
+process_descends_from() {
+  local child=$1 ancestor=$2 parent hops=0
+  while [ -n "$child" ] && [ "$child" != 1 ] && [ "$hops" -lt 64 ]; do
+    parent="$(ps -p "$child" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+    [ -n "$parent" ] || return 1
+    [ "$parent" = "$ancestor" ] && return 0
+    [ "$parent" != "$child" ] || return 1
+    child="$parent"
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
 listener_belongs_to_component() {
   local component=$1 port=$2 launcher listener recorded
   launcher="$(component_pid "$component" || true)"
@@ -605,7 +618,8 @@ listener_belongs_to_component() {
   [ -n "$launcher" ] && [ -n "$listener" ] || return 1
   recorded="$(cat "$(listener_pid_file "$component")" 2>/dev/null || true)"
   [ -n "$recorded" ] && [ "$listener" = "$recorded" ] && return 0
-  [ "$(process_group_id "$listener")" = "$launcher" ]
+  [ "$(process_group_id "$listener")" = "$launcher" ] \
+    || process_descends_from "$listener" "$launcher"
 }
 
 health_belongs_to_api() {
@@ -670,15 +684,19 @@ Run 'make down' here first — a leftover instance answers /health with 200 and 
 
 start_web() {
   local waited=0 listener
-  if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1 \
-    && listener_belongs_to_component web "$FRONTEND_PORT"; then
-    ok "web already running on :$FRONTEND_PORT"
-    return 0
+  if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
+    listener="$(port_listener_pid "$FRONTEND_PORT")"
+    if listener_belongs_to_component web "$FRONTEND_PORT"; then
+      printf '%s\n' "$listener" > "$(listener_pid_file web)"
+      ok "web already running on :$FRONTEND_PORT"
+      return 0
+    fi
   fi
   if ! port_free "$FRONTEND_PORT"; then
     die "Port $FRONTEND_PORT is busy: $(describe_port_owner "$FRONTEND_PORT"). Run 'make down' here first."
   fi
 
+  rm -f "$(listener_pid_file web)"
   launch_detached web make -C "$REPO_ROOT" -s web-dev ENV_FILE="$ENV_FILE"
   info "web launching (pid $(cat "$(pid_file web)")), log: $(log_file web)"
 
@@ -687,8 +705,9 @@ start_web() {
       listener="$(port_listener_pid "$FRONTEND_PORT")"
       if ! listener_belongs_to_component web "$FRONTEND_PORT"; then
         stop_component web
-        die "Web on :$FRONTEND_PORT is not owned by the process group this environment launched."
+        die "Web on :$FRONTEND_PORT is not owned by the process tree this environment launched."
       fi
+      printf '%s\n' "$listener" > "$(listener_pid_file web)"
       ok "web serving http://localhost:$FRONTEND_PORT (pid ${listener:-?})"
       return 0
     fi
