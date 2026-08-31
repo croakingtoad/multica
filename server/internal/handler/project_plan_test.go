@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"testing"
 
@@ -319,6 +321,89 @@ func TestProjectPlanWriteRoutesHappyPath(t *testing.T) {
 			t.Fatalf("issue-sourced plan = %+v", response)
 		}
 	})
+}
+
+func TestAgentAuthorsProjectPlanFromIssue(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database unavailable")
+	}
+	withFeatureFlag(t, testHandler, featureflags.ProjectPlans, true)
+	projectID := dbfx.Project(t, "Agent-authored issue plan")
+	agentID := createHandlerTestAgent(t, "Plan author agent", nil)
+	taskID := createHandlerTestTaskForAgent(t, agentID)
+	sourceDescription := "Exact PRD description used for provenance"
+	sourceIssueID := dbfx.Issue(t, "Source PRD", testutil.Cols{
+		"project_id": projectID, "description": sourceDescription,
+	})
+
+	agentRequest := func(method, path string, body any, params ...string) *http.Request {
+		request := testutil.WithURLParams(newRequest(method, path, body), params...)
+		request.Header.Set("X-Agent-ID", agentID)
+		request.Header.Set("X-Task-ID", taskID)
+		return request
+	}
+
+	planResponse := testutil.Decode[projectPlanResponse](t, testHandler.CreateProjectPlanFromIssue,
+		agentRequest(http.MethodPost, "/plans/from-issue", map[string]any{
+			"kind": "prd", "source_issue_id": sourceIssueID,
+		}, "id", projectID), http.StatusCreated)
+	if planResponse.Origin != "issue" || planResponse.CreatedByType != "agent" || planResponse.CreatedByID != agentID {
+		t.Fatalf("authored plan = %+v, want issue origin created by agent %s", planResponse, agentID)
+	}
+
+	var sourceID, snapshot, digest, createdByType, createdByID string
+	var revision int64
+	dbfx.QueryRow(t, `
+		SELECT source_issue_id, source_issue_revision, source_description_snapshot,
+		       source_content_sha256, created_by_type, created_by_id
+		FROM project_plan WHERE id = $1`, planResponse.ID,
+	).Scan(&sourceID, &revision, &snapshot, &digest, &createdByType, &createdByID)
+	wantDigest := sha256.Sum256([]byte(sourceDescription))
+	if sourceID != sourceIssueID || revision < 1 || snapshot != sourceDescription || digest != hex.EncodeToString(wantDigest[:]) {
+		t.Fatalf("stored provenance = issue %s revision %d snapshot %q digest %s", sourceID, revision, snapshot, digest)
+	}
+	if createdByType != "agent" || createdByID != agentID {
+		t.Fatalf("stored creator = %s/%s, want agent/%s", createdByType, createdByID, agentID)
+	}
+
+	phase := testutil.Decode[projectPlanPhaseResponse](t, testHandler.AddProjectPlanPhase,
+		agentRequest(http.MethodPost, "/phases", map[string]any{
+			"title": "Implementation", "position": 0,
+		}, "id", projectID, "planId", planResponse.ID), http.StatusCreated)
+	linkedPart := testutil.Decode[projectPlanPartResponse](t, testHandler.AddProjectPlanPart,
+		agentRequest(http.MethodPost, "/parts", map[string]any{
+			"title": "Linked work", "position": 0,
+		}, "id", projectID, "planId", planResponse.ID, "phaseId", phase.ID), http.StatusCreated)
+	zeroLinkPart := testutil.Decode[projectPlanPartResponse](t, testHandler.AddProjectPlanPart,
+		agentRequest(http.MethodPost, "/parts", map[string]any{
+			"title": "Awaiting decomposition", "position": 1,
+		}, "id", projectID, "planId", planResponse.ID, "phaseId", phase.ID), http.StatusCreated)
+
+	subIssueID := dbfx.Issue(t, "Orchestrated sub-issue", testutil.Cols{"project_id": projectID})
+	link := testutil.Decode[projectPlanIssueLinkResponse](t, testHandler.LinkProjectPlanIssue,
+		agentRequest(http.MethodPost, "/issues/"+subIssueID, map[string]any{},
+			"id", projectID, "planId", planResponse.ID, "partId", linkedPart.ID, "issueId", subIssueID,
+		), http.StatusCreated)
+	if link.ProjectPlanPartID != linkedPart.ID || link.IssueID != subIssueID {
+		t.Fatalf("link = %+v, want part %s issue %s", link, linkedPart.ID, subIssueID)
+	}
+
+	var overview projectplan.Overview
+	testutil.Call(t, testHandler.GetActiveProjectPlan,
+		testutil.WithURLParams(newRequest(http.MethodGet, "/plan", nil), "id", projectID),
+	).Want(http.StatusOK).JSON(&overview)
+	states := make(map[string]string)
+	for _, gotPhase := range overview.Phases {
+		for _, part := range gotPhase.Parts {
+			states[part.ID] = part.CoverageState
+		}
+	}
+	if got := states[linkedPart.ID]; got != projectplan.CoverageNotStarted {
+		t.Errorf("linked part coverage = %q, want %q", got, projectplan.CoverageNotStarted)
+	}
+	if got := states[zeroLinkPart.ID]; got != projectplan.CoverageNoTasksYet {
+		t.Errorf("zero-link part coverage = %q, want %q", got, projectplan.CoverageNoTasksYet)
+	}
 }
 
 func TestProjectPlanWriteRoutesNestedNotFound(t *testing.T) {

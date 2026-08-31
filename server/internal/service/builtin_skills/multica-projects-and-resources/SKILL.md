@@ -1,6 +1,6 @@
 ---
 name: multica-projects-and-resources
-description: "Use when creating, inspecting, updating, or debugging Multica projects and their resources (github_repo, local_directory)."
+description: "Use when creating, inspecting, updating, or debugging Multica projects, project plans, and project resources (github_repo, local_directory)."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -53,6 +53,26 @@ multica project resource update <project-id> <resource-id> --url <new-github-url
 multica project resource update <project-id> <resource-id> --ref <branch-or-sha> --output json
 multica project resource remove <project-id> <resource-id> --output json
 ```
+
+### Authoring a plan from a PRD issue
+
+Plan authoring is explicit. Point at the source issue, then add the phases and
+parts from its decomposition. Link each implementation issue after creating it;
+`issue create` intentionally has no plan flag.
+
+```bash
+multica project plan create-from-issue <project-id> <source-issue-id> --output json
+multica project plan add-phase <project-id> <plan-id> --title "<phase>" --position 0 --output json
+multica project plan add-part <project-id> <plan-id> <phase-id> --title "<part>" --description "<scope>" --acceptance-criteria "<criteria>" --position 0 --output json
+multica issue create --title "<implementation task>" --project <project-id> --output json
+multica project plan link-issue <project-id> <plan-id> <part-id> <issue-id> --output json
+```
+
+The source issue must belong to the project. Creating the plan snapshots its
+title, description, revision, and content digest on the server. A part may be
+created before its tasks exist; until it has a link, the plan shows the distinct
+`no_tasks_yet` coverage state. Call `link-issue` once for every sub-issue that
+implements the part.
 
 `--execution-mode` decides how tasks share a `local_directory`. `in_place` (default) runs the agent in the user's
 directory, one task at a time; a second task waits in `waiting_local_directory`. `worktree` gives each task its own
@@ -108,6 +128,6 @@ is task-local checkout state.
 
 ## Side effects
 
-Project create/update/delete/status and project resource add/update/remove mutate durable workspace state and affect future tasks. Ask before changing `local_directory` unless the user explicitly requested that exact local path.
+Project create/update/delete/status, plan authoring/linking, and project resource add/update/remove mutate durable workspace state and affect future tasks. Ask before changing `local_directory` unless the user explicitly requested that exact local path.
 
 More source-backed details: `references/projects-and-resources-source-map.md`.
