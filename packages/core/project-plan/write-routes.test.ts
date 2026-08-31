@@ -1,13 +1,17 @@
 // @vitest-environment node
 
 /**
- * Pins the one provisional part of the plan-write contract: the paths.
+ * Pins the plan-write route table against Slice A's (LOCO-584) reported
+ * contract, route by route and verb by verb.
  *
- * Slice A (LOCO-584) owns the real routes. These assertions are not a claim
- * that the server serves these paths — they exist so that re-pointing this
- * file at Slice A's route table is a visible, reviewed edit rather than a
- * silent drift, and so the nesting stays internally consistent (a part path is
- * always under its plan, a plan path always under its project).
+ * This is transcription, so it is worth asserting literally: the table was
+ * copied from a comment, and three entries differed from the shape a REST
+ * convention would suggest — both reorders are PATCH rather than POST, and
+ * LinkIssue carries the issue id in the path rather than a body. A test that
+ * only checked nesting would have let all three through.
+ *
+ * Slice A is still in review, so if a route moves this file is where the move
+ * becomes visible and reviewed rather than silent.
  */
 
 import { describe, expect, it } from "vitest";
@@ -53,13 +57,36 @@ describe("planWriteRoutes", () => {
     );
   });
 
-  it("scopes issue links to a part", () => {
-    expect(planWriteRoutes.linkIssue(P, PLAN, "pt-1")).toBe(
-      "/api/projects/proj-1/plans/plan-1/parts/pt-1/issues",
+  it("names the issue in the path for both link and unlink", () => {
+    // Link and unlink share one path; only the verb differs. An earlier cut
+    // POSTed to the collection with an {issue_id} body — the server has no
+    // such route.
+    expect(planWriteRoutes.linkIssue(P, PLAN, "pt-1", "iss-1")).toBe(
+      "/api/projects/proj-1/plans/plan-1/parts/pt-1/issues/iss-1",
     );
     expect(planWriteRoutes.unlinkIssue(P, PLAN, "pt-1", "iss-1")).toBe(
       "/api/projects/proj-1/plans/plan-1/parts/pt-1/issues/iss-1",
     );
+  });
+
+  it("matches Slice A's reported verb for every operation", () => {
+    expect(PLAN_WRITE_METHODS).toEqual({
+      createPlan: "POST",
+      updatePlan: "PATCH",
+      supersedePlan: "POST",
+      deletePlan: "DELETE",
+      addPhase: "POST",
+      updatePhase: "PATCH",
+      // Both reorders are PATCH. They were POST in the provisional table.
+      reorderPhases: "PATCH",
+      deletePhase: "DELETE",
+      addPart: "POST",
+      updatePart: "PATCH",
+      reorderParts: "PATCH",
+      deletePart: "DELETE",
+      linkIssue: "POST",
+      unlinkIssue: "DELETE",
+    });
   });
 
   it("declares a verb for every route", () => {

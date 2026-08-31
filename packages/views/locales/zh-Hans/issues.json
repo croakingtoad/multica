@@ -675,7 +675,8 @@
         "title": "删除阶段",
         "description": "删除“{{title}}”？",
         "consequences_other": "其下的 {{count}} 个部分也会被删除，关联的任务会解除关联，任务本身不会被删除。",
-        "submit": "删除阶段"
+        "submit": "删除阶段",
+        "consequences_empty": "该阶段目前没有任何部分，不会影响其他内容。此操作无法撤销。"
       },
       "add_part": {
         "title": "添加部分",
@@ -712,7 +713,7 @@
         "conflict": "其他人改动了该计划，请重新加载后再试。",
         "active_plan_exists": "该项目已有一个进行中的计划。",
         "issue_already_linked": "该任务已关联到本计划的某个部分。",
-        "not_found": "该计划条目已不存在。",
+        "not_found": "该计划条目已不存在，或该工作区已关闭项目计划功能。",
         "not_active": "只能编辑当前生效的计划版本。",
         "invalid": "计划服务拒绝了这些内容。",
         "disabled": "该工作区已关闭项目计划功能。",

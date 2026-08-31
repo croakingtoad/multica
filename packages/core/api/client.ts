@@ -3797,9 +3797,9 @@ export class ApiClient {
     partId: string,
     issueId: string,
   ): Promise<void> {
-    await this.fetch(planWriteRoutes.linkIssue(projectId, planId, partId), {
+    // Issue id in the path, no body — Slice A's route shape.
+    await this.fetch(planWriteRoutes.linkIssue(projectId, planId, partId, issueId), {
       method: PLAN_WRITE_METHODS.linkIssue,
-      body: JSON.stringify({ issue_id: issueId }),
     });
   }
 

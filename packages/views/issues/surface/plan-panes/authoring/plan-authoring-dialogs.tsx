@@ -156,7 +156,9 @@ export function PlanAuthoringDialogs() {
           ]}
           extra={
             <div className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-caption text-muted-foreground">
-              {t(($) => $.plan.authoring.supersede.consequences)}
+              {t(($) => $.plan.authoring.supersede.consequences, {
+                version: overview!.plan.version,
+              })}
             </div>
           }
           onSubmit={async (values) =>
@@ -268,9 +270,15 @@ export function PlanAuthoringDialogs() {
           description={t(($) => $.plan.authoring.delete_phase.description, {
             title: dialog.phase.title,
           })}
-          consequences={t(($) => $.plan.authoring.delete_phase.consequences, {
-            count: dialog.phase.parts.length,
-          })}
+          // A phase with no parts has nothing to enumerate; the pluralized
+          // sentence would read "Its 0 parts are deleted too".
+          consequences={
+            dialog.phase.parts.length === 0
+              ? t(($) => $.plan.authoring.delete_phase.consequences_empty)
+              : t(($) => $.plan.authoring.delete_phase.consequences, {
+                  count: dialog.phase.parts.length,
+                })
+          }
           confirmLabel={t(($) => $.plan.authoring.delete_phase.submit)}
           onConfirm={async () => {
             await deletePhase.mutateAsync({ planId: planId!, phaseId: dialog.phase.id });

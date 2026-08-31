@@ -701,7 +701,8 @@
         "description": "Delete “{{title}}”?",
         "consequences_one": "Its {{count}} part is deleted too, and any issues linked to it are unlinked. The issues themselves are not deleted.",
         "consequences_other": "Its {{count}} parts are deleted too, and any issues linked to them are unlinked. The issues themselves are not deleted.",
-        "submit": "Delete phase"
+        "submit": "Delete phase",
+        "consequences_empty": "This phase has no parts yet, so nothing else is affected. This cannot be undone."
       },
       "add_part": {
         "title": "Add part",
@@ -738,7 +739,7 @@
         "conflict": "Someone else changed this plan. Reload it and try again.",
         "active_plan_exists": "This project already has an active plan.",
         "issue_already_linked": "That issue is already linked to a part of this plan.",
-        "not_found": "That plan item no longer exists.",
+        "not_found": "That plan item no longer exists, or project plans have been turned off for this workspace.",
         "not_active": "Only the active plan version can be edited.",
         "invalid": "The plan service rejected these values.",
         "disabled": "Project plans are turned off for this workspace.",

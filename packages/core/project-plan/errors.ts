@@ -65,10 +65,18 @@ const KIND_BY_CODE = new Set<ProjectPlanErrorKind>([
  *
  * A 409 must read as a conflict rather than as a generic failure (LOCO-591
  * acceptance bar). Two independent signals get us there, so the UI stays
- * honest whether or not Slice A's handler ends up emitting a machine-readable
- * `code`: the body's `code` when present, and the HTTP status otherwise. A
- * network failure with no status at all is `unavailable`, not a conflict —
- * saying "conflict" for a dropped connection would be its own fabrication.
+ * honest whether or not Slice A's handler emits a machine-readable `code`: the
+ * body's `code` when present, and the HTTP status otherwise. A network failure
+ * with no status at all is `unavailable`, not a conflict — saying "conflict"
+ * for a dropped connection would be its own fabrication.
+ *
+ * `not_found` is deliberately ambiguous, because the status is. Every plan
+ * write route is gated on `project_plans` and answers 404 when the flag is
+ * off, so a bare 404 means either "this item is gone" or "plans are off in
+ * this workspace" and the client cannot tell which. The copy names both rather
+ * than picking one and being wrong half the time. (The flag-off case is
+ * already unreachable through the UI — no affordance renders — so this only
+ * covers a flag flipped mid-session.)
  */
 export function classifyPlanWriteError(err: unknown): ProjectPlanWriteError {
   if (!(err instanceof ApiError)) {
