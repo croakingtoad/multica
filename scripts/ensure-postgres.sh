@@ -98,11 +98,11 @@ else
   # ---------- Remote: skip Docker, verify connectivity ----------
   echo "==> Remote database configured. Skipping Docker."
   if command -v pg_isready > /dev/null 2>&1; then
-    echo "==> Waiting for PostgreSQL at $db_host:$db_port to be ready..."
+    echo "==> Waiting for configured remote PostgreSQL to be ready..."
     until pg_isready -d "$DATABASE_URL" > /dev/null 2>&1; do
       sleep 1
     done
-    echo "✓ PostgreSQL ready (remote: $db_host:$db_port). Database: $db_name"
+    echo "✓ PostgreSQL ready (remote). Database: $db_name"
   else
     echo "==> pg_isready not found. Remote connectivity was not verified."
     echo "✓ PostgreSQL configured (remote; connectivity not verified). Database: $db_name"
