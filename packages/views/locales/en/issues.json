@@ -188,12 +188,18 @@
     "tooltip_table": "Table view",
     "tooltip_gantt": "Gantt view",
     "tooltip_swimlane": "Swimlane view",
+    "tooltip_plan_document": "Plan Document view",
+    "tooltip_plan_pipeline": "Plan Pipeline view",
+    "tooltip_plan_coverage": "Plan Coverage view",
     "section": "View",
     "board": "Board",
     "list": "List",
     "table": "Table",
     "gantt": "Gantt",
-    "swimlane": "Swimlane"
+    "swimlane": "Swimlane",
+    "plan_document": "Plan Document",
+    "plan_pipeline": "Plan Pipeline",
+    "plan_coverage": "Plan Coverage"
   },
   "table": {
     "select_all": "Select all visible issues",
@@ -575,6 +581,10 @@
     "title": "No issues match these filters",
     "hint": "Adjust or clear the filters to see the issues in this view.",
     "clear_button": "Clear filters"
+  },
+  "plan_empty": {
+    "title": "No plan yet",
+    "hint": "This project doesn't have a plan yet. Document, Pipeline, and Coverage will show real content once one exists."
   },
   "agent_live": {
     "is_working": "{{name}} is working",

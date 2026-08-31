@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertTriangle, FilterX, ListTodo, Plus } from "lucide-react";
+import { AlertTriangle, FileText, FilterX, ListTodo, Plus } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
@@ -36,7 +36,7 @@ import { useT } from "../../i18n";
 import { IssueContextMenuProvider } from "../actions";
 import { IssueSurfaceActionsProvider } from "./actions-context";
 import { IssueSurfaceSelectionProvider } from "./selection-context";
-import type { IssueCreateDefaults, IssueSurfaceProps } from "./types";
+import { isPlanViewMode, type IssueCreateDefaults, type IssueSurfaceProps } from "./types";
 import {
   useIssueSurfaceController,
   type IssueSurfaceController,
@@ -246,6 +246,7 @@ function IssueSurfaceContent({
             scopedIssues={controller.surfaceIssues}
             workingAgents={controller.workingAgents}
             allowGantt={controller.allowGantt}
+            allowPlanViews={controller.allowPlanViews}
             isRefreshing={controller.isRefreshing}
             facetCountsExact={
               controller.facetCountsExact
@@ -265,7 +266,12 @@ function IssueSurfaceContent({
             Row fetching is suspended while it is down (a custom status filter
             cannot be routed without it), so every branch below would render an
             unexplained empty surface with no way out. (MUL-6243) */}
-        {controller.isStatusCatalogError ? (
+        {isPlanViewMode(controller.viewMode) ? (
+          // No read API yet (LOCO-549): every Plan mode shows the same
+          // honest "no plan" state rather than fabricated phases/rollups,
+          // regardless of the issue query's own loading/empty status.
+          <PlanEmptyState />
+        ) : controller.isStatusCatalogError ? (
           <StatusCatalogErrorState onRetry={controller.retryStatusCatalog} />
         ) : controller.isLoading ? (
           renderLoading ? (
@@ -392,6 +398,23 @@ function StatusCatalogErrorState({ onRetry }: { onRetry: () => void }) {
       <Button variant="outline" size="sm" className="mt-1" onClick={onRetry}>
         {t(($) => $.status_catalog_error.retry)}
       </Button>
+    </div>
+  );
+}
+
+/**
+ * Shown for every Plan view mode until the plan read API exists (LOCO-549).
+ * Deliberately the same content for Document, Pipeline, and Coverage: there
+ * is exactly one real state to report ("this project has no plan yet"), not
+ * three fabricated ones.
+ */
+function PlanEmptyState() {
+  const { t } = useT("issues");
+  return (
+    <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 text-muted-foreground">
+      <FileText className="h-10 w-10 text-faint-foreground" />
+      <p className="text-body">{t(($) => $.plan_empty.title)}</p>
+      <p className="text-caption">{t(($) => $.plan_empty.hint)}</p>
     </div>
   );
 }

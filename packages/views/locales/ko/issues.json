@@ -185,12 +185,18 @@
     "tooltip_table": "테이블 보기",
     "tooltip_gantt": "간트 보기",
     "tooltip_swimlane": "스윔레인 보기",
+    "tooltip_plan_document": "계획 문서 보기",
+    "tooltip_plan_pipeline": "계획 파이프라인 보기",
+    "tooltip_plan_coverage": "계획 커버리지 보기",
     "section": "보기",
     "board": "보드",
     "list": "리스트",
     "table": "테이블",
     "gantt": "간트",
-    "swimlane": "스윔레인"
+    "swimlane": "스윔레인",
+    "plan_document": "계획 문서",
+    "plan_pipeline": "계획 파이프라인",
+    "plan_coverage": "계획 커버리지"
   },
   "table": {
     "select_all": "표시된 모든 태스크 선택",
@@ -553,6 +559,10 @@
     "title": "필터 조건에 맞는 태스크가 없습니다",
     "hint": "필터를 조정하거나 해제하면 이 보기의 태스크가 표시됩니다.",
     "clear_button": "필터 해제"
+  },
+  "plan_empty": {
+    "title": "아직 계획이 없습니다",
+    "hint": "이 프로젝트에는 아직 계획이 없습니다. 계획이 생성되면 문서, 파이프라인, 커버리지 보기에 실제 내용이 표시됩니다."
   },
   "agent_live": {
     "is_working": "{{name}} 작업 중",
