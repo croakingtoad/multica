@@ -114,3 +114,85 @@ export interface ProjectPlanOverview {
   dependencies: ProjectPlanDependency[];
   uncovered_parts: ProjectPlanUncoveredPart[];
 }
+
+// ---------------------------------------------------------------------------
+// Write payloads (LOCO-591 — manual plan authoring)
+//
+// Derived from the audited service surface in
+// server/internal/projectplan/service.go, not from a guessed HTTP contract:
+// each type below mirrors one exported method's params struct, minus the
+// fields the server owns.
+//
+// Deliberately absent everywhere:
+//   * `created_by` — the handler takes the actor from the authenticated
+//     request; a client-supplied creator would be forgeable.
+//   * `workspace_id` / `plan_id` / `project_id` — path-scoped, never body.
+//   * `origin`, `source_issue_id`, and the other `source_*` columns —
+//     `CreateManual` hardcodes origin="manual" with a NULL source, which is
+//     what `project_plan_source_provenance_check`
+//     (server/migrations/441_project_plan.up.sql:45) requires. A manually
+//     authored plan must never claim issue provenance, so there is no field
+//     here through which it could.
+// ---------------------------------------------------------------------------
+
+/** `projectplan.CreateManualParams`. `kind` is "prd" — the only kind this release accepts. */
+export interface CreateManualProjectPlanRequest {
+  kind: string;
+  title: string;
+  description: string;
+}
+
+/** `projectplan.PlanPatch`. Every field optional: omitted means "leave alone". */
+export interface UpdateProjectPlanRequest {
+  title?: string;
+  description?: string;
+}
+
+/**
+ * `projectplan.SupersedeParams.Patch`. Archives the active version and clones
+ * its structure forward into a new active version, applying this patch to the
+ * new one.
+ */
+export interface SupersedeProjectPlanRequest {
+  title?: string;
+  description?: string;
+}
+
+/** `projectplan.CreatePhaseParams`. */
+export interface CreateProjectPlanPhaseRequest {
+  title: string;
+  description: string;
+  position: number;
+}
+
+/** `projectplan.PhasePatch`. */
+export interface UpdateProjectPlanPhaseRequest {
+  title?: string;
+  description?: string;
+  position?: number;
+}
+
+/** `projectplan.CreatePartParams`. */
+export interface CreateProjectPlanPartRequest {
+  title: string;
+  description: string;
+  acceptance_criteria: string;
+  position: number;
+}
+
+/** `projectplan.PartPatch`. */
+export interface UpdateProjectPlanPartRequest {
+  title?: string;
+  description?: string;
+  acceptance_criteria?: string;
+  position?: number;
+}
+
+/**
+ * `ReorderPhases` / `ReorderParts`. The service's `validateExactOrder` rejects
+ * anything that is not a permutation of every current sibling — so this must
+ * always be the complete ordered set, never a partial move.
+ */
+export interface ReorderProjectPlanRequest {
+  ordered_ids: string[];
+}

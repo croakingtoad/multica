@@ -197,6 +197,14 @@ export type {
   ProjectPlanRollup,
   ProjectPlanTaskRollup,
   ProjectPlanUncoveredPart,
+  CreateManualProjectPlanRequest,
+  UpdateProjectPlanRequest,
+  SupersedeProjectPlanRequest,
+  CreateProjectPlanPhaseRequest,
+  UpdateProjectPlanPhaseRequest,
+  CreateProjectPlanPartRequest,
+  UpdateProjectPlanPartRequest,
+  ReorderProjectPlanRequest,
 } from "./project-plan";
 export type {
   GitHubInstallation,
