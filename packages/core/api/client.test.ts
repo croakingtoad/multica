@@ -2670,6 +2670,37 @@ describe("ApiClient project plan read (LOCO-549)", () => {
     await expect(client.getActiveProjectPlan("project-1")).rejects.toThrow(/schema validation/i);
   });
 
+  // QC re-audit round 2: `attributes: z.unknown()` accepted an omitted key at
+  // runtime even though the Go `Plan`/`Phase`/`Part` structs have no
+  // `omitempty` on it — `z.json()` closes that gap by rejecting omission
+  // while still accepting `null` and any JSON value.
+  it("rejects a response with plan.attributes omitted", async () => {
+    const malformed = validOverview();
+    delete (malformed.plan as Record<string, unknown>).attributes;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(malformed, 200)));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getActiveProjectPlan("project-1")).rejects.toThrow(/schema validation/i);
+  });
+
+  it("rejects a response with a phase's attributes omitted", async () => {
+    const malformed = validOverview();
+    delete (malformed.phases[0] as Record<string, unknown>).attributes;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(malformed, 200)));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getActiveProjectPlan("project-1")).rejects.toThrow(/schema validation/i);
+  });
+
+  it("rejects a response with a part's attributes omitted", async () => {
+    const malformed = validOverview();
+    delete (malformed.phases[0]!.parts[0] as Record<string, unknown>).attributes;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(malformed, 200)));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getActiveProjectPlan("project-1")).rejects.toThrow(/schema validation/i);
+  });
+
   it("rejects a response with a coverage_state outside the 5-value enum instead of defaulting it", async () => {
     const malformed = validOverview();
     malformed.phases[0]!.parts[0]!.coverage_state = "bogus_state";
