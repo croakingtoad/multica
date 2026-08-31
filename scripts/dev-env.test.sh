@@ -141,8 +141,17 @@ fallback_marker="$tmp_dir/ensure-postgres-called"
 mkdir -p "$probe_root/scripts" "$probe_root/server" "$probe_bin"
 cat > "$probe_bin/go" <<'EOF'
 #!/usr/bin/env bash
+write_probe_endpoint() {
+  [ -z "${POSTGRES_PROBE_ENDPOINT_FILE:-}" ] \
+    || printf '127.0.0.1:%s' "$POSTGRES_PORT" > "$POSTGRES_PROBE_ENDPOINT_FILE"
+}
 case "${POSTGRES_PROBE_RESULT:-failure}" in
-  refused) echo "nothing-listening" ;;
+  refused) write_probe_endpoint; printf %s "nothing-listening" ;;
+  token-extra) write_probe_endpoint; printf 'nothing-listening\nunexpected-output' ;;
+  real)
+    cd "$POSTGRES_PROBE_SOURCE"
+    exec "$REAL_GO" run ./cmd/postgres-probe
+    ;;
   *) echo "pgx probe could not verify the listener" >&2; exit 1 ;;
 esac
 EOF
@@ -180,6 +189,35 @@ PATH="$probe_path" POSTGRES_PROBE_RESULT=refused REPO_ROOT="$probe_root" \
   || fail "a positively refused connection did not reach the Compose fallback"
 [ "$(cat "$fallback_marker")" = 'multica_ephemeral_321:25432' ] \
   || fail "Compose fallback did not receive the upstream project and port"
+
+rm -f "$fallback_marker"
+status=0
+real_go="$(command -v go)"
+query_port="$(node -e '
+  const server = require("net").createServer();
+  server.listen(0, "127.0.0.1", () => {
+    process.stdout.write(String(server.address().port));
+    server.close();
+  });
+')"
+PATH="$probe_path" POSTGRES_PROBE_RESULT=real REAL_GO="$real_go" \
+  POSTGRES_PROBE_SOURCE="$root_dir/server" REPO_ROOT="$probe_root" \
+  DATABASE_URL="postgres://multica:multica@127.0.0.1:25432/multica?sslmode=disable&port=$query_port" \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 ENV_FILE=.env \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "a pgx query-port override reached the Compose fallback"
+[ ! -e "$fallback_marker" ] || fail "a refused connection on a different effective endpoint started PostgreSQL"
+
+rm -f "$fallback_marker"
+status=0
+PATH="$probe_path" POSTGRES_PROBE_RESULT=token-extra REPO_ROOT="$probe_root" \
+  DATABASE_URL='postgres://multica:multica@127.0.0.1:25432/multica?sslmode=disable' \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 ENV_FILE=.env \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "a multi-line nothing-listening result reached the Compose fallback"
+[ ! -e "$fallback_marker" ] || fail "trailing probe output started PostgreSQL"
 
 # ensure-postgres sources the checkout env file in a subprocess. It must retain
 # the explicit Make override instead of silently restoring the file's port.
