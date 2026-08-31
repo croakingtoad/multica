@@ -401,9 +401,13 @@ rewrite_env_ports() {
 admin_database_url() {
   node -e '
     const url = new URL(process.argv[1]);
+    if (process.argv[2]) {
+      url.hostname = "127.0.0.1";
+      url.port = process.argv[2];
+    }
     url.pathname = "/postgres";
     process.stdout.write(url.toString());
-  ' "$1" 2>/dev/null || true
+  ' "$1" "${2:-}" 2>/dev/null || true
 }
 
 database_url_with_name() {
@@ -461,44 +465,61 @@ diagnose_database() {
 }
 
 ensure_database() {
-  local admin_url probe_error probe_output probe_result compose_system_id
+  local admin_url compose_system_id expected_endpoint probe_endpoint probe_endpoint_bytes probe_endpoint_value
+  local probe_error probe_output probe_output_bytes probe_result probe_stdout
   [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is required to verify PostgreSQL."
-  admin_url="$(admin_database_url "$DATABASE_URL")"
+  admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
   [ -n "$admin_url" ] || die "The configured DATABASE_URL is not a valid URL."
 
   compose_system_id="$(docker compose exec -T postgres \
     psql -U "${POSTGRES_USER:-multica}" -d postgres -Atqc \
     'SELECT system_identifier::text FROM pg_control_system()' 2>/dev/null || true)"
   probe_error="$(mktemp)"
+  probe_stdout="$(mktemp)"
+  probe_endpoint="$(mktemp)"
 
   # The repo-owned pgx probe has exactly one start-safe result: the
   # "nothing-listening" token means its TCP connection was refused, positively
-  # establishing that nothing owns the configured endpoint. Authentication,
-  # timeout, DNS, build and identity failures all abort instead.
-  if probe_output="$(
+  # establishing that nothing owns the Compose endpoint. Authentication,
+  # timeout, DNS, build, endpoint and identity failures all abort instead.
+  if (
     cd "$REPO_ROOT/server" && \
       DATABASE_URL="$admin_url" POSTGRES_DB="$POSTGRES_DB" \
-      EXPECTED_SYSTEM_ID="$compose_system_id" go run ./cmd/postgres-probe 2>"$probe_error"
-  )"; then
+      EXPECTED_SYSTEM_ID="$compose_system_id" POSTGRES_PROBE_ENDPOINT_FILE="$probe_endpoint" \
+      go run ./cmd/postgres-probe >"$probe_stdout" 2>"$probe_error"
+  ); then
+    probe_output="$(cat "$probe_stdout")"
+    probe_output_bytes="$(wc -c < "$probe_stdout")"
     probe_result="$(printf '%s\n' "$probe_output" | sed -n '1p')"
     if [ "$probe_result" = ready ]; then
-      rm -f "$probe_error"
+      rm -f "$probe_endpoint" "$probe_error" "$probe_stdout"
       probe_output="$(printf '%s\n' "$probe_output" | sed '1d')"
       [ -z "$probe_output" ] || info "$probe_output"
       return 0
     fi
-    if [ "$probe_result" = nothing-listening ]; then
+    expected_endpoint="127.0.0.1:${POSTGRES_PORT:-5432}"
+    probe_endpoint_value="$(cat "$probe_endpoint")"
+    probe_endpoint_bytes="$(wc -c < "$probe_endpoint")"
+    if [ "$probe_output" = nothing-listening ] \
+      && [ "$probe_output_bytes" -eq 17 ] \
+      && [ "$probe_endpoint_value" = "$expected_endpoint" ] \
+      && [ "$probe_endpoint_bytes" -eq "${#expected_endpoint}" ]; then
       sed 's/^/    /' "$probe_error"
-      rm -f "$probe_error"
+      rm -f "$probe_endpoint" "$probe_error" "$probe_stdout"
       info "Nothing is listening on ${POSTGRES_PORT:-5432}; starting this environment's Compose PostgreSQL."
       bash "$REPO_ROOT/scripts/ensure-postgres.sh" "$ENV_FILE" | sed 's/^/    /'
       return 0
     fi
-    printf 'Unexpected database probe result: %s\n' "${probe_result:-<empty>}" >> "$probe_error"
+    if [ "$probe_output" = nothing-listening ] && [ "$probe_output_bytes" -eq 17 ]; then
+      printf 'Database probe checked endpoint %s; expected %s.\n' \
+        "$probe_endpoint_value" "$expected_endpoint" >> "$probe_error"
+    else
+      printf 'Unexpected database probe result: %s\n' "${probe_result:-<empty>}" >> "$probe_error"
+    fi
   fi
 
   sed 's/^/    /' "$probe_error" >&2 || true
-  rm -f "$probe_error"
+  rm -f "$probe_endpoint" "$probe_error" "$probe_stdout"
   diagnose_database || true
   die "Cannot verify PostgreSQL on ${POSTGRES_PORT:-5432}; refusing to start or reuse a Compose service."
 }

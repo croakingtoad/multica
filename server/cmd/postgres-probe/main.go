@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,17 +35,30 @@ func run() int {
 	databaseURL := os.Getenv("DATABASE_URL")
 	databaseName := os.Getenv("POSTGRES_DB")
 	expectedSystemID := strings.TrimSpace(os.Getenv("EXPECTED_SYSTEM_ID"))
-	if databaseURL == "" || databaseName == "" {
-		return fail("DATABASE_URL and POSTGRES_DB are required", nil)
+	endpointFile := os.Getenv("POSTGRES_PROBE_ENDPOINT_FILE")
+	if databaseURL == "" || databaseName == "" || endpointFile == "" {
+		return fail("DATABASE_URL, POSTGRES_DB, and POSTGRES_PROBE_ENDPOINT_FILE are required", nil)
+	}
+
+	config, err := pgx.ParseConfig(databaseURL)
+	if err != nil {
+		return fail("parse DATABASE_URL", err)
+	}
+	endpoint, err := effectiveEndpoint(config)
+	if err != nil {
+		return fail("determine database probe endpoint", err)
+	}
+	if err := os.WriteFile(endpointFile, []byte(endpoint), 0o600); err != nil {
+		return fail("report database probe endpoint", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	conn, err := pgx.Connect(ctx, databaseURL)
+	conn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
 		if classifyConnectError(err) == connectNothingListening {
-			fmt.Fprintln(os.Stdout, "nothing-listening")
+			fmt.Fprint(os.Stdout, "nothing-listening")
 			fmt.Fprintln(os.Stderr, "no process is listening at DATABASE_URL")
 			return exitSuccess
 		}
@@ -87,6 +102,17 @@ func run() int {
 	fmt.Fprintln(os.Stdout, "ready")
 	fmt.Fprintf(os.Stdout, "Created database %s through DATABASE_URL.\n", databaseName)
 	return exitSuccess
+}
+
+func effectiveEndpoint(config *pgx.ConnConfig) (string, error) {
+	endpoint := net.JoinHostPort(config.Host, strconv.Itoa(int(config.Port)))
+	for _, fallback := range config.Fallbacks {
+		fallbackEndpoint := net.JoinHostPort(fallback.Host, strconv.Itoa(int(fallback.Port)))
+		if fallbackEndpoint != endpoint {
+			return "", fmt.Errorf("multiple endpoints configured: %s and %s", endpoint, fallbackEndpoint)
+		}
+	}
+	return endpoint, nil
 }
 
 func classifyConnectError(err error) connectState {
