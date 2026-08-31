@@ -333,6 +333,24 @@ fi
 kill -TERM -"$descendant_pid" "$ancestor_pid" 2>/dev/null || true
 wait "$ancestor_pid" 2>/dev/null || true
 
+# Some Linux lsof builds cannot enumerate an IPv6 wildcard listener even
+# though ss reports its owning PID. Listener identity must retain that fallback
+# or a healthy Next.js server is rejected as foreign.
+listener_bin="$tmp_dir/listener-bin"
+mkdir -p "$listener_bin"
+cat > "$listener_bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$listener_bin/ss" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'LISTEN 0 511 *:13691 *:* users:(("next-server",pid=4242,fd=22))'
+EOF
+chmod +x "$listener_bin/lsof" "$listener_bin/ss"
+listener_pid="$(PATH="$listener_bin:$PATH" bash -c 'source "$1"; port_listener_pid 13691' _ \
+  "$root_dir/scripts/dev-env.sh")"
+[ "$listener_pid" = 4242 ] || fail "ss listener fallback returned $listener_pid, want 4242"
+
 # ---------------------------------------------------------------------------
 # Unknown names and components fail loudly instead of doing something else.
 # ---------------------------------------------------------------------------
