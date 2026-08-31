@@ -1331,6 +1331,122 @@ export const EMPTY_SEARCH_PROJECTS_RESPONSE: SearchProjectsResponse = {
   total: 0,
 };
 
+// Project plan read model (LOCO-549). Mirrors `projectplan.Overview` — see
+// server/internal/projectplan/read.go. `.loose()` throughout so an older
+// client talking to a newer server keeps rendering on additive fields, per
+// the API compatibility rules; coverage_state/status/status_category stay
+// `z.string()` (not enums) so an unrecognized value still parses and falls
+// through the UI's default-bearing switches instead of failing the batch.
+const ProjectPlanSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  project_id: z.string(),
+  version: z.number().default(0),
+  kind: z.string(),
+  origin: z.string(),
+  title: z.string(),
+  description: z.string().default(""),
+  attributes: z.unknown().default(null),
+  source_issue_id: z.string().nullable().default(null),
+  superseded: z.boolean().default(false),
+  superseded_at: z.string().nullable().default(null),
+  created_by_type: z.string(),
+  created_by_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+const ProjectPlanRollupSchema = z.object({
+  tasks_done: z.number().default(0),
+  tasks_total: z.number().default(0),
+  percent: z.number().default(0),
+  parts_covered: z.number().default(0),
+  parts_total: z.number().default(0),
+  parts_without_tasks: z.number().default(0),
+}).loose();
+
+const ProjectPlanTaskRollupSchema = z.object({
+  tasks_done: z.number().default(0),
+  tasks_total: z.number().default(0),
+  percent: z.number().default(0),
+}).loose();
+
+const ProjectPlanIssueDetailSchema = z.object({
+  id: z.string().nullable().default(null),
+  number: z.number().default(0),
+  identifier: z.string().default(""),
+  title: z.string().default(""),
+  status: z.string().default(""),
+  status_category: z.string().default(""),
+  assignee_type: z.string().nullable().default(null),
+  assignee_id: z.string().nullable().default(null),
+  deleted: z.boolean().default(false),
+}).loose();
+
+const ProjectPlanPartSchema = z.object({
+  id: z.string(),
+  title: z.string().default(""),
+  description: z.string().default(""),
+  acceptance_criteria: z.string().default(""),
+  attributes: z.unknown().default(null),
+  position: z.number().default(0),
+  coverage_state: z.string().default("no_tasks_yet"),
+  rollup: ProjectPlanTaskRollupSchema.default({ tasks_done: 0, tasks_total: 0, percent: 0 }),
+  issues: z.array(ProjectPlanIssueDetailSchema).default([]),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+const ProjectPlanPhaseSchema = z.object({
+  id: z.string(),
+  title: z.string().default(""),
+  description: z.string().default(""),
+  attributes: z.unknown().default(null),
+  position: z.number().default(0),
+  rollup: ProjectPlanTaskRollupSchema.default({ tasks_done: 0, tasks_total: 0, percent: 0 }),
+  parts: z.array(ProjectPlanPartSchema).default([]),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+const ProjectPlanDependencyNodeSchema = z.object({
+  type: z.string(),
+  id: z.string(),
+  title: z.string().default(""),
+  phase_id: z.string().nullable().optional(),
+  phase_title: z.string().nullable().optional(),
+  missing: z.boolean().default(false),
+}).loose();
+
+const ProjectPlanDependencySchema = z.object({
+  id: z.string(),
+  blocked: ProjectPlanDependencyNodeSchema,
+  blocking: ProjectPlanDependencyNodeSchema,
+}).loose();
+
+const ProjectPlanUncoveredPartSchema = z.object({
+  id: z.string(),
+  title: z.string().default(""),
+  position: z.number().default(0),
+  phase_id: z.string(),
+  phase_title: z.string().default(""),
+}).loose();
+
+export const ProjectPlanOverviewSchema = z.object({
+  plan: ProjectPlanSchema,
+  rollup: ProjectPlanRollupSchema.default({
+    tasks_done: 0, tasks_total: 0, percent: 0,
+    parts_covered: 0, parts_total: 0, parts_without_tasks: 0,
+  }),
+  phases: z.array(ProjectPlanPhaseSchema).default([]),
+  dependencies: z.array(ProjectPlanDependencySchema).default([]),
+  uncovered_parts: z.array(ProjectPlanUncoveredPartSchema).default([]),
+}).loose();
+
+// No EMPTY_* fallback: a plan read that fails schema validation must surface
+// as an error state, not silently render as "no plan" (Addition 2 — those are
+// two different, distinguishable states). See usePlanOverview.
+
 const IssueAssigneeGroupSchema = z.object({
   id: z.string(),
   assignee_type: z.string().nullable(),

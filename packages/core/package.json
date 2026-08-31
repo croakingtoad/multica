@@ -33,6 +33,8 @@
     "./issue-statuses/queries": "./issue-statuses/queries.ts",
     "./issue-statuses/hooks": "./issue-statuses/hooks.ts",
     "./issue-statuses/mutations": "./issue-statuses/mutations.ts",
+    "./project-plan/queries": "./project-plan/queries.ts",
+    "./project-plan/hooks": "./project-plan/hooks.ts",
     "./issues": "./issues/index.ts",
     "./issues/batch": "./issues/batch.ts",
     "./issues/canonical-id": "./issues/canonical-id.ts",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertTriangle, FileText, FilterX, ListTodo, Plus } from "lucide-react";
+import { AlertTriangle, FilterX, ListTodo, Plus } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
@@ -37,6 +37,7 @@ import { IssueContextMenuProvider } from "../actions";
 import { IssueSurfaceActionsProvider } from "./actions-context";
 import { IssueSurfaceSelectionProvider } from "./selection-context";
 import { isPlanViewMode, type IssueCreateDefaults, type IssueSurfaceProps } from "./types";
+import { PlanModePane } from "./plan-panes/plan-mode-pane";
 import {
   useIssueSurfaceController,
   type IssueSurfaceController,
@@ -267,10 +268,16 @@ function IssueSurfaceContent({
             cannot be routed without it), so every branch below would render an
             unexplained empty surface with no way out. (MUL-6243) */}
         {isPlanViewMode(controller.viewMode) ? (
-          // No read API yet (LOCO-549): every Plan mode shows the same
-          // honest "no plan" state rather than fabricated phases/rollups,
-          // regardless of the issue query's own loading/empty status.
-          <PlanEmptyState />
+          // The plan read API shipped in this cumulative stage (LOCO-549;
+          // server/cmd/server/router.go:1918-1919,
+          // server/internal/handler/project_plan.go:15-51). Each Plan mode
+          // renders the live overview for `controller.projectId` through its
+          // own loading/error/no-plan/present states — independent of the
+          // issue query's own loading/empty status, which this surface
+          // otherwise renders below. `controller.projectId` is guaranteed
+          // here: `allowPlanViews` (and therefore reaching a plan_* mode)
+          // requires it, same invariant `allowGantt` relies on for Gantt.
+          <PlanModePane mode={controller.viewMode} projectId={controller.projectId!} />
         ) : controller.isStatusCatalogError ? (
           <StatusCatalogErrorState onRetry={controller.retryStatusCatalog} />
         ) : controller.isLoading ? (
@@ -398,23 +405,6 @@ function StatusCatalogErrorState({ onRetry }: { onRetry: () => void }) {
       <Button variant="outline" size="sm" className="mt-1" onClick={onRetry}>
         {t(($) => $.status_catalog_error.retry)}
       </Button>
-    </div>
-  );
-}
-
-/**
- * Shown for every Plan view mode until the plan read API exists (LOCO-549).
- * Deliberately the same content for Document, Pipeline, and Coverage: there
- * is exactly one real state to report ("this project has no plan yet"), not
- * three fabricated ones.
- */
-function PlanEmptyState() {
-  const { t } = useT("issues");
-  return (
-    <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 text-muted-foreground">
-      <FileText className="h-10 w-10 text-faint-foreground" />
-      <p className="text-body">{t(($) => $.plan_empty.title)}</p>
-      <p className="text-caption">{t(($) => $.plan_empty.hint)}</p>
     </div>
   );
 }

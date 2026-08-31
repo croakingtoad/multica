@@ -560,6 +560,63 @@
     "hint": "필터를 조정하거나 해제하면 이 보기의 태스크가 표시됩니다.",
     "clear_button": "필터 해제"
   },
+  "plan": {
+    "error": {
+      "title": "계획을 불러오지 못했습니다",
+      "hint": "요청이 실패했습니다. 계획은 여전히 존재할 수 있습니다 — 다시 시도해 주세요.",
+      "retry": "다시 시도"
+    },
+    "coverage_state": {
+      "complete": "완료",
+      "in_progress": "진행 중",
+      "not_started": "시작 전",
+      "no_tasks_yet": "작업 없음",
+      "covered_no_active_tasks": "커버됨 · 활성 작업 없음"
+    },
+    "coverage_hint": {
+      "no_tasks_yet": "계획에서 식별되었지만 아직 이슈가 생성되지 않았습니다.",
+      "covered_no_active_tasks": "연결된 모든 이슈가 취소되거나 삭제되었습니다. 이 부분은 현재 작업에 반영되어 있지 않습니다."
+    },
+    "phase_rollup": "{{done}}/{{total}} 작업 · {{percent}}%",
+    "part_gap_more_other": "공백 {{count}}개 더 보기",
+    "superseded_banner": "이 계획 버전은 {{date}}에 대체되었습니다. 아래 이슈 상태는 스냅샷이 아닌 실시간 상태입니다.",
+    "document": {
+      "subtitle": "버전 {{version}} · {{phaseCount}}개 단계",
+      "stat_percent": "완료",
+      "stat_tasks": "작업 완료",
+      "stat_gaps": "부분이 아직 분해되지 않음"
+    },
+    "pipeline": {
+      "stat_percent": "완료",
+      "stat_tasks": "작업",
+      "stat_gaps": "부분이 분해되지 않음",
+      "gate_covered": "게이트: 전체 {{total}}개 부분 중 {{covered}}개 커버됨",
+      "blocked_on_phase": "{{title}}에 의해 차단됨",
+      "blocked_on_part": "{{title}}({{phase}})에 의해 차단됨",
+      "blocked_missing": "더 이상 존재하지 않는 종속 항목에 의해 차단됨",
+      "lane_status": {
+        "complete": "완료",
+        "blocked": "차단됨",
+        "in_progress": "진행 중",
+        "not_started": "시작 전"
+      }
+    },
+    "coverage": {
+      "tile_percent": "계획 완료율",
+      "tile_tasks": "작업 완료",
+      "tile_parts_covered": "부분 커버됨",
+      "tile_gaps": "부분에 작업 없음",
+      "risk_banner_title_other": "전체 {{total}}개 중 {{count}}개 계획 부분이 아직 작업으로 분해되지 않았습니다",
+      "risk_banner_hint": "이 항목들은 계획에서 식별되었지만 현재 이슈 트래커에는 표시되지 않습니다.",
+      "risk_chip_more_other": "{{count}}개 더 보기",
+      "col_part": "계획 부분",
+      "col_coverage": "커버리지",
+      "col_progress": "진행률",
+      "col_assignees": "담당자",
+      "not_decomposed": "— 미분해 —",
+      "no_assignees": "—"
+    }
+  },
   "plan_empty": {
     "title": "아직 계획이 없습니다",
     "hint": "이 프로젝트에는 아직 계획이 없습니다. 계획이 생성되면 문서, 파이프라인, 커버리지 보기에 실제 내용이 표시됩니다."
