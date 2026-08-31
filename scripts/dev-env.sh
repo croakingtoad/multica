@@ -1404,7 +1404,7 @@ cmd_down() {
 }
 
 cmd_destroy() {
-  local name="" assume_yes=0 reply admin_url failures=0
+  local name="" assume_yes=0 reply admin_url compose_status failures=0
   local expected_workspaces expected_desktop_data
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1422,28 +1422,40 @@ cmd_destroy() {
   fi
 
   export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export POSTGRES_PORT COMPOSE_PROJECT_NAME
   step "Destroying $NAME"
   local comp
   for comp in $ALL_COMPONENTS; do
     if ! stop_component "$comp"; then failures=$((failures + 1)); fi
   done
 
-  if command -v psql >/dev/null 2>&1; then
-    admin_url="$(admin_database_url "$DATABASE_URL")"
-    if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-      if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
-        ok "dropped database $DB_NAME"
+  if [ -n "$COMPOSE_PROJECT_NAME" ]; then
+    if (cd "$REPO_ROOT" && docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes); then
+      ok "removed Compose project $COMPOSE_PROJECT_NAME and its volumes"
+    else
+      compose_status=$?
+      warn "failed to tear down Compose project $COMPOSE_PROJECT_NAME (exit $compose_status); its manifest and slot were kept for retry"
+      return "$compose_status"
+    fi
+  else
+    info "$NAME has no Compose project recorded; skipped isolated PostgreSQL teardown."
+    if command -v psql >/dev/null 2>&1; then
+      admin_url="$(admin_database_url "$DATABASE_URL")"
+      if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
+        if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
+          ok "dropped database $DB_NAME"
+        else
+          warn "failed to drop database $DB_NAME; keeping its manifest"
+          failures=$((failures + 1))
+        fi
       else
-        warn "failed to drop database $DB_NAME; keeping its manifest"
+        warn "Nothing answered on the database host; $DB_NAME was left in place."
         failures=$((failures + 1))
       fi
     else
-      warn "Nothing answered on the database host; $DB_NAME was left in place."
+      warn "psql not found; $DB_NAME was left in place."
       failures=$((failures + 1))
     fi
-  else
-    warn "psql not found; $DB_NAME was left in place."
-    failures=$((failures + 1))
   fi
 
   if rm -rf "$PROFILE_DIR"; then

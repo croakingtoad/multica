@@ -17,6 +17,17 @@ export MULTICA_DEV_PROFILES_HOME="$tmp_dir/profiles"
 
 fake_bin="$tmp_dir/bin"
 mkdir -p "$fake_bin"
+docker_log="$tmp_dir/docker.log"
+export DOCKER_LOG="$docker_log"
+cat > "$fake_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'project=%s port=%s args=%s\n' \
+  "${COMPOSE_PROJECT_NAME:-<unset>}" "${POSTGRES_PORT:-<unset>}" "$*" >> "$DOCKER_LOG"
+if [ "${FAIL_COMPOSE_DOWN:-0}" = 1 ]; then
+  echo "simulated Compose teardown failure" >&2
+  exit 42
+fi
+EOF
 cat > "$fake_bin/psql" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
@@ -24,7 +35,7 @@ case " $* " in
   *) printf '1\n' ;;
 esac
 EOF
-chmod +x "$fake_bin/psql"
+chmod +x "$fake_bin/docker" "$fake_bin/psql"
 export PATH="$fake_bin:$PATH"
 
 fail() {
@@ -47,7 +58,7 @@ dev_env() {
 }
 
 write_manifest() {
-  local name=$1 dir=$2 offset=$3
+  local name=$1 dir=$2 offset=$3 compose_project=${4:-} postgres_port=${5:-}
   local profile="dev-dev-env-test-$offset"
   mkdir -p "$MULTICA_DEV_HOME/envs/$name/logs"
   cat > "$MULTICA_DEV_HOME/envs/$name/manifest.env" <<EOF
@@ -67,6 +78,12 @@ WORKSPACES_ROOT=$(printf '%q' "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces
 DESKTOP_RENDERER_PORT=$((5174 + offset))
 DESKTOP_APP_SUFFIX=$name
 EOF
+  if [ -n "$compose_project" ]; then
+    cat >> "$MULTICA_DEV_HOME/envs/$name/manifest.env" <<EOF
+COMPOSE_PROJECT_NAME=$compose_project
+POSTGRES_PORT=$postgres_port
+EOF
+  fi
 }
 
 out="$tmp_dir/out"
@@ -389,12 +406,46 @@ FAIL_DROP=1 dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || status=$?
 require_contains "$out" "manifest and slot were kept"
 dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || fail "retrying destroy after database recovery failed"
 
+# Isolated PostgreSQL teardown uses the exact manifest values, even when the
+# invoking shell carries conflicting values from another environment.
+: > "$docker_log"
+write_manifest "compose-destroy-905" "$root_dir" 905 "multica_manifest-project-905" 26555
+POSTGRES_PORT=29999 COMPOSE_PROJECT_NAME=multica_wrong-project \
+  dev_env destroy compose-destroy-905 --yes > "$out" 2>&1 \
+  || fail "isolated Compose destroy must succeed"
+require_contains "$docker_log" \
+  "project=multica_manifest-project-905 port=26555 args=compose --project-name multica_manifest-project-905 down --volumes"
+[ ! -d "$MULTICA_DEV_HOME/envs/compose-destroy-905" ] \
+  || fail "successful Compose teardown retained the manifest and slot"
+
+# A failed Compose teardown preserves its exit status and every registry value
+# needed to retry the exact same project cleanup.
+: > "$docker_log"
+write_manifest "compose-fails-906" "$root_dir" 906 "multica_manifest-project-906" 26556
+status=0
+FAIL_COMPOSE_DOWN=1 POSTGRES_PORT=29999 COMPOSE_PROJECT_NAME=multica_wrong-project \
+  dev_env destroy compose-fails-906 --yes > "$out" 2>&1 || status=$?
+[ "$status" -eq 42 ] || fail "failed Compose teardown exited $status, want 42"
+[ -f "$MULTICA_DEV_HOME/envs/compose-fails-906/manifest.env" ] \
+  || fail "failed Compose teardown discarded the manifest and slot"
+if ! bash -c 'source "$1"; offset_registered "$2"' _ \
+  "$root_dir/scripts/dev-env.sh" 906; then
+  fail "failed Compose teardown released its allocator slot"
+fi
+require_contains "$docker_log" \
+  "project=multica_manifest-project-906 port=26556 args=compose --project-name multica_manifest-project-906 down --volumes"
+require_contains "$out" "failed to tear down Compose project multica_manifest-project-906 (exit 42)"
+require_contains "$out" "manifest and slot were kept"
+dev_env destroy compose-fails-906 --yes > "$out" 2>&1 \
+  || fail "retrying destroy after Compose recovery failed"
+
 # ---------------------------------------------------------------------------
 # destroy consumes the manifest: the slot is free afterwards, which is what
 # makes the registry an allocator rather than a second place to leak.
 # ---------------------------------------------------------------------------
 dev_env destroy probe-901 --yes > "$out" 2>&1 || fail "destroy must succeed"
 [ ! -d "$MULTICA_DEV_HOME/envs/probe-901" ] || fail "destroy left the environment directory behind"
+require_contains "$out" "no Compose project recorded; skipped isolated PostgreSQL teardown"
 
 dev_env list > "$out" 2>&1 || fail "list must succeed after destroy"
 if grep -Fq "probe-901" "$out"; then
