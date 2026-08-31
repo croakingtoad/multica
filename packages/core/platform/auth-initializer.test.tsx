@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import { act, render, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
@@ -11,6 +12,7 @@ import {
   registerAuthStore,
   useAuthStore,
 } from "../auth";
+import { configStore, useFeatureEnabled } from "../config";
 import type { StorageAdapter, User, Workspace } from "../types";
 import { workspaceKeys } from "../workspace/queries";
 import { AuthInitializer } from "./auth-initializer";
@@ -74,11 +76,13 @@ function renderInitializer({
   storage = makeStorage({ multica_token: "token-1" }),
   cookieAuth = false,
   platform = "desktop",
+  children = <div>child</div>,
 }: {
   api: ApiClient;
   storage?: StorageAdapter;
   cookieAuth?: boolean;
   platform?: "desktop" | "web";
+  children?: ReactNode;
 }) {
   const onLogin = vi.fn();
   const onLogout = vi.fn();
@@ -99,7 +103,7 @@ function renderInitializer({
         onLogout={onLogout}
         storage={storage}
       >
-        <div>child</div>
+        {children}
       </AuthInitializer>
     </QueryClientProvider>,
   );
@@ -107,8 +111,17 @@ function renderInitializer({
   return { ...result, onLogin, onLogout, queryClient };
 }
 
+// Renders the real useFeatureEnabled selector against whatever configStore
+// currently holds, so tests can prove the on/off UI outcome instead of just
+// asserting store state.
+function FlagProbe({ flagKey }: { flagKey: string }) {
+  const enabled = useFeatureEnabled(flagKey);
+  return <div>flag:{enabled ? "on" : "off"}</div>;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  configStore.getState().setFeatureFlags(undefined);
 });
 
 afterEach(() => {
@@ -285,5 +298,58 @@ describe("AuthInitializer recovery", () => {
     });
     expect(storage.snapshot().multica_token).toBeUndefined();
     expect(onLogout).toHaveBeenCalledOnce();
+  });
+});
+
+// Boundary matrix for featureFlagEnabled/setFeatureFlags lives in
+// packages/core/config/index.test.ts. These tests only prove the wiring:
+// a real getConfig() response reaches useFeatureEnabled in a rendered tree.
+describe("AuthInitializer feature flag hydration", () => {
+  it("resolves a published flag to true once config loads", async () => {
+    const getConfig = vi
+      .fn()
+      .mockResolvedValue({ feature_flags: { composio_mcp_apps: true } });
+    const api = makeApi({ getConfig });
+    const { queryByText } = renderInitializer({
+      api,
+      children: <FlagProbe flagKey="composio_mcp_apps" />,
+    });
+
+    await waitFor(() => {
+      expect(queryByText("flag:on")).not.toBeNull();
+    });
+  });
+
+  it("fails closed for a flag the server never published", async () => {
+    const getConfig = vi
+      .fn()
+      .mockResolvedValue({ feature_flags: { composio_mcp_apps: true } });
+    const api = makeApi({ getConfig });
+    const { queryByText } = renderInitializer({
+      api,
+      children: <FlagProbe flagKey="project_plans" />,
+    });
+
+    await waitFor(() => {
+      expect(getConfig).toHaveBeenCalled();
+    });
+    expect(queryByText("flag:off")).not.toBeNull();
+  });
+
+  it("fails closed for every flag when the config request errors", async () => {
+    const getConfig = vi
+      .fn()
+      .mockRejectedValue(new TypeError("network unavailable"));
+    const api = makeApi({ getConfig });
+    const { queryByText } = renderInitializer({
+      api,
+      children: <FlagProbe flagKey="composio_mcp_apps" />,
+    });
+
+    await waitFor(() => {
+      expect(getConfig).toHaveBeenCalled();
+    });
+    expect(queryByText("flag:off")).not.toBeNull();
+    expect(configStore.getState().featureFlags).toEqual({});
   });
 });
