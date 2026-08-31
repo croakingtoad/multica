@@ -3,19 +3,41 @@
 /**
  * Component coverage for manual plan authoring (LOCO-591).
  *
- * Three things are pinned here, in order of what would hurt most if it broke:
+ * WHAT THIS FILE COVERS — and, just as importantly, what it does not.
+ *
+ * `renderPane` replaces the API singleton with fake methods (`setApiInstance`
+ * below), so nothing here executes `ApiClient` and nothing here touches a URL
+ * or an HTTP verb. What it does prove is the layer above that: which client
+ * METHOD each affordance calls, with which arguments, in which order, and only
+ * after the right interaction. An earlier version of this header claimed the
+ * flow hit "the real client method" and exercised the URL/verb table; that was
+ * false, and QC was right to fail it.
+ *
+ * The four things pinned here:
  *
  * 1. **Flag gating.** With `project_plans` off, no authoring affordance is
- *    visible or reachable (acceptance criteria #3).
- * 2. **The create-then-populate flow.** Empty state → create plan → add phase
- *    → add part, each hitting the real client method, so the URL/verb table is
- *    exercised rather than mocked away.
- * 3. **Honest errors.** A 409 renders as a conflict, not as a generic failure,
- *    and the dialog stays open so the reader can act on it.
+ *    visible or reachable (AC 3).
+ * 2. **Argument shape.** Create sends only `{kind,title,description}` — no
+ *    field through which a manual plan could claim issue provenance (AC 5) —
+ *    and appended items carry a position derived from siblings.
+ * 3. **Request timing.** No destructive or version-rotating write leaves the
+ *    client until its confirmation is pressed (AC 2, AC 8).
+ * 4. **Honest failure.** A 409 renders as a conflict rather than a generic
+ *    error, a failed candidate query is not reported as "no matches" (AC 7),
+ *    and the dialog stays open either way.
  *
- * The ordering matrix lives in `authoring/plan-ordering.test.ts` and the error
- * classification matrix in `@multica/core/project-plan/errors.test.ts`; this
- * file covers wiring, gating, and accessibility, not those matrices again.
+ * Coverage that lives elsewhere, deliberately, so it is not re-run through a
+ * DOM mount:
+ *
+ * - `@multica/core/project-plan/write-routes.test.ts` — the route table. That
+ *   is transcription coverage: it asserts the paths and verbs match Slice A's
+ *   reported contract literally. It does not prove `ApiClient` uses them.
+ * - `@multica/core/api/client.test.ts` — `describe("project plan writes")`
+ *   drives the real `ApiClient` against a stubbed `fetch` and is the only
+ *   place the method → URL/verb wiring is actually executed.
+ * - `authoring/plan-ordering.test.ts` — the position/permutation matrix.
+ * - `@multica/core/project-plan/errors.test.ts` — the error classification
+ *   matrix.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +48,7 @@ import { setApiInstance } from "@multica/core/api";
 import { ApiError, type ApiClient } from "@multica/core/api/client";
 import { configStore } from "@multica/core/config";
 import { PROJECT_PLANS_FLAG } from "@multica/core/feature-flags";
-import type { ProjectPlanOverview } from "@multica/core/types";
+import type { Issue, ProjectPlanOverview } from "@multica/core/types";
 import { NavigationProvider, type NavigationAdapter } from "../../../navigation";
 import { renderWithI18n } from "../../../test/i18n";
 import { PlanModePane } from "./plan-mode-pane";
@@ -89,6 +111,19 @@ function makeOverview(overrides: Partial<ProjectPlanOverview> = {}): ProjectPlan
     ],
     dependencies: [],
     uncovered_parts: [],
+    ...overrides,
+  };
+}
+
+/** One linkable issue in the plan's project, typed rather than cast. */
+function makeIssue(overrides: Partial<Issue> = {}): Issue {
+  return {
+    id: "issue-9", workspace_id: "ws-1", number: 9, identifier: "LOCO-9",
+    title: "Recovered issue", description: null, status: "todo", status_category: "todo",
+    priority: "none", assignee_type: null, assignee_id: null,
+    creator_type: "member", creator_id: "member-1", parent_issue_id: null,
+    project_id: "project-1", position: 0, stage: null, start_date: null, due_date: null,
+    metadata: {}, properties: {}, created_at: "", updated_at: "",
     ...overrides,
   };
 }
@@ -264,6 +299,181 @@ describe("destructive actions are confirmed", () => {
     await user.click(await screen.findByTestId("plan-authoring-plan-menu"));
     await user.click(await screen.findByRole("menuitem", { name: "Delete plan" }));
     expect(await screen.findByText(/The issues themselves are not deleted/)).toBeTruthy();
+  });
+
+  it("does not delete a phase until the confirmation is accepted", async () => {
+    const user = userEvent.setup();
+    const deleteProjectPlanPhase = vi.fn().mockResolvedValue(undefined);
+    renderPane({ getActiveProjectPlan: async () => makeOverview(), deleteProjectPlanPhase });
+
+    await user.click(await screen.findByRole("button", { name: /Actions for phase/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete phase" }));
+
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(deleteProjectPlanPhase).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Delete phase" }));
+    await waitFor(() =>
+      expect(deleteProjectPlanPhase).toHaveBeenCalledWith("project-1", "plan-1", "phase-1"),
+    );
+  });
+
+  it("does not delete the plan until the confirmation is accepted", async () => {
+    const user = userEvent.setup();
+    const deleteProjectPlan = vi.fn().mockResolvedValue(undefined);
+    renderPane({ getActiveProjectPlan: async () => makeOverview(), deleteProjectPlan });
+
+    await user.click(await screen.findByTestId("plan-authoring-plan-menu"));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete plan" }));
+
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(deleteProjectPlan).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Delete plan" }));
+    await waitFor(() => expect(deleteProjectPlan).toHaveBeenCalledWith("project-1", "plan-1"));
+  });
+
+  it("cancelling a confirmation sends nothing at all", async () => {
+    const user = userEvent.setup();
+    const deleteProjectPlan = vi.fn().mockResolvedValue(undefined);
+    renderPane({ getActiveProjectPlan: async () => makeOverview(), deleteProjectPlan });
+
+    await user.click(await screen.findByTestId("plan-authoring-plan-menu"));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete plan" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(deleteProjectPlan).not.toHaveBeenCalled();
+  });
+});
+
+describe("supersede goes through its own confirmation (AC 8)", () => {
+  /**
+   * Supersede both collects input and rotates which version is active, so it
+   * is a two-stage flow: a form that sends nothing, then a confirmation that
+   * does. The bug this replaces fired the request straight off the form's
+   * submit button.
+   */
+  async function openSupersedeForm(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByTestId("plan-authoring-plan-menu"));
+    await user.click(await screen.findByRole("menuitem", { name: "Supersede plan" }));
+  }
+
+  it("sends nothing when the form stage is submitted", async () => {
+    const user = userEvent.setup();
+    const supersedeProjectPlan = vi.fn().mockResolvedValue(undefined);
+    renderPane({ getActiveProjectPlan: async () => makeOverview(), supersedeProjectPlan });
+
+    await openSupersedeForm(user);
+    await user.clear(screen.getByLabelText("Plan title"));
+    await user.type(screen.getByLabelText("Plan title"), "Rewritten plan");
+    // The form stage advances rather than saving, so its button says Continue.
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    // Stage 2 is on screen and still nothing has left the client.
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(supersedeProjectPlan).not.toHaveBeenCalled();
+  });
+
+  it("sends only after the confirmation is accepted, carrying the edited fields", async () => {
+    const user = userEvent.setup();
+    const supersedeProjectPlan = vi.fn().mockResolvedValue(undefined);
+    renderPane({ getActiveProjectPlan: async () => makeOverview(), supersedeProjectPlan });
+
+    await openSupersedeForm(user);
+    await user.clear(screen.getByLabelText("Plan title"));
+    await user.type(screen.getByLabelText("Plan title"), "Rewritten plan");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Supersede" }));
+
+    await waitFor(() =>
+      expect(supersedeProjectPlan).toHaveBeenCalledWith("project-1", "plan-1", {
+        title: "Rewritten plan",
+        description: "",
+      }),
+    );
+  });
+
+  it("sends nothing when the confirmation is cancelled", async () => {
+    const user = userEvent.setup();
+    const supersedeProjectPlan = vi.fn().mockResolvedValue(undefined);
+    renderPane({ getActiveProjectPlan: async () => makeOverview(), supersedeProjectPlan });
+
+    await openSupersedeForm(user);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(supersedeProjectPlan).not.toHaveBeenCalled();
+  });
+
+  it("names the version being archived and the one replacing it", async () => {
+    const user = userEvent.setup();
+    renderPane({ getActiveProjectPlan: async () => makeOverview() });
+    await openSupersedeForm(user);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    // makeOverview() is version 2. Nothing here is interpolation-leaked.
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toContain("Archives version 2");
+    expect(confirm.textContent).toContain("version 3");
+    expect(confirm.textContent).not.toContain("{{");
+  });
+});
+
+describe("a failed candidate query is not reported as an empty one (AC 7)", () => {
+  function overviewWithLinkablePart() {
+    return makeOverview();
+  }
+
+  it("shows honest failure copy and a retry, not \"no issues match\"", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      getActiveProjectPlan: async () => overviewWithLinkablePart(),
+      listIssues: async () => {
+        throw new ApiError("API error: 500", 500, "Internal Server Error", {});
+      },
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Link issues" }));
+
+    const failure = await screen.findByTestId("plan-link-candidates-error");
+    expect(failure.textContent).toContain("Couldn't search this project's issues");
+    // The empty-result message must NOT be what the reader sees.
+    expect(screen.queryByTestId("plan-link-candidates-empty")).toBeNull();
+    expect(screen.queryByText(/No issues in this project match/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  it("retry re-runs the query and recovers once it succeeds", async () => {
+    const user = userEvent.setup();
+    let fail = true;
+    renderPane({
+      getActiveProjectPlan: async () => overviewWithLinkablePart(),
+      listIssues: async () => {
+        if (fail) throw new ApiError("API error: 500", 500, "Internal Server Error", {});
+        return { issues: [makeIssue()], total: 1 };
+      },
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Link issues" }));
+    await screen.findByTestId("plan-link-candidates-error");
+
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("Recovered issue")).toBeTruthy();
+    expect(screen.queryByTestId("plan-link-candidates-error")).toBeNull();
+  });
+
+  it("still says \"no matches\" when the query succeeds and returns nothing", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      getActiveProjectPlan: async () => overviewWithLinkablePart(),
+      listIssues: async () => ({ issues: [], total: 0 }),
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Link issues" }));
+
+    expect(await screen.findByTestId("plan-link-candidates-empty")).toBeTruthy();
+    expect(screen.queryByTestId("plan-link-candidates-error")).toBeNull();
   });
 });
 

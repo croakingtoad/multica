@@ -649,7 +649,8 @@
         "title": "新しいバージョンに更新",
         "description": "バージョン {{version}} をアーカイブし、バージョン {{next}} を有効なプランにします。",
         "consequences": "フェーズ、パート、課題のリンク、依存関係が引き継がれます。バージョン {{version}} は閲覧可能なまま、更新済みとして記録されます。",
-        "submit": "更新する"
+        "submit": "更新する",
+        "confirm_title": "このプランを更新しますか？"
       },
       "delete_plan": {
         "title": "プランを削除",
@@ -701,7 +702,10 @@
         "searching": "検索中…",
         "no_candidates": "このプロジェクトに一致する課題はありません。",
         "unlink_label": "{{identifier}} のリンクを解除",
-        "deleted_issue": "削除済み"
+        "deleted_issue": "削除済み",
+        "load_failed": "このプロジェクトの課題を検索できませんでした",
+        "load_failed_hint": "リクエストが失敗したため、この一覧は不完全です。検索結果ではありません。",
+        "retry": "再試行"
       },
       "error": {
         "conflict_title": "このプランは変更されています",
@@ -714,7 +718,8 @@
         "invalid": "プランサービスがこの内容を受け付けませんでした。",
         "disabled": "このワークスペースではプロジェクトプランが無効です。",
         "unavailable": "リクエストがプランサービスに届きませんでした。何も保存されていません。"
-      }
+      },
+      "continue_label": "次へ"
     }
   },
   "plan_empty": {

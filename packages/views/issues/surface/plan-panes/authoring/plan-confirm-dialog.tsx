@@ -13,9 +13,16 @@ import { PlanWriteNotice } from "./plan-write-notice";
 import { usePlanWriteError } from "./use-plan-write-error";
 
 /**
- * Shared confirmation for every destructive plan action — delete phase, delete
- * part, delete plan, supersede. Nothing in this slice mutates destructively
- * without going through it (LOCO-591 acceptance criteria #2).
+ * Shared confirmation stage for every plan write that a form's save button
+ * should not authorise on its own: delete phase, delete part, delete plan, and
+ * the second stage of supersede. Nothing in this slice deletes or rotates a
+ * plan version without going through it (LOCO-591 acceptance criteria #2 and
+ * #8).
+ *
+ * Supersede is the one caller that is not destructive — it retains the old
+ * version — so it passes `variant="default"`. It still needs this stage
+ * because it changes which version is active, and its first stage is a form
+ * that only collects fields.
  *
  * Failures render inline and leave the dialog open, same as the form shell: a
  * 409 on a delete means the plan moved under you, and the reader needs to see
@@ -45,14 +52,14 @@ export function PlanConfirmDialog({
   const { notice, report, clear } = usePlanWriteError();
   const [submitting, setSubmitting] = useState(false);
 
+  // `clear` is a stable useCallback from usePlanWriteError, so naming it here
+  // keeps the effect a once-per-open reset and needs no lint suppression.
   useEffect(() => {
     if (open) {
       setSubmitting(false);
       clear();
     }
-    // `clear` is stable; keying on `open` keeps this a once-per-open reset.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, clear]);
 
   const handleOpenChange = (next: boolean) => {
     if (submitting) return;

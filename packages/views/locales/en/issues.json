@@ -678,7 +678,8 @@
         "title": "Supersede plan",
         "description": "Archives version {{version}} and makes version {{next}} the active plan.",
         "consequences": "Phases, parts, issue links, and dependencies are copied forward. Version {{version}} stays readable and is marked superseded.",
-        "submit": "Supersede"
+        "submit": "Supersede",
+        "confirm_title": "Supersede this plan?"
       },
       "delete_plan": {
         "title": "Delete plan",
@@ -731,7 +732,10 @@
         "searching": "Searching…",
         "no_candidates": "No issues in this project match.",
         "unlink_label": "Unlink {{identifier}}",
-        "deleted_issue": "deleted"
+        "deleted_issue": "deleted",
+        "load_failed": "Couldn't search this project's issues",
+        "load_failed_hint": "The request failed, so this list is incomplete — it is not a result.",
+        "retry": "Try again"
       },
       "error": {
         "conflict_title": "This plan changed",
@@ -744,7 +748,8 @@
         "invalid": "The plan service rejected these values.",
         "disabled": "Project plans are turned off for this workspace.",
         "unavailable": "The request didn't reach the plan service. Nothing was saved."
-      }
+      },
+      "continue_label": "Continue"
     }
   },
   "agent_live": {

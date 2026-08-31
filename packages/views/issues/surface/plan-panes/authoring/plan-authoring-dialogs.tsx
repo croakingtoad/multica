@@ -38,7 +38,7 @@ const SUPPORTED_PLAN_KIND = "prd";
 export function PlanAuthoringDialogs() {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const { enabled, projectId, overview, dialog, close } = usePlanAuthoring();
+  const { enabled, projectId, overview, dialog, open, close } = usePlanAuthoring();
 
   const createPlan = useCreateManualProjectPlan(wsId, projectId);
   const updatePlan = useUpdateProjectPlan(wsId, projectId);
@@ -139,7 +139,7 @@ export function PlanAuthoringDialogs() {
             version: overview!.plan.version,
             next: overview!.plan.version + 1,
           })}
-          submitLabel={t(($) => $.plan.authoring.supersede.submit)}
+          submitLabel={t(($) => $.plan.authoring.continue_label)}
           fields={[
             {
               name: "title",
@@ -161,15 +161,45 @@ export function PlanAuthoringDialogs() {
               })}
             </div>
           }
+          // Advancing replaces this dialog with the confirmation; closing
+          // afterwards would wipe the stage we just opened.
+          closeOnSubmit={false}
+          // Stage 1 collects the new version's fields and sends NOTHING. The
+          // write is authorised by the confirmation below (LOCO-591 AC 8):
+          // supersede archives the current version and rotates which plan is
+          // active, which is not something a form's save button should do on
+          // its own.
           onSubmit={async (values) =>
-            supersedePlan.mutateAsync({
-              planId: planId!,
-              data: {
+            open({
+              kind: "supersede-plan-confirm",
+              patch: {
                 title: (values.title ?? "").trim(),
                 description: values.description ?? "",
               },
             })
           }
+        />
+      );
+
+    case "supersede-plan-confirm":
+      return (
+        <PlanConfirmDialog
+          open
+          onOpenChange={close}
+          heading={t(($) => $.plan.authoring.supersede.confirm_title)}
+          description={t(($) => $.plan.authoring.supersede.description, {
+            version: overview!.plan.version,
+            next: overview!.plan.version + 1,
+          })}
+          consequences={t(($) => $.plan.authoring.supersede.consequences, {
+            version: overview!.plan.version,
+          })}
+          confirmLabel={t(($) => $.plan.authoring.supersede.submit)}
+          // Not destructive: the old version is retained and stays readable.
+          variant="default"
+          onConfirm={async () => {
+            await supersedePlan.mutateAsync({ planId: planId!, data: dialog.patch });
+          }}
         />
       );
 

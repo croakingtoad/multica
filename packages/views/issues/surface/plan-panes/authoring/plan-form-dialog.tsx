@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +52,7 @@ export function PlanFormDialog({
   submitLabel,
   fields,
   extra,
+  closeOnSubmit = true,
   onSubmit,
 }: {
   open: boolean;
@@ -62,6 +63,12 @@ export function PlanFormDialog({
   fields: PlanTextFieldSpec[];
   /** Extra static content shown above the actions (e.g. what supersede will do). */
   extra?: ReactNode;
+  /**
+   * False when `onSubmit` advances to another dialog stage rather than saving —
+   * supersede's form stage does this. Closing afterwards would wipe the stage
+   * `onSubmit` just opened, which silently swallowed the confirmation step.
+   */
+  closeOnSubmit?: boolean;
   onSubmit: (values: PlanFormValues) => Promise<void>;
 }) {
   const { t } = useT("issues");
@@ -70,16 +77,20 @@ export function PlanFormDialog({
   const [values, setValues] = useState<PlanFormValues>({});
   const [submitting, setSubmitting] = useState(false);
 
+  // `fields` is rebuilt on every render by the caller, so it cannot be an
+  // effect dependency — naming it would reset the form on every keystroke.
+  // Reading it through a ref keeps the reset once-per-open and keeps the
+  // dependency array honest, with no lint suppression.
+  const fieldsRef = useRef(fields);
+  fieldsRef.current = fields;
+
   // Reset on each open so a cancelled edit never leaks into the next one.
   useEffect(() => {
     if (!open) return;
-    setValues(Object.fromEntries(fields.map((f) => [f.name, f.initial])));
+    setValues(Object.fromEntries(fieldsRef.current.map((f) => [f.name, f.initial])));
     setSubmitting(false);
     clear();
-    // `fields` is rebuilt on every render by the caller; keying the reset on
-    // `open` alone is what makes it a once-per-open effect.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, clear]);
 
   const titleField = fields.find((f) => f.name === "title");
   const titleMissing = !!titleField && !(values.title ?? "").trim();
@@ -95,7 +106,7 @@ export function PlanFormDialog({
     clear();
     try {
       await onSubmit(values);
-      onOpenChange(false);
+      if (closeOnSubmit) onOpenChange(false);
     } catch (err) {
       report(err);
     } finally {

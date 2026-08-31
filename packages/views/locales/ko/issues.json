@@ -649,7 +649,8 @@
         "title": "새 버전으로 교체",
         "description": "버전 {{version}}을 보관하고 버전 {{next}}을 활성 계획으로 만듭니다.",
         "consequences": "단계, 파트, 이슈 연결, 의존 관계가 새 버전으로 복사됩니다. 버전 {{version}}은 계속 조회할 수 있으며 교체됨으로 표시됩니다.",
-        "submit": "교체하기"
+        "submit": "교체하기",
+        "confirm_title": "이 계획을 교체할까요?"
       },
       "delete_plan": {
         "title": "계획 삭제",
@@ -701,7 +702,10 @@
         "searching": "검색 중…",
         "no_candidates": "이 프로젝트에 일치하는 이슈가 없습니다.",
         "unlink_label": "{{identifier}} 연결 해제",
-        "deleted_issue": "삭제됨"
+        "deleted_issue": "삭제됨",
+        "load_failed": "이 프로젝트의 이슈를 검색하지 못했습니다",
+        "load_failed_hint": "요청이 실패해 목록이 불완전합니다. 검색 결과가 아닙니다.",
+        "retry": "다시 시도"
       },
       "error": {
         "conflict_title": "이 계획이 변경되었습니다",
@@ -714,7 +718,8 @@
         "invalid": "계획 서비스가 이 값을 거부했습니다.",
         "disabled": "이 워크스페이스에서는 프로젝트 계획이 꺼져 있습니다.",
         "unavailable": "요청이 계획 서비스에 도달하지 않았습니다. 아무것도 저장되지 않았습니다."
-      }
+      },
+      "continue_label": "계속"
     }
   },
   "plan_empty": {

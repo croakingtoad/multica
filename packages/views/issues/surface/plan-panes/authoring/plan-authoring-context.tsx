@@ -13,6 +13,12 @@ export type PlanAuthoringDialog =
   | { kind: "create-plan" }
   | { kind: "edit-plan" }
   | { kind: "supersede-plan" }
+  // Stage 2 of supersede: the fields have been collected, nothing has been
+  // sent, and this is the confirmation that actually authorises the write.
+  // Supersede is the one authoring action that both collects input AND
+  // rotates the active plan version, so it needs a form stage and a confirm
+  // stage rather than one dialog that does both (LOCO-591 AC 8).
+  | { kind: "supersede-plan-confirm"; patch: { title: string; description: string } }
   | { kind: "delete-plan" }
   | { kind: "add-phase" }
   | { kind: "edit-phase"; phase: ProjectPlanPhase }
@@ -38,16 +44,25 @@ interface PlanAuthoringValue {
   close: () => void;
 }
 
-const noop = () => {};
+/**
+ * No default value on purpose. A no-op default let a consumer rendered outside
+ * the provider swallow every authoring action silently — the button would
+ * click and nothing would happen, with no error anywhere. `null` plus the
+ * throw in `usePlanAuthoring` turns that into a loud, named failure at the
+ * first render instead.
+ */
+const PlanAuthoringContext = createContext<PlanAuthoringValue | null>(null);
 
-const PlanAuthoringContext = createContext<PlanAuthoringValue>({
-  enabled: false,
-  projectId: "",
-  overview: null,
-  dialog: null,
-  open: noop,
-  close: noop,
-});
+/** Thrown when an authoring component is rendered outside PlanAuthoringProvider. */
+export class PlanAuthoringProviderMissingError extends Error {
+  constructor() {
+    super(
+      "Plan authoring components must render inside <PlanAuthoringProvider>. " +
+        "PlanModePane installs it; a pane rendered directly (in a test, say) has to wrap itself.",
+    );
+    this.name = "PlanAuthoringProviderMissingError";
+  }
+}
 
 export function PlanAuthoringProvider({
   enabled,
@@ -68,8 +83,11 @@ export function PlanAuthoringProvider({
       overview,
       // A disabled provider reports no open dialog and ignores `open`, so a
       // stale affordance rendered by mistake still cannot start a write.
+      // Unlike the removed context default, this no-op is deliberate and
+      // scoped: authoring is genuinely off, and silently doing nothing is the
+      // correct behaviour rather than a swallowed bug.
       dialog: enabled ? dialog : null,
-      open: enabled ? setDialog : noop,
+      open: enabled ? setDialog : () => {},
       close: () => setDialog(null),
     }),
     [enabled, projectId, overview, dialog],
@@ -78,7 +96,9 @@ export function PlanAuthoringProvider({
 }
 
 export function usePlanAuthoring(): PlanAuthoringValue {
-  return useContext(PlanAuthoringContext);
+  const value = useContext(PlanAuthoringContext);
+  if (!value) throw new PlanAuthoringProviderMissingError();
+  return value;
 }
 
 /**

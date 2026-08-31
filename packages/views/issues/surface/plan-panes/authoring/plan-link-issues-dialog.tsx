@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link2, Loader2, X } from "lucide-react";
+import { AlertTriangle, Link2, Loader2, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import { issueStatusCategory } from "@multica/core/issues";
 import type { ProjectPlanPart } from "@multica/core/types";
@@ -69,7 +69,17 @@ export function PlanLinkIssuesDialog({
     [part.issues],
   );
 
-  const { data: candidates = [], isFetching } = useQuery({
+  // `isError` is read, not defaulted away. With only `data = []` a rejected
+  // request left the list empty and the reader was told "no issues match" when
+  // the truth was that the search never ran — the silent fallback AC 7
+  // forbids. The empty message below is now reserved for a query that
+  // succeeded and genuinely returned nothing.
+  const {
+    data: candidates,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ["project-plan-link-candidates", projectId, query.trim()],
     queryFn: () =>
       api
@@ -77,9 +87,10 @@ export function PlanLinkIssuesDialog({
         .then((res) => res.issues),
     enabled: open,
     staleTime: 10_000,
+    retry: false,
   });
 
-  const selectable = candidates.filter(
+  const selectable = (candidates ?? []).filter(
     (issue) => !linkedIds.has(issue.id) && !linkedElsewhere.has(issue.id),
   );
 
@@ -176,12 +187,42 @@ export function PlanLinkIssuesDialog({
               onChange={(e) => setQuery(e.target.value)}
             />
             <div className="max-h-[220px] overflow-y-auto rounded-md border border-surface-border">
-              {isFetching && selectable.length === 0 ? (
+              {isError ? (
+                // Ordered before every other branch: a failed search is not an
+                // empty search, and must never be reported as one.
+                <div
+                  role="alert"
+                  data-testid="plan-link-candidates-error"
+                  className="flex flex-col items-center gap-2 px-3 py-4 text-center"
+                >
+                  <AlertTriangle aria-hidden="true" className="size-4 text-destructive" />
+                  <p className="text-caption text-foreground">
+                    {t(($) => $.plan.authoring.link_issues.load_failed)}
+                  </p>
+                  <p className="text-micro text-muted-foreground">
+                    {t(($) => $.plan.authoring.link_issues.load_failed_hint)}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => void refetch()}
+                    disabled={isFetching}
+                  >
+                    {isFetching
+                      ? t(($) => $.plan.authoring.link_issues.searching)
+                      : t(($) => $.plan.authoring.link_issues.retry)}
+                  </Button>
+                </div>
+              ) : isFetching && selectable.length === 0 ? (
                 <p className="px-3 py-4 text-center text-caption text-muted-foreground">
                   {t(($) => $.plan.authoring.link_issues.searching)}
                 </p>
               ) : selectable.length === 0 ? (
-                <p className="px-3 py-4 text-center text-caption text-muted-foreground">
+                <p
+                  data-testid="plan-link-candidates-empty"
+                  className="px-3 py-4 text-center text-caption text-muted-foreground"
+                >
                   {t(($) => $.plan.authoring.link_issues.no_candidates)}
                 </p>
               ) : (

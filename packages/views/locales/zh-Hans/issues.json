@@ -653,7 +653,8 @@
         "title": "创建新版本",
         "description": "归档版本 {{version}}，并将版本 {{next}} 设为当前计划。",
         "consequences": "阶段、部分、任务关联和依赖关系都会复制到新版本。版本 {{version}} 仍可查看，并标记为已归档。",
-        "submit": "创建新版本"
+        "submit": "创建新版本",
+        "confirm_title": "确认创建新版本？"
       },
       "delete_plan": {
         "title": "删除计划",
@@ -705,7 +706,10 @@
         "searching": "搜索中…",
         "no_candidates": "本项目中没有匹配的任务。",
         "unlink_label": "解除关联 {{identifier}}",
-        "deleted_issue": "已删除"
+        "deleted_issue": "已删除",
+        "load_failed": "无法搜索本项目的任务",
+        "load_failed_hint": "请求失败，因此该列表并不完整，不代表没有结果。",
+        "retry": "重试"
       },
       "error": {
         "conflict_title": "该计划已被改动",
@@ -718,7 +722,8 @@
         "invalid": "计划服务拒绝了这些内容。",
         "disabled": "该工作区已关闭项目计划功能。",
         "unavailable": "请求未送达计划服务，未保存任何内容。"
-      }
+      },
+      "continue_label": "继续"
     }
   },
   "agent_live": {
