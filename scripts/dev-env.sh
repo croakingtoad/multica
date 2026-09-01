@@ -482,16 +482,17 @@ run_postgres_probe() {
 
 release_compose_project() {
   local expected_project compose_status
+  if [ "$OWNER" = human ]; then
+    info "$NAME is human-owned; skipped shared Compose teardown."
+    return 0
+  fi
+
   if [ -z "$COMPOSE_PROJECT_NAME" ]; then
     info "$NAME has no Compose project recorded; skipped isolated PostgreSQL teardown."
     return 0
   fi
 
-  if [ "$OWNER" = human ]; then
-    expected_project="$(compose_project_for_dir "$DIR")"
-  else
-    expected_project="$(compose_project_for_name "$NAME")"
-  fi
+  expected_project="$(compose_project_for_name "$NAME")"
   if [ "$COMPOSE_PROJECT_NAME" != "$expected_project" ]; then
     warn "refusing to release unexpected Compose project $COMPOSE_PROJECT_NAME (expected $expected_project)"
     return 1

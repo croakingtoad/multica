@@ -588,6 +588,50 @@ dev_env gc --auto > "$out" 2>&1 \
   || fail "automatic gc destroyed a human-owned environment"
 require_contains "$out" "automatic cleanup skipped human-owned environment gc-human-907"
 
+# A human-owned environment records the shared Compose identity so its database
+# target can be verified, but it never owns that project's containers, network,
+# or volumes. Exercise the standing-halt project-name shapes through destroy and
+# assert against the Docker shim's recorded teardown invocations.
+protected_human_projects=(multica parlour-dev footplate-prod-db blend-studio-db)
+unsafe_human_releases=()
+protected_offset=915
+for protected_project in "${protected_human_projects[@]}"; do
+  protected_checkout="$tmp_dir/protected-checkouts/$protected_project"
+  protected_name="human-destroy-$protected_offset"
+  mkdir -p "$protected_checkout"
+  write_manifest \
+    "$protected_name" "$protected_checkout" "$protected_offset" human "$protected_project"
+  : > "$compose_down_marker"
+  PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+    POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+    dev_env destroy "$protected_name" --yes > "$out" 2>&1 \
+    || fail "human-owned destroy failed while skipping shared project $protected_project"
+  if [ -s "$compose_down_marker" ]; then
+    unsafe_human_releases+=("$protected_project")
+  fi
+  protected_offset=$((protected_offset + 1))
+done
+if [ "${#unsafe_human_releases[@]}" -ne 0 ]; then
+  fail "human-owned destroy invoked Compose teardown for: ${unsafe_human_releases[*]}"
+fi
+
+# The ownership gate must not turn allocator-owned teardown into a no-op. An
+# isolated environment still releases only the exact project derived from its
+# allocated environment name.
+isolated_owner_name="owner-gate-919"
+isolated_owner_project="multica_$isolated_owner_name"
+write_manifest \
+  "$isolated_owner_name" "$root_dir" 919 agent "$isolated_owner_project"
+: > "$compose_down_marker"
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  dev_env destroy "$isolated_owner_name" --yes > "$out" 2>&1 \
+  || fail "allocator-owned destroy did not release its isolated Compose project"
+require_contains "$compose_down_marker" \
+  "compose -p $isolated_owner_project down --volumes"
+[ "$(wc -l < "$compose_down_marker")" -eq 1 ] \
+  || fail "allocator-owned destroy invoked Docker more than once"
+
 # A positively matched target still drops and releases the manifest without
 # psql or pg_isready; the pgx probe owns the guarded DROP operation itself.
 write_manifest "destroy-ready-908" "$root_dir" 908 agent multica_destroy-ready-908
