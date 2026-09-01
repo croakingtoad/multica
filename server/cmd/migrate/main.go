@@ -274,6 +274,8 @@ var concurrentIndexCleanups = map[string]string{
 	"438_agent_runtime_online_last_seen_index":                  "idx_agent_runtime_online_last_seen",
 	"439_agent_runtime_offline_last_seen_index":                 "idx_agent_runtime_offline_last_seen",
 	"440_github_pr_head_sha_index":                              "idx_github_pull_request_head_sha",
+	"443_issue_project_status_index":                            "idx_issue_project_status",
+	"445_comment_delegated_failure_unsettled_index":             "idx_comment_delegated_failure_unsettled",
 	"447_project_plan_project_version_key":                      "project_plan_project_version_key",
 	"448_project_plan_project_id_active_idx":                    "project_plan_project_id_active_idx",
 	"449_project_plan_workspace_id_idx":                         "project_plan_workspace_id_idx",
