@@ -20,5 +20,11 @@ describe("build channel runtime helpers", () => {
     expect(packagedUserDataPath("/config", "Multica Dev")).toBe(
       "/config/Multica Dev",
     );
+    expect(
+      packagedUserDataPath(
+        "C:\\Users\\Marty\\AppData\\Roaming",
+        "Multica Dev",
+      ),
+    ).toBe("C:\\Users\\Marty\\AppData\\Roaming\\Multica Dev");
   });
 });

@@ -94,6 +94,18 @@ export function builderConfigForChannel(channel, sharedStateCompat) {
       name: channel.protocolName,
       schemes: [channel.protocolScheme],
     },
+    // Keep Windows installer identity explicit. electron-builder currently
+    // derives these values from productName, but pinning them here makes a
+    // future default change fail the channel contract instead of silently
+    // replacing stable's shortcuts or Add/Remove Programs entry.
+    nsis: {
+      oneClick: true,
+      perMachine: false,
+      createDesktopShortcut: true,
+      createStartMenuShortcut: true,
+      shortcutName: channel.productName,
+      uninstallDisplayName: `${channel.productName} \${version}`,
+    },
     mac: {
       icon: channel.macIcon,
       artifactName: platformArtifactNames[channel.name].mac,

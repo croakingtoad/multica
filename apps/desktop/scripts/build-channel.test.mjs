@@ -106,6 +106,14 @@ describe("builderConfigForChannel", () => {
         multicaSharedStateCompat: "stable",
       },
       protocols: { name: "Multica", schemes: ["multica"] },
+      nsis: {
+        oneClick: true,
+        perMachine: false,
+        createDesktopShortcut: true,
+        createStartMenuShortcut: true,
+        shortcutName: "Multica",
+        uninstallDisplayName: "Multica ${version}",
+      },
       linux: {
         executableName: "multica-desktop",
         icon: "build/icons",
@@ -126,6 +134,14 @@ describe("builderConfigForChannel", () => {
         multicaSharedStateCompat: "breaking",
       },
       protocols: { name: "Multica Dev", schemes: ["multica-dev"] },
+      nsis: {
+        oneClick: true,
+        perMachine: false,
+        createDesktopShortcut: true,
+        createStartMenuShortcut: true,
+        shortcutName: "Multica Dev",
+        uninstallDisplayName: "Multica Dev ${version}",
+      },
       mac: {
         icon: "build/dev/icon.icns",
         artifactName: "multica-desktop-dev-${version}-mac-${arch}.${ext}",
