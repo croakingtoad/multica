@@ -152,11 +152,18 @@ load_manifest() {
   [ -f "$file" ] || return 1
   POSTGRES_PORT=""
   COMPOSE_PROJECT_NAME=""
+  MANIFEST_COMPOSE_PROJECT_WAS_EMPTY=0
   # shellcheck disable=SC1090
   . "$file"
   POSTGRES_PORT="${POSTGRES_PORT:-$inherited_postgres_port}"
   COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
   [ "$NAME" = "$1" ] || die "Manifest $file declares NAME=$NAME; expected $1."
+  if [ -z "$COMPOSE_PROJECT_NAME" ]; then
+    MANIFEST_COMPOSE_PROJECT_WAS_EMPTY=1
+    if [ "${OWNER:-}" = human ]; then
+      COMPOSE_PROJECT_NAME="$(compose_project_for_dir "$DIR")"
+    fi
+  fi
 }
 
 # Prints nothing (and succeeds) for a missing manifest or key: callers compare
@@ -224,6 +231,17 @@ port_free() { [ -z "$(port_listener_pid "$1")" ]; }
 postgres_port_for_offset() { printf '%s' $((25432 + $1)); }
 
 compose_project_for_name() { printf 'multica_%s' "$1"; }
+
+# Compose normalizes its implicit directory-derived project name by lowercasing,
+# discarding unsupported characters, and trimming leading dashes/underscores.
+compose_project_for_dir() {
+  local project
+  project="$(basename "$1" | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9_-]//g; s/^[-_]*//')"
+  [ -n "$project" ] \
+    || die "Cannot derive a valid Compose project name from checkout directory $1."
+  printf '%s' "$project"
+}
 
 port_bindable() {
   node -e '
@@ -469,7 +487,11 @@ release_compose_project() {
     return 0
   fi
 
-  expected_project="$(compose_project_for_name "$NAME")"
+  if [ "$OWNER" = human ]; then
+    expected_project="$(compose_project_for_dir "$DIR")"
+  else
+    expected_project="$(compose_project_for_name "$NAME")"
+  fi
   if [ "$COMPOSE_PROJECT_NAME" != "$expected_project" ]; then
     warn "refusing to release unexpected Compose project $COMPOSE_PROJECT_NAME (expected $expected_project)"
     return 1
@@ -523,6 +545,8 @@ ensure_database() {
   local admin_url compose_system_id expected_endpoint probe_endpoint probe_endpoint_bytes probe_endpoint_value
   local probe_error probe_output probe_output_bytes probe_result probe_stdout
   [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is required to verify PostgreSQL."
+  [ -n "${COMPOSE_PROJECT_NAME:-}" ] \
+    || die "No Compose project recorded; refusing to probe or reuse PostgreSQL."
   admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
   [ -n "$admin_url" ] || die "The configured DATABASE_URL is not a valid URL."
 
@@ -1332,6 +1356,9 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
       rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
       DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
       save_manifest
+    elif [ "$OWNER" = human ] && [ "$MANIFEST_COMPOSE_PROJECT_WAS_EMPTY" = 1 ]; then
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
+      save_manifest
     elif [ "$lifecycle_requested" = 1 ]; then
       save_manifest
     fi
@@ -1390,6 +1417,9 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
       COMPOSE_PROJECT_NAME="$(compose_project_for_name "$NAME")"
       rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
       DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
+    else
+      COMPOSE_PROJECT_NAME="$(compose_project_for_dir "$REPO_ROOT")"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
     fi
     save_manifest
     load_manifest "$NAME"
@@ -1471,6 +1501,9 @@ cmd_destroy() {
   for comp in $ALL_COMPONENTS; do
     if ! stop_component "$comp"; then failures=$((failures + 1)); fi
   done
+
+  [ -n "$COMPOSE_PROJECT_NAME" ] \
+    || die "$NAME has no Compose project recorded; refusing to probe or drop $DB_NAME. Its manifest and other resources were kept."
 
   admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
   [ -n "$admin_url" ] || die "The manifest's DATABASE_URL is invalid; refusing to drop $DB_NAME. Its manifest was kept."

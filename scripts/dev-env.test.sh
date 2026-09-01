@@ -14,6 +14,7 @@ export MULTICA_DEV_HOME="$tmp_dir/dev"
 export MULTICA_DEV_WORKSPACES_PARENT="$tmp_dir/workspaces-parent"
 export MULTICA_DEV_DESKTOP_APP_DATA="$tmp_dir/app-data"
 export MULTICA_DEV_PROFILES_HOME="$tmp_dir/profiles"
+export MULTICA_DEV_TMPDIR="$tmp_dir/dev-tmp"
 
 fake_bin="$tmp_dir/bin"
 mkdir -p "$fake_bin"
@@ -180,9 +181,20 @@ write_probe_endpoint() {
   [ -z "${POSTGRES_PROBE_ENDPOINT_FILE:-}" ] \
     || printf '127.0.0.1:%s' "$POSTGRES_PORT" > "$POSTGRES_PROBE_ENDPOINT_FILE"
 }
+case "${EXPECTED_SYSTEM_ID:-}" in
+  *[![:space:]]*) ;;
+  *)
+    echo "DATABASE_URL reached PostgreSQL, but this Compose project's identity could not be read" >&2
+    exit 1
+    ;;
+esac
 case "${POSTGRES_PROBE_RESULT:-failure}" in
   refused) write_probe_endpoint; printf %s "nothing-listening" ;;
   token-extra) write_probe_endpoint; printf 'nothing-listening\nunexpected-output' ;;
+  ready)
+    write_probe_endpoint
+    printf 'ready\nPostgreSQL identity verified through DATABASE_URL.\n'
+    ;;
   destroy-ready)
     write_probe_endpoint
     [ "${POSTGRES_PROBE_MODE:-ensure}" != destroy ] \
@@ -232,7 +244,7 @@ chmod +x "$probe_bin/go" "$probe_bin/docker" "$probe_root/scripts/ensure-postgre
 
 # Give the fixture every utility exercised by the registry paths while keeping
 # host PostgreSQL clients out of PATH so the pgx-only contract is non-vacuous.
-for probe_tool in awk basename bash cat chmod date dirname env grep head kill lsof \
+for probe_tool in awk basename bash cat chmod curl date dirname env grep head kill lsof \
   mkdir mktemp mv node nohup ps rm sed seq sleep tr uname wc; do
   probe_tool_path="$(command -v "$probe_tool" || true)"
   [ -z "$probe_tool_path" ] || ln -s "$probe_tool_path" "$probe_bin/$probe_tool"
@@ -252,6 +264,67 @@ empty_identity="$(PATH="$probe_path" COMPOSE_IDENTITY_MARKER="$empty_identity_ma
   "$root_dir/scripts/dev-env.sh")"
 [ -z "$empty_identity" ] || fail "an empty Compose project produced a system identifier"
 [ ! -e "$empty_identity_marker" ] || fail "an empty Compose project invoked Docker"
+
+# The shared human path must pin Compose's normalized checkout-directory name
+# in both the registry and checkout env. The first cycle may start PostgreSQL
+# after a refused connection; the second must verify that same running stack.
+human_root="$tmp_dir/Human.Checkout"
+human_env="$human_root/.env"
+human_identity_marker="$tmp_dir/human-compose-identity-marker"
+mkdir -p "$human_root/scripts" "$human_root/server"
+cp "$root_dir/scripts/local-env.sh" "$human_root/scripts/local-env.sh"
+cp "$probe_root/scripts/ensure-postgres.sh" "$human_root/scripts/ensure-postgres.sh"
+cat > "$human_env" <<'EOF'
+POSTGRES_DB=multica_human
+POSTGRES_USER=multica
+POSTGRES_PASSWORD=multica
+POSTGRES_PORT=5432
+COMPOSE_PROJECT_NAME=ambient-wrong
+DATABASE_URL=postgres://multica:multica@localhost:5432/multica_human?sslmode=disable
+PORT=18920
+FRONTEND_PORT=13840
+EOF
+rm -f "$fallback_marker"
+PATH="$probe_path" COMPOSE_IDENTITY_MARKER="$human_identity_marker" \
+  ROOT_SCRIPT="$root_dir/scripts/dev-env.sh" HUMAN_ROOT="$human_root" \
+  bash -c '
+    source "$ROOT_SCRIPT"
+    REPO_ROOT="$HUMAN_ROOT"
+    cmd_gc() { :; }
+    migrate_database() { :; }
+    start_api() { :; }
+    print_handoff() { :; }
+    port_free() { return 0; }
+    export POSTGRES_PROBE_RESULT=refused
+    cmd_up --name human-shared --components api
+    export POSTGRES_PROBE_RESULT=ready
+    cmd_up --name human-shared --components api
+  ' > "$out" 2>&1 || {
+    sed 's/^/  /' "$out" >&2
+    fail "two consecutive human-owned up cycles did not succeed"
+  }
+human_manifest="$MULTICA_DEV_HOME/envs/human-shared/manifest.env"
+grep -Fxq 'COMPOSE_PROJECT_NAME=humancheckout' "$human_manifest" \
+  || fail "human manifest did not pin Compose's normalized checkout identity"
+grep -Fxq 'COMPOSE_PROJECT_NAME=humancheckout' "$human_env" \
+  || fail "human env file did not carry the pinned Compose identity"
+[ "$(wc -l < "$fallback_marker")" -eq 1 ] \
+  || fail "the second human up cycle started Compose instead of verifying it"
+[ "$(grep -Fc 'compose -p humancheckout exec -T postgres psql' "$human_identity_marker")" -eq 2 ] \
+  || fail "human up cycles did not read the same explicit Compose identity"
+
+# Human manifests written before the identity field was pinned derive the same
+# project from their recorded checkout path instead of forwarding an empty ID.
+write_manifest "legacy-human-914" "$human_root" 914 human
+legacy_human_project="$(bash -c '
+  source "$1"
+  load_manifest legacy-human-914
+  printf %s "$COMPOSE_PROJECT_NAME"
+' _ "$root_dir/scripts/dev-env.sh")"
+[ "$legacy_human_project" = humancheckout ] \
+  || fail "legacy human manifest did not derive its Compose identity"
+rm -rf "$MULTICA_DEV_HOME/envs/legacy-human-914"
+rm -f "$fallback_marker"
 status=0
 PATH="$probe_path" POSTGRES_PROBE_RESULT=failure REPO_ROOT="$probe_root" \
   DATABASE_URL='postgres://multica:wrong@127.0.0.1:25432/multica?sslmode=disable' \
@@ -475,7 +548,9 @@ fi
 # host PostgreSQL clients are installed. A mismatch must name the reached and
 # expected endpoints, retain every cleanup recipe, and keep DROP unreachable.
 destroy_drop_marker="$tmp_dir/destroy-drop-marker"
-write_manifest "destroy-mismatch-905" "$root_dir" 905
+compose_down_marker="$tmp_dir/compose-down-marker"
+compose_identity_marker="$tmp_dir/compose-identity-marker"
+write_manifest "destroy-mismatch-905" "$root_dir" 905 agent multica_destroy-mismatch-905
 mkdir -p "$MULTICA_DEV_PROFILES_HOME/dev-dev-env-test-905"
 mkdir -p "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces_dev-dev-env-test-905"
 mkdir -p "$MULTICA_DEV_DESKTOP_APP_DATA/Multica Canary destroy-mismatch-905"
@@ -497,7 +572,7 @@ require_contains "$out" "reached 127.0.0.1:5432"
 require_contains "$out" "expected this environment's Compose PostgreSQL at 127.0.0.1:5432"
 
 # Automatic GC inherits the refusal and does not continue into broader cleanup.
-write_manifest "gc-mismatch-906" "$tmp_dir/deleted-gc-checkout" 906
+write_manifest "gc-mismatch-906" "$tmp_dir/deleted-gc-checkout" 906 agent multica_gc-mismatch-906
 PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-mismatch \
   POSTGRES_DROP_MARKER="$destroy_drop_marker" \
   dev_env gc --auto > "$out" 2>&1 || fail "automatic gc did not handle a refused destroy"
@@ -507,18 +582,17 @@ require_contains "$out" "automatic cleanup of gc-mismatch-906 failed; its manife
 
 # Defense in depth: unattended GC only reports human-owned collectibles.
 write_manifest "gc-human-907" "$tmp_dir/deleted-human-checkout" 907 human
-PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
-  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
-  dev_env gc --auto > "$out" 2>&1 || fail "automatic gc failed while reporting a human-owned environment"
+dev_env gc --auto > "$out" 2>&1 \
+  || fail "automatic gc failed while reporting a human-owned environment"
 [ -f "$MULTICA_DEV_HOME/envs/gc-human-907/manifest.env" ] \
   || fail "automatic gc destroyed a human-owned environment"
 require_contains "$out" "automatic cleanup skipped human-owned environment gc-human-907"
 
 # A positively matched target still drops and releases the manifest without
 # psql or pg_isready; the pgx probe owns the guarded DROP operation itself.
-write_manifest "destroy-ready-908" "$root_dir" 908
+write_manifest "destroy-ready-908" "$root_dir" 908 agent multica_destroy-ready-908
 PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
-  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
   dev_env destroy destroy-ready-908 --yes > "$out" 2>&1 \
   || fail "destroy rejected a positively matched PostgreSQL target"
 [ "$(cat "$destroy_drop_marker")" = multica_dev_env_test_908 ] \
@@ -530,8 +604,6 @@ require_contains "$out" "Dropped database multica_dev_env_test_908 through verif
 # An isolated environment owns its explicitly recorded Compose project. A
 # successful destroy must release that project's container, network and named
 # volumes before discarding the only manifest that names the target.
-compose_down_marker="$tmp_dir/compose-down-marker"
-compose_identity_marker="$tmp_dir/compose-identity-marker"
 write_manifest "destroy-compose-909" "$root_dir" 909 agent multica_destroy-compose-909
 PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
   POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
@@ -573,7 +645,7 @@ require_contains "$compose_down_marker" "compose -p multica_gc-compose-911 down 
 
 # A failed database drop keeps the manifest and slot so cleanup can be retried;
 # destroy must never print success and forget the only deletion recipe.
-write_manifest "drop-fails-904" "$root_dir" 904
+write_manifest "drop-fails-904" "$root_dir" 904 agent multica_drop-fails-904
 status=0
 PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-failure \
   POSTGRES_DROP_MARKER="$destroy_drop_marker" \
@@ -583,7 +655,7 @@ PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-failure \
   || fail "destroy discarded the manifest after DROP DATABASE failed"
 require_contains "$out" "manifest and other resources were kept"
 PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
-  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
   dev_env destroy drop-fails-904 --yes > "$out" 2>&1 \
   || fail "retrying destroy after database recovery failed"
 
@@ -627,19 +699,23 @@ PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
   || fail "retrying destroy after Compose recovery failed"
 
 # ---------------------------------------------------------------------------
-# destroy consumes the manifest: the slot is free afterwards, which is what
-# makes the registry an allocator rather than a second place to leak.
+# A legacy manifest without a recorded Compose project cannot supply the
+# production probe's mandatory identity. Refuse before running the probe or
+# dropping anything, and retain the manifest as the only cleanup recipe.
 # ---------------------------------------------------------------------------
+no_project_drop_marker="$tmp_dir/no-project-drop-marker"
+status=0
 PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
-  POSTGRES_DROP_MARKER="$destroy_drop_marker" \
-  dev_env destroy probe-901 --yes > "$out" 2>&1 || fail "destroy must succeed"
-[ ! -d "$MULTICA_DEV_HOME/envs/probe-901" ] || fail "destroy left the environment directory behind"
-require_contains "$out" "no Compose project recorded; skipped isolated PostgreSQL teardown"
+  POSTGRES_DROP_MARKER="$no_project_drop_marker" \
+  dev_env destroy probe-901 --yes > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "destroy accepted a manifest with no Compose identity"
+[ ! -e "$no_project_drop_marker" ] || fail "destroy probed or dropped with no Compose identity"
+[ -f "$MULTICA_DEV_HOME/envs/probe-901/manifest.env" ] \
+  || fail "destroy discarded the no-project manifest"
+require_contains "$out" "no Compose project recorded; refusing to probe or drop"
 
-dev_env list > "$out" 2>&1 || fail "list must succeed after destroy"
-if grep -Fq "probe-901" "$out"; then
-  fail "destroyed environment is still listed"
-fi
+dev_env list > "$out" 2>&1 || fail "list must succeed after refused destroy"
+require_contains "$out" "probe-901"
 
 # Declining the confirmation is a successful no-op, not a failure.
 write_manifest "orphan-902" "$tmp_dir/deleted-checkout" 902
