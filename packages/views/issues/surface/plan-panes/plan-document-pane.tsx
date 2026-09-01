@@ -7,8 +7,14 @@ import { useIssueStatuses } from "@multica/core/issue-statuses";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useT } from "../../../i18n";
 import { CoverageBadge, PlanIssueChip, PlanProgressBar, SupersededBanner } from "./plan-shared";
+import {
+  AddPhaseButton,
+  PartActions,
+  PhaseActions,
+  PlanHeaderActions,
+} from "./authoring/plan-authoring-controls";
 
-function PartBlock({ part }: { part: ProjectPlanPart }) {
+function PartBlock({ phase, part }: { phase: ProjectPlanPhase; part: ProjectPlanPart }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const catalog = useIssueStatuses(wsId);
@@ -17,7 +23,7 @@ function PartBlock({ part }: { part: ProjectPlanPart }) {
   return (
     <div
       className={cn(
-        "relative pl-4 mb-5 border-l-2",
+        "group/plan-part relative pl-4 mb-5 border-l-2",
         part.coverage_state === "no_tasks_yet" ? "border-dashed border-warning/50" : "border-border",
       )}
     >
@@ -33,6 +39,7 @@ function PartBlock({ part }: { part: ProjectPlanPart }) {
             <PlanProgressBar done={part.rollup.tasks_done} total={part.rollup.tasks_total} className="max-w-[140px]" />
           )}
           <CoverageBadge state={part.coverage_state} />
+          <PartActions phase={phase} part={part} />
         </div>
       </div>
 
@@ -68,10 +75,10 @@ function PhaseBlock({ phase }: { phase: ProjectPlanPhase }) {
     (p) => p.coverage_state === "no_tasks_yet" || p.coverage_state === "covered_no_active_tasks",
   ).length;
   return (
-    <div className="mb-7">
+    <div className="group/plan-phase mb-7">
       <div className="flex items-baseline justify-between gap-3 pb-2 mb-3.5 border-b border-border">
         <h2 className="text-title-lg font-semibold tracking-tight">{phase.title}</h2>
-        <span className="text-caption text-muted-foreground whitespace-nowrap">
+        <span className="flex items-center gap-2 text-caption text-muted-foreground whitespace-nowrap">
           {t(($) => $.plan.phase_rollup, {
             done: phase.rollup.tasks_done,
             total: phase.rollup.tasks_total,
@@ -83,10 +90,11 @@ function PhaseBlock({ phase }: { phase: ProjectPlanPhase }) {
               {t(($) => $.plan.part_gap_more, { count: gapCount })}
             </>
           )}
+          <PhaseActions phase={phase} />
         </span>
       </div>
       {phase.parts.map((part) => (
-        <PartBlock key={part.id} part={part} />
+        <PartBlock key={part.id} phase={phase} part={part} />
       ))}
     </div>
   );
@@ -107,11 +115,14 @@ export function PlanDocumentPane({ overview }: { overview: ProjectPlanOverview }
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-10 py-9 pb-24">
-        <div className="mb-5">
-          <h1 className="text-display-sm font-semibold tracking-tight">{plan.title}</h1>
-          <p className="mt-1 text-body text-muted-foreground">
-            {t(($) => $.plan.document.subtitle, { version: plan.version, phaseCount: phases.length })}
-          </p>
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-display-sm font-semibold tracking-tight">{plan.title}</h1>
+            <p className="mt-1 text-body text-muted-foreground">
+              {t(($) => $.plan.document.subtitle, { version: plan.version, phaseCount: phases.length })}
+            </p>
+          </div>
+          <PlanHeaderActions />
         </div>
 
         {plan.superseded && <SupersededBanner supersededAt={plan.superseded_at} />}
@@ -146,6 +157,8 @@ export function PlanDocumentPane({ overview }: { overview: ProjectPlanOverview }
         {phases.map((phase) => (
           <PhaseBlock key={phase.id} phase={phase} />
         ))}
+
+        <AddPhaseButton />
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { AlertTriangle, FileText } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -45,8 +46,13 @@ export function PlanErrorState({ onRetry }: { onRetry: () => void }) {
  * no active plan for this project. Deliberately the same content for
  * Document, Pipeline, and Coverage: there is exactly one real state to
  * report here, not three fabricated ones.
+ *
+ * `action` is the manual-authoring entry point (LOCO-591) — a create-a-plan
+ * button when the `project_plans` flag is on. It is a slot rather than a
+ * hardcoded button so this state stays the single honest report of "no plan"
+ * whether or not authoring is available.
  */
-export function PlanNoPlanState() {
+export function PlanNoPlanState({ action }: { action?: ReactNode }) {
   const { t } = useT("issues");
   return (
     <div
@@ -56,6 +62,7 @@ export function PlanNoPlanState() {
       <FileText className="h-10 w-10 text-faint-foreground" />
       <p className="text-body">{t(($) => $.plan_empty.title)}</p>
       <p className="text-caption">{t(($) => $.plan_empty.hint)}</p>
+      {action}
     </div>
   );
 }
