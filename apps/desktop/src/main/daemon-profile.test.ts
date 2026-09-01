@@ -33,6 +33,20 @@ describe("deriveProfileName", () => {
   it("falls back to a fixed name on an unparseable URL", () => {
     expect(deriveProfileName("not a url")).toBe("desktop");
   });
+
+  it("channel-suffixes every dev profile without changing stable names", () => {
+    for (const target of [
+      "https://api.multica.ai",
+      "http://localhost:8080",
+      "not a url",
+    ]) {
+      const stable = deriveProfileName(target, "");
+      const dev = deriveProfileName(target, "-dev");
+
+      expect(dev).toBe(`${stable}-dev`);
+      expect(healthPortForProfile(dev)).not.toBe(healthPortForProfile(stable));
+    }
+  });
 });
 
 describe("profile paths", () => {

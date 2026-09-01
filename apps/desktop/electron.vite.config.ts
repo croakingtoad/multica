@@ -2,10 +2,19 @@ import { resolve } from "path";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import {
+  buildChannelDefines,
+  resolveBuildChannel,
+} from "./scripts/build-channel.mjs";
+
+const buildChannelDefinitions = buildChannelDefines(
+  resolveBuildChannel(process.env),
+);
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    define: buildChannelDefinitions,
   },
   preload: {
     // `@electron-toolkit/preload` must be bundled INTO the preload script:
@@ -15,6 +24,7 @@ export default defineConfig({
     // every contextBridge API would vanish. electron-vite emits preload as a
     // single CJS bundle, which is exactly what the sandbox requires.
     plugins: [externalizeDepsPlugin({ exclude: ["@electron-toolkit/preload"] })],
+    define: buildChannelDefinitions,
   },
   renderer: {
     server: {
@@ -25,6 +35,7 @@ export default defineConfig({
       strictPort: true,
     },
     plugins: [react(), tailwindcss()],
+    define: buildChannelDefinitions,
     resolve: {
       alias: {
         "@": resolve("src/renderer/src"),

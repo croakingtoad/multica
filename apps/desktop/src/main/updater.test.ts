@@ -186,6 +186,24 @@ describe("setupAutoUpdater", () => {
     expect(ctx.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps updater IPC available but performs no update work when disabled", async () => {
+    setupAutoUpdater(() => null, { enabled: false });
+
+    await expect(invokeIpc("updater:get-preferences")).resolves.toEqual({
+      automaticUpdates: false,
+    });
+    await expect(invokeIpc("updater:check")).resolves.toEqual({
+      ok: false,
+      error: "Updates are disabled for the dev channel.",
+    });
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 5_000);
+
+    expect(ctx.checkForUpdates).not.toHaveBeenCalled();
+    expect(ctx.downloadUpdate).not.toHaveBeenCalled();
+    expect(ctx.quitAndInstall).not.toHaveBeenCalled();
+    expect(ctx.handlers.size).toBe(0);
+  });
+
   it("skips startup and periodic checks when automatic updates are disabled", async () => {
     writeFileSync(
       updaterPreferencesPath(ctx.userDataPath),

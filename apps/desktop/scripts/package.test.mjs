@@ -13,6 +13,7 @@ import {
   resolveBuildMatrix,
   stripLeadingSeparator,
 } from "./package.mjs";
+import { BUILD_CHANNELS } from "./build-channel.mjs";
 
 describe("normalizeGitVersion", () => {
   it("returns null for empty / nullish input", () => {
@@ -267,6 +268,47 @@ describe("resolveBuildMatrix", () => {
 });
 
 describe("builderArgsForTarget", () => {
+  it("loads the generated stable channel config", () => {
+    const args = builderArgsForTarget(
+      { platform: "linux", arch: "x64" },
+      {
+        allPlatforms: false,
+        sharedArgs: [],
+        platformTargets: { mac: [], win: [], linux: ["dir"] },
+        requestedPlatforms: ["linux"],
+        requestedArchs: ["x64"],
+      },
+      "1.2.3",
+      {
+        buildChannel: BUILD_CHANNELS.stable,
+        channelConfigPath: "/tmp/stable-channel.json",
+        hostPlatform: "linux",
+      },
+    );
+
+    expect(args.slice(0, 2)).toEqual(["--config", "/tmp/stable-channel.json"]);
+  });
+
+  it("overrides every installer identity surface for the dev channel", () => {
+    const args = builderArgsForTarget(
+      { platform: "linux", arch: "x64" },
+      {
+        allPlatforms: false,
+        sharedArgs: ["--publish", "never"],
+        platformTargets: { mac: [], win: [], linux: ["dir"] },
+        requestedPlatforms: ["linux"],
+        requestedArchs: ["x64"],
+      },
+      "1.2.3",
+      {
+        buildChannel: BUILD_CHANNELS.dev,
+        hostPlatform: "linux",
+      },
+    );
+
+    expect(args).toContain("-c.directories.output=dist/dev");
+  });
+
   it("adds scoped output directories for multi-target builds", () => {
     expect(
       builderArgsForTarget(

@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import { createMemoryRouter, Outlet, useMatches } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
+import {
+  BUILD_CHANNEL_CONFIG,
+  decorateWindowTitle,
+} from "../../shared/build-channel";
 import { IssueDetailPage } from "./pages/issue-detail-page";
 import { ProjectDetailPage } from "./pages/project-detail-page";
 import { AutopilotDetailPage } from "./pages/autopilot-detail-page";
@@ -78,7 +82,13 @@ function TitleSync() {
     ?.handle as { title?: string } | undefined;
 
   useEffect(() => {
-    if (title?.title) document.title = title.title;
+    if (title?.title) {
+      document.title = decorateWindowTitle(
+        title.title,
+        BUILD_CHANNEL_CONFIG.titlePrefix,
+        BUILD_CHANNEL_CONFIG.titleFallback,
+      );
+    }
   }, [title?.title]);
 
   return null;

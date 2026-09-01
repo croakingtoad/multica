@@ -11,12 +11,6 @@ import {
   updaterPreferencesPath,
 } from "./updater-preferences";
 
-// Silent background updates: electron-updater downloads on its own as soon
-// as `update-available` fires; we only surface UI when the package is fully
-// downloaded and ready to install on next quit.
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
-
 // Windows arm64 ships its own update metadata channel because
 // electron-builder's `latest.yml` is not arch-suffixed on Windows — both
 // arches would otherwise collide on the same file in the GitHub Release.
@@ -109,7 +103,38 @@ function checkForUpdatesOnce(): Promise<unknown> {
   return p;
 }
 
-export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): void {
+export function setupAutoUpdater(
+  getMainWindow: () => BrowserWindow | null,
+  { enabled = true }: { enabled?: boolean } = {},
+): void {
+  // Dev-channel packages have no update feed. Keep their IPC surface alive so
+  // the renderer fails closed, but never register updater events or perform
+  // network/download/install work.
+  if (!enabled) {
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+    ipcMain.handle("updater:download", async () => {
+      throw new Error("Updates are disabled for the dev channel.");
+    });
+    ipcMain.handle("updater:install", () => undefined);
+    ipcMain.handle("updater:get-preferences", async () => ({
+      automaticUpdates: false,
+    }));
+    ipcMain.handle("updater:set-automatic-updates", async () => ({
+      automaticUpdates: false,
+    }));
+    ipcMain.handle("updater:check", async (): Promise<ManualUpdateCheckResult> => ({
+      ok: false,
+      error: "Updates are disabled for the dev channel.",
+    }));
+    return;
+  }
+
+  // Stable silently downloads after `update-available`; the UI appears only
+  // once the package is ready to install on quit.
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
   const preferencesFilePath = updaterPreferencesPath(app.getPath("userData"));
   let automaticUpdatesEnabled =
     DEFAULT_UPDATER_PREFERENCES.automaticUpdates;

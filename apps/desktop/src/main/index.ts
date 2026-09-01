@@ -60,6 +60,12 @@ import {
   NotificationGate,
   parseNativeNotificationPayload,
 } from "./notification-gate";
+import {
+  BUILD_CHANNEL,
+  BUILD_CHANNEL_CONFIG,
+  decorateWindowTitle,
+  packagedUserDataPath,
+} from "../shared/build-channel";
 
 // Guards against registering the will-download handler more than once on the
 // same session. window.webContents.session is shared, and createWindow() can
@@ -92,10 +98,11 @@ function installDownloadSaveDialogHandler(window: BrowserWindow): void {
 // asar), so swap the segment — same pattern as bundledCliPath() in
 // daemon-manager.ts. In dev `__dirname` has no `app.asar`, so the replace
 // is a no-op.
-const BUNDLED_ICON_PATH = join(__dirname, "../../resources/icon.png").replace(
-  "app.asar",
-  "app.asar.unpacked",
-);
+const BUNDLED_ICON_PATH = join(
+  __dirname,
+  "../..",
+  BUILD_CHANNEL_CONFIG.runtimeIcon,
+).replace("app.asar", "app.asar.unpacked");
 
 // macOS/Linux GUI launches inherit a minimal PATH from launchd that omits
 // the user's shell config (~/.zshrc, Homebrew, nvm, ~/.local/bin, etc.).
@@ -117,7 +124,7 @@ if (process.platform !== "win32") {
   process.env.PATH = `${fallbackPaths.join(":")}:${process.env.PATH ?? ""}`;
 }
 
-const PROTOCOL = "multica";
+const PROTOCOL = BUILD_CHANNEL_CONFIG.protocolScheme;
 const devLog = is.dev ? createBestEffortDevLog() : undefined;
 
 // Where the main process parks a freeze/crash breadcrumb until the next
@@ -462,7 +469,11 @@ function createIssueWindow(context: IssueWindowContext): void {
     height: 760,
     minWidth: 720,
     minHeight: 520,
-    title: context.title,
+    title: decorateWindowTitle(
+      context.title,
+      BUILD_CHANNEL_CONFIG.titlePrefix,
+      BUILD_CHANNEL_CONFIG.titleFallback,
+    ),
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 17 },
     show: false,
@@ -561,7 +572,16 @@ if (is.dev) {
   // to "Multica", but anchoring it here makes WM_CLASS ↔ StartupWMClass
   // (declared in electron-builder.yml) survive a regression in
   // productName / the build pipeline. Must run before requestSingleInstanceLock().
-  app.setName("Multica");
+  app.setName(BUILD_CHANNEL_CONFIG.productName);
+  if (BUILD_CHANNEL === "dev") {
+    app.setPath(
+      "userData",
+      packagedUserDataPath(
+        app.getPath("appData"),
+        BUILD_CHANNEL_CONFIG.productName,
+      ),
+    );
+  }
 }
 
 // --- Protocol registration -----------------------------------------------
@@ -628,7 +648,9 @@ if (!gotTheLock) {
     });
 
     electronApp.setAppUserModelId(
-      is.dev ? "ai.multica.desktop.dev" : "ai.multica.desktop",
+      is.dev && BUILD_CHANNEL === "stable"
+        ? "ai.multica.desktop.dev"
+        : BUILD_CHANNEL_CONFIG.appId,
     );
 
     // macOS: replace the default Electron dock icon with the bundled logo
@@ -829,7 +851,9 @@ if (!gotTheLock) {
     desktopInitialized = true;
     createWindow();
 
-    setupAutoUpdater(() => mainWindow);
+    setupAutoUpdater(() => mainWindow, {
+      enabled: BUILD_CHANNEL_CONFIG.updatesEnabled,
+    });
     setupDaemonManager(() => mainWindow);
     setupLocalDirectory(() => mainWindow);
 
