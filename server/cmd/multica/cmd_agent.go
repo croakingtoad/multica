@@ -443,9 +443,14 @@ func hasDaemonTaskContextMarker() bool {
 	return daemonTaskContextMarkerPath() != ""
 }
 
-// daemonTaskContextSearchRoot is replaceable by tests so their marker lookup
+// The search root and ceiling are replaceable by tests so their marker lookup
 // cannot inherit daemon state from the process's ambient working directory.
-var daemonTaskContextSearchRoot = os.Getwd
+// Production keeps the real cwd-to-filesystem-root walk: the empty ceiling is
+// unreachable from the absolute path returned by os.Getwd.
+var (
+	daemonTaskContextSearchRoot    = os.Getwd
+	daemonTaskContextSearchCeiling = func() string { return "" }
+)
 
 // daemonTaskContextMarkerPath walks up from the current working directory and
 // returns the path of the first readable daemon-task marker whose managed_by
@@ -455,6 +460,7 @@ func daemonTaskContextMarkerPath() string {
 	if err != nil {
 		return ""
 	}
+	ceiling := daemonTaskContextSearchCeiling()
 	for {
 		markerPath := filepath.Join(dir, execenv.TaskContextMarkerRelPath)
 		// Only a marker we can read AND whose managed_by matches counts as a
@@ -475,7 +481,7 @@ func daemonTaskContextMarkerPath() string {
 		}
 
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || dir == ceiling {
 			return ""
 		}
 		dir = parent

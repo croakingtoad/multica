@@ -33,6 +33,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	daemonTaskContextSearchRoot = func() (string, error) { return markerRoot, nil }
+	daemonTaskContextSearchCeiling = func() string { return markerRoot }
 
 	code := m.Run()
 	if err := os.RemoveAll(markerRoot); err != nil {
