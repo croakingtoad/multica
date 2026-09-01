@@ -4,7 +4,7 @@
 -- referenced, scanned, or rewritten. Expected duration at production scale:
 -- <1 second excluding lock-queue time.
 --
--- Reversibility: schema-reversible by 441_project_plan.down.sql. The down
+-- Reversibility: schema-reversible by 446_project_plan.down.sql. The down
 -- migration destroys plan data, so it is data-safe only before plan writes or
 -- after an explicit export. No existing project or issue data is modified.
 
