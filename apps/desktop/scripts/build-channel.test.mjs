@@ -4,6 +4,7 @@ import {
   BUILD_CHANNELS,
   builderConfigForChannel,
   buildChannelDefines,
+  requireSharedStateCompatibility,
   resolveBuildChannel,
 } from "./build-channel.mjs";
 
@@ -58,9 +59,12 @@ describe("resolveBuildChannel", () => {
 
 describe("buildChannelDefines", () => {
   it("bakes the selected channel and metadata into literal Vite definitions", () => {
-    const definitions = buildChannelDefines(BUILD_CHANNELS.dev);
+    const definitions = buildChannelDefines(BUILD_CHANNELS.dev, "breaking");
 
     expect(JSON.parse(definitions.__MULTICA_BUILD_CHANNEL__)).toBe("dev");
+    expect(JSON.parse(definitions.__MULTICA_SHARED_STATE_COMPAT__)).toBe(
+      "breaking",
+    );
     expect(JSON.parse(definitions.__MULTICA_BUILD_CHANNEL_CONFIG__)).toEqual(
       BUILD_CHANNELS.dev,
     );
@@ -68,12 +72,39 @@ describe("buildChannelDefines", () => {
   });
 });
 
+describe("requireSharedStateCompatibility", () => {
+  it("requires an explicit stable or breaking package declaration", () => {
+    expect(() => requireSharedStateCompatibility({})).toThrow(
+      /MULTICA_SHARED_STATE_COMPAT must be "stable" or "breaking"/,
+    );
+    expect(() =>
+      requireSharedStateCompatibility({ MULTICA_SHARED_STATE_COMPAT: "safe" }),
+    ).toThrow(/MULTICA_SHARED_STATE_COMPAT must be "stable" or "breaking"/);
+    expect(
+      requireSharedStateCompatibility({
+        MULTICA_SHARED_STATE_COMPAT: "stable",
+      }),
+    ).toBe("stable");
+    expect(
+      requireSharedStateCompatibility({
+        MULTICA_SHARED_STATE_COMPAT: "breaking",
+      }),
+    ).toBe("breaking");
+  });
+});
+
 describe("builderConfigForChannel", () => {
   it("drives every stable identity surface from the canonical definition", () => {
-    expect(builderConfigForChannel(BUILD_CHANNELS.stable)).toMatchObject({
+    expect(
+      builderConfigForChannel(BUILD_CHANNELS.stable, "stable"),
+    ).toMatchObject({
       appId: "ai.multica.desktop",
       productName: "Multica",
-      extraMetadata: { productName: "Multica", multicaChannel: "stable" },
+      extraMetadata: {
+        productName: "Multica",
+        multicaChannel: "stable",
+        multicaSharedStateCompat: "stable",
+      },
       protocols: { name: "Multica", schemes: ["multica"] },
       linux: {
         executableName: "multica-desktop",
@@ -84,10 +115,16 @@ describe("builderConfigForChannel", () => {
   });
 
   it("produces a complete, separate builder identity for dev", () => {
-    expect(builderConfigForChannel(BUILD_CHANNELS.dev)).toMatchObject({
+    expect(
+      builderConfigForChannel(BUILD_CHANNELS.dev, "breaking"),
+    ).toMatchObject({
       appId: "ai.multica.desktop.dev",
       productName: "Multica Dev",
-      extraMetadata: { productName: "Multica Dev", multicaChannel: "dev" },
+      extraMetadata: {
+        productName: "Multica Dev",
+        multicaChannel: "dev",
+        multicaSharedStateCompat: "breaking",
+      },
       protocols: { name: "Multica Dev", schemes: ["multica-dev"] },
       mac: {
         icon: "build/dev/icon.icns",

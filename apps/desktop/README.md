@@ -16,8 +16,28 @@ pnpm -C apps/desktop package:dev -- --linux dir --x64 --publish never
 For a normal installer, omit `dir`; electron-builder then creates the host's
 configured installer formats. On macOS, an unsigned local build also needs
 `CSC_IDENTITY_AUTO_DISCOVERY=false`. In PowerShell, invoke `package` after
-setting `$env:MULTICA_CHANNEL = "dev"` instead of using the POSIX-only
+setting `$env:MULTICA_CHANNEL = "dev"` and
+`$env:MULTICA_SHARED_STATE_COMPAT = "stable"` instead of using the POSIX-only
 `package:dev` convenience script.
+
+Every package must declare whether its client-side writes remain compatible
+with stable:
+
+```bash
+# Ordinary dev package: shared writes are compatible
+MULTICA_CHANNEL=dev MULTICA_SHARED_STATE_COMPAT=stable node apps/desktop/scripts/package.mjs --linux dir --x64
+
+# Breaking package: read-only until a disposable target is confirmed
+MULTICA_CHANNEL=dev MULTICA_SHARED_STATE_COMPAT=breaking node apps/desktop/scripts/package.mjs --linux dir --x64
+```
+
+Packaging fails if `MULTICA_SHARED_STATE_COMPAT` is absent or has another
+value. The declaration is compiled into the app and written to builder
+metadata; it is never read from the launch environment. A breaking dev build
+allows GET and HEAD, but its central API client blocks POST, PATCH, PUT, and
+DELETE until the user confirms the named backend/workspace as sacrificial.
+This guard enforces the packager's declaration; it does not detect schema drift
+automatically.
 
 Stable keeps the existing `Multica` / `ai.multica.desktop` /
 `multica-desktop` / `multica://` identities. Dev bakes in `Multica Dev` /

@@ -1,4 +1,5 @@
 export type BuildChannelName = "stable" | "dev";
+export type SharedStateCompatibility = "stable" | "breaking";
 
 export interface BuildChannelConfig {
   readonly name: BuildChannelName;
@@ -24,9 +25,14 @@ export const BUILD_CHANNELS: Readonly<Record<BuildChannelName, BuildChannelConfi
 export function resolveBuildChannel(
   env?: Readonly<Record<string, string | undefined>>,
 ): BuildChannelConfig;
+export function requireSharedStateCompatibility(
+  env?: Readonly<Record<string, string | undefined>>,
+): SharedStateCompatibility;
 export function buildChannelDefines(
   channel: BuildChannelConfig,
+  sharedStateCompat: SharedStateCompatibility,
 ): Record<string, string>;
 export function builderConfigForChannel(
   channel: BuildChannelConfig,
+  sharedStateCompat: SharedStateCompatibility,
 ): Record<string, unknown>;

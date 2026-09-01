@@ -475,11 +475,24 @@ export interface ApiClientIdentity {
   os?: string;
 }
 
+export interface SharedStateMutationTarget {
+  backendUrl: string;
+  workspaceSlug: string | null;
+}
+
+export interface SharedStateMutationGuard {
+  confirmTarget(
+    target: SharedStateMutationTarget,
+  ): boolean | Promise<boolean>;
+}
+
 export interface ApiClientOptions {
   logger?: Logger;
   onUnauthorized?: () => void;
   /** Identifies the client to the server. Sent as X-Client-* headers. */
   identity?: ApiClientIdentity;
+  /** Installed only by a dev build declared incompatible with shared state. */
+  sharedStateMutationGuard?: SharedStateMutationGuard;
 }
 
 export interface ClientRuntimeSnapshot {
@@ -516,6 +529,24 @@ export class ApiError extends Error {
     this.body = body;
   }
 }
+
+export class SharedStateMutationBlockedError extends Error {
+  constructor(method: string, path: string, target: SharedStateMutationTarget) {
+    const workspace = target.workspaceSlug ?? "no workspace selected";
+    super(
+      `Blocked ${method} ${path}: this breaking dev build has not unlocked ` +
+        `the sacrificial target ${target.backendUrl} (workspace: ${workspace}).`,
+    );
+    this.name = "SharedStateMutationBlockedError";
+  }
+}
+
+const SHARED_STATE_MUTATION_METHODS = new Set([
+  "POST",
+  "PATCH",
+  "PUT",
+  "DELETE",
+]);
 
 function assertAgentConversationStartersWriteSupported(data: {
   conversation_starters?: unknown;
@@ -677,6 +708,7 @@ export class ApiClient {
   private token: string | null = null;
   private logger: Logger;
   private options: ApiClientOptions;
+  private unlockedSharedStateTarget: SharedStateMutationTarget | null = null;
 
   constructor(baseUrl: string, options?: ApiClientOptions) {
     this.baseUrl = baseUrl;
@@ -757,7 +789,7 @@ export class ApiClient {
   ): Promise<Response> {
     const rid = createRequestId();
     const start = Date.now();
-    const method = init?.method ?? "GET";
+    const method = (init?.method ?? "GET").toUpperCase();
 
     const headers: Record<string, string> = {
       "X-Request-ID": rid,
@@ -765,6 +797,24 @@ export class ApiClient {
       ...(init?.extraHeaders ?? {}),
       ...((init?.headers as Record<string, string>) ?? {}),
     };
+
+    const mutationGuard = this.options.sharedStateMutationGuard;
+    if (mutationGuard && SHARED_STATE_MUTATION_METHODS.has(method)) {
+      const target = {
+        backendUrl: this.baseUrl,
+        workspaceSlug: headers["X-Workspace-Slug"] ?? null,
+      };
+      const unlocked = this.unlockedSharedStateTarget;
+      if (
+        unlocked?.backendUrl !== target.backendUrl ||
+        unlocked.workspaceSlug !== target.workspaceSlug
+      ) {
+        if (!(await mutationGuard.confirmTarget(target))) {
+          throw new SharedStateMutationBlockedError(method, path, target);
+        }
+        this.unlockedSharedStateTarget = target;
+      }
+    }
 
     this.logger.info(`→ ${method} ${path}`, { rid });
 

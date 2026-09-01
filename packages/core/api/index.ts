@@ -1,6 +1,7 @@
 export {
   ApiClient,
   ApiError,
+  SharedStateMutationBlockedError,
   clientErrorMessage,
   dispatchReasonCode,
   errorCode,
@@ -9,6 +10,8 @@ export {
 } from "./client";
 export type {
   ApiClientOptions,
+  SharedStateMutationGuard,
+  SharedStateMutationTarget,
   ClientRuntimeSnapshot,
   ClientUsageRequest,
 } from "./client";

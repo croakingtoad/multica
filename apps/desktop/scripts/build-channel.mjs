@@ -50,14 +50,25 @@ export function resolveBuildChannel(env = process.env) {
   return BUILD_CHANNELS[requested];
 }
 
-export function buildChannelDefines(channel) {
+export function requireSharedStateCompatibility(env = process.env) {
+  const requested = env.MULTICA_SHARED_STATE_COMPAT;
+  if (requested !== "stable" && requested !== "breaking") {
+    throw new Error(
+      `[package] MULTICA_SHARED_STATE_COMPAT must be "stable" or "breaking" (received ${JSON.stringify(requested)})`,
+    );
+  }
+  return requested;
+}
+
+export function buildChannelDefines(channel, sharedStateCompat) {
   return {
     __MULTICA_BUILD_CHANNEL__: JSON.stringify(channel.name),
     __MULTICA_BUILD_CHANNEL_CONFIG__: JSON.stringify(channel),
+    __MULTICA_SHARED_STATE_COMPAT__: JSON.stringify(sharedStateCompat),
   };
 }
 
-export function builderConfigForChannel(channel) {
+export function builderConfigForChannel(channel, sharedStateCompat) {
   const platformArtifactNames = {
     stable: {
       linux: "multica-desktop-${version}-linux-${arch}.${ext}",
@@ -77,6 +88,7 @@ export function builderConfigForChannel(channel) {
     extraMetadata: {
       productName: channel.productName,
       multicaChannel: channel.name,
+      multicaSharedStateCompat: sharedStateCompat,
     },
     protocols: {
       name: channel.protocolName,

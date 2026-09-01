@@ -4,11 +4,13 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import {
   buildChannelDefines,
+  requireSharedStateCompatibility,
   resolveBuildChannel,
 } from "./scripts/build-channel.mjs";
 
 const buildChannelDefinitions = buildChannelDefines(
   resolveBuildChannel(process.env),
+  requireSharedStateCompatibility(process.env),
 );
 
 export default defineConfig({

@@ -7,7 +7,7 @@ import {
 } from "./scripts/build-channel.mjs";
 
 export default defineConfig({
-  define: buildChannelDefines(BUILD_CHANNELS.stable),
+  define: buildChannelDefines(BUILD_CHANNELS.stable, "stable"),
   plugins: [react()],
   resolve: {
     alias: {

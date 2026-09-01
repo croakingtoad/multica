@@ -1,4 +1,5 @@
 export type BuildChannelName = "stable" | "dev";
+export type SharedStateCompatibility = "stable" | "breaking";
 
 export interface BuildChannelConfig {
   readonly name: BuildChannelName;
@@ -22,12 +23,14 @@ export interface BuildChannelConfig {
 
 declare const __MULTICA_BUILD_CHANNEL__: BuildChannelName;
 declare const __MULTICA_BUILD_CHANNEL_CONFIG__: BuildChannelConfig;
+declare const __MULTICA_SHARED_STATE_COMPAT__: SharedStateCompatibility;
 
-// electron-vite replaces both identifiers with JSON literals. Runtime code
+// electron-vite replaces these identifiers with JSON literals. Runtime code
 // deliberately never reads MULTICA_CHANNEL, so a packaged stable binary cannot
 // be switched into dev behavior by changing its launch environment.
 export const BUILD_CHANNEL = __MULTICA_BUILD_CHANNEL__;
 export const BUILD_CHANNEL_CONFIG = __MULTICA_BUILD_CHANNEL_CONFIG__;
+export const SHARED_STATE_COMPAT = __MULTICA_SHARED_STATE_COMPAT__;
 
 export function decorateWindowTitle(
   title: string,

@@ -450,4 +450,5 @@ jobs:
           # trust boundary. Set CSC_LINK in repo secrets to enable
           # Windows signing later.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          MULTICA_SHARED_STATE_COMPAT: "stable"
         run: node scripts/package.mjs --${{ matrix.target }} --x64 --arm64 --publish always

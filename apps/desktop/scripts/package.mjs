@@ -30,7 +30,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { builderConfigForChannel, resolveBuildChannel } from "./build-channel.mjs";
+import {
+  builderConfigForChannel,
+  requireSharedStateCompatibility,
+  resolveBuildChannel,
+} from "./build-channel.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -369,6 +373,7 @@ export function builderArgsForTarget(
 
 function main() {
   const buildChannel = resolveBuildChannel(process.env);
+  const sharedStateCompat = requireSharedStateCompatibility(process.env);
   const passthrough = stripLeadingSeparator(process.argv.slice(2));
   const parsed = parsePackageArgs(passthrough);
   const buildMatrix = resolveBuildMatrix(parsed);
@@ -376,6 +381,7 @@ function main() {
     `[package] build matrix → ${buildMatrix.map(formatTarget).join(", ")}`,
   );
   console.log(`[package] build channel → ${buildChannel.name}`);
+  console.log(`[package] shared-state compatibility → ${sharedStateCompat}`);
 
   // Step 0: start every release from an empty output directory. Stale
   // artifacts from a prior run would otherwise be repacked into this run's
@@ -393,7 +399,7 @@ function main() {
   const channelConfigPath = resolve(distDir, "electron-builder-channel.json");
   writeFileSync(
     channelConfigPath,
-    `${JSON.stringify(builderConfigForChannel(buildChannel), null, 2)}\n`,
+    `${JSON.stringify(builderConfigForChannel(buildChannel, sharedStateCompat), null, 2)}\n`,
     "utf-8",
   );
   console.log(`[package] cleaned output dir → ${distDir}`);

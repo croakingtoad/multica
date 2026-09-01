@@ -4,6 +4,7 @@ import type {
   SupportedLocale,
 } from "../i18n";
 import type { StorageAdapter } from "../types/storage";
+import type { SharedStateMutationGuard } from "../api";
 
 /** Identifies the calling client to the server. Threaded through to
  *  ApiClient and WSClient so all HTTP requests and WS connections from
@@ -33,6 +34,8 @@ export interface CoreProviderProps {
   onLogout?: () => void;
   /** Identifies the calling client (web/desktop + version + os) to the server. */
   identity?: ClientIdentity;
+  /** Optional host policy that confirms a sacrificial target before writes. */
+  sharedStateMutationGuard?: SharedStateMutationGuard;
   /** Active locale, determined server-side (web) or at app boot (desktop). */
   locale: SupportedLocale;
   /** i18next resources, server-preloaded for the active locale. */
