@@ -438,7 +438,8 @@ redact_database_url() {
 }
 
 compose_postgres_system_id() {
-  docker compose exec -T postgres \
+  [ -n "${COMPOSE_PROJECT_NAME:-}" ] || return 0
+  docker compose -p "$COMPOSE_PROJECT_NAME" exec -T postgres \
     psql -U "${POSTGRES_USER:-multica}" -d postgres -Atqc \
     'SELECT system_identifier::text FROM pg_control_system()' 2>/dev/null || true
 }

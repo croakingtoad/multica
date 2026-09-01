@@ -199,6 +199,12 @@ EOF
 cat > "$probe_bin/docker" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
+  *" compose -p "*" exec -T postgres "*)
+    [ -z "${COMPOSE_IDENTITY_MARKER:-}" ] \
+      || printf '%s\n' "$*" >> "$COMPOSE_IDENTITY_MARKER"
+    printf '%s\n' test-system-identifier
+    exit
+    ;;
   *" compose -p "*" down --volumes "*)
     printf '%s\n' "$*" >> "$COMPOSE_DOWN_MARKER"
     [ "${FAIL_COMPOSE_DOWN:-0}" != 1 ]
@@ -223,6 +229,16 @@ if PATH="$probe_path" command -v psql >/dev/null 2>&1 \
   || PATH="$probe_path" command -v pg_isready >/dev/null 2>&1; then
   fail "database guard test PATH unexpectedly contains psql or pg_isready"
 fi
+
+# A legacy/shared manifest has no owned Compose project to identify. Do not
+# fall back to ambient Compose selection: an empty identifier makes the probe
+# refuse any PostgreSQL server it reaches before a CREATE or DROP operation.
+empty_identity_marker="$tmp_dir/empty-compose-identity-marker"
+empty_identity="$(PATH="$probe_path" COMPOSE_IDENTITY_MARKER="$empty_identity_marker" \
+  COMPOSE_PROJECT_NAME= bash -c 'source "$1"; compose_postgres_system_id' _ \
+  "$root_dir/scripts/dev-env.sh")"
+[ -z "$empty_identity" ] || fail "an empty Compose project produced a system identifier"
+[ ! -e "$empty_identity_marker" ] || fail "an empty Compose project invoked Docker"
 
 status=0
 PATH="$probe_path" POSTGRES_PROBE_RESULT=failure REPO_ROOT="$probe_root" \
@@ -466,11 +482,15 @@ require_contains "$out" "Dropped database multica_dev_env_test_908 through verif
 # successful destroy must release that project's container, network and named
 # volumes before discarding the only manifest that names the target.
 compose_down_marker="$tmp_dir/compose-down-marker"
+compose_identity_marker="$tmp_dir/compose-identity-marker"
 write_manifest "destroy-compose-909" "$root_dir" 909 agent multica_destroy-compose-909
 PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
   POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  COMPOSE_IDENTITY_MARKER="$compose_identity_marker" \
   dev_env destroy destroy-compose-909 --yes > "$out" 2>&1 \
   || fail "destroy did not release its isolated Compose project"
+require_contains "$compose_identity_marker" \
+  "compose -p multica_destroy-compose-909 exec -T postgres psql"
 require_contains "$compose_down_marker" "compose -p multica_destroy-compose-909 down --volumes"
 [ ! -e "$MULTICA_DEV_HOME/envs/destroy-compose-909/manifest.env" ] \
   || fail "destroy retained the manifest after Compose teardown succeeded"
