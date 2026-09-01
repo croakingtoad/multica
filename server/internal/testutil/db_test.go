@@ -38,19 +38,19 @@ func TestMain(m *testing.M) {
 
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
-		fmt.Printf("Skipping DB fixture tests: could not connect: %v\n", err)
-		os.Exit(m.Run())
+		testdb.ExitFailure("test database connection could not be created after the availability probe")
+		return
 	}
 	if err := pool.Ping(ctx); err != nil {
-		fmt.Printf("Skipping DB fixture tests: database not reachable: %v\n", err)
 		pool.Close()
-		os.Exit(m.Run())
+		testdb.ExitFailure("test database became unreachable after the availability probe")
+		return
 	}
 
 	if err := seedFixtureWorkspace(ctx, pool); err != nil {
-		fmt.Printf("Skipping DB fixture tests: seed failed: %v\n", err)
 		pool.Close()
-		os.Exit(m.Run())
+		testdb.ExitFailure("test database fixture could not be seeded")
+		return
 	}
 	testPool = pool
 

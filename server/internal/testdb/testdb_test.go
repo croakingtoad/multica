@@ -72,3 +72,48 @@ func TestRequire(t *testing.T) {
 		}
 	})
 }
+
+func TestFailOrSkip(t *testing.T) {
+	const (
+		databaseURL = "postgres://probe-user:probe-secret@127.0.0.1:1/multica?sslmode=disable"
+		reason      = "test fixture seeding failed"
+	)
+	t.Setenv("DATABASE_URL", databaseURL)
+
+	t.Run("fails closed", func(t *testing.T) {
+		t.Setenv(OptionalEnv, "")
+		var output bytes.Buffer
+
+		err := FailOrSkip(&output, reason)
+		if err == nil {
+			t.Fatal("FailOrSkip() returned nil without the explicit opt-out")
+		}
+		message := err.Error()
+		for _, want := range []string{reason, "postgres://REDACTED@127.0.0.1:1/multica?sslmode=disable", "Remedy:"} {
+			if !strings.Contains(message, want) {
+				t.Errorf("error %q does not contain %q", message, want)
+			}
+		}
+		if strings.Contains(message, "probe-secret") {
+			t.Fatalf("error exposed database credentials: %q", message)
+		}
+	})
+
+	t.Run("explicit opt-out skips loudly", func(t *testing.T) {
+		t.Setenv(OptionalEnv, "1")
+		var output bytes.Buffer
+
+		if err := FailOrSkip(&output, reason); err != nil {
+			t.Fatalf("FailOrSkip() with opt-out returned error: %v", err)
+		}
+		banner := output.String()
+		for _, want := range []string{"WARNING", OptionalEnv + "=1", reason, "DB-backed suites did not run"} {
+			if !strings.Contains(banner, want) {
+				t.Errorf("banner %q does not contain %q", banner, want)
+			}
+		}
+		if strings.Contains(banner, "probe-secret") {
+			t.Fatalf("banner exposed database credentials: %q", banner)
+		}
+	})
+}

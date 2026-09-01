@@ -55,13 +55,13 @@ func TestMain(m *testing.M) {
 
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
-		fmt.Printf("Skipping tests: could not connect to database: %v\n", err)
-		os.Exit(0)
+		testdb.ExitFailure("test database connection could not be created after the availability probe")
+		return
 	}
 	if err := pool.Ping(ctx); err != nil {
-		fmt.Printf("Skipping tests: database not reachable: %v\n", err)
 		pool.Close()
-		os.Exit(0)
+		testdb.ExitFailure("test database became unreachable after the availability probe")
+		return
 	}
 
 	queries := db.New(pool)

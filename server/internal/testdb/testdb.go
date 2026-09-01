@@ -35,14 +35,29 @@ func Require(ctx context.Context, output io.Writer) error {
 	if err := probe(ctx, databaseURL); err == nil {
 		return nil
 	}
+	return FailOrSkip(output, "test database unavailable")
+}
 
-	target := redactedURL(databaseURL)
+// FailOrSkip applies the shared fail-closed policy to a known DB-backed test
+// setup failure that occurs after the initial availability probe.
+func FailOrSkip(output io.Writer, reason string) error {
+	target := redactedURL(DatabaseURL())
 	if os.Getenv(OptionalEnv) == "1" {
-		fmt.Fprintf(output, "WARNING: %s=1 is set; DB-backed suites did not run because the test database is unavailable at %s.\n", OptionalEnv, target)
+		fmt.Fprintf(output, "WARNING: %s=1 is set; DB-backed suites did not run because %s at %s.\n", OptionalEnv, reason, target)
 		return nil
 	}
 
-	return fmt.Errorf("test database unavailable at %s. Remedy: start and migrate Postgres at DATABASE_URL, or set %s=1 to explicitly skip DB-backed suites", target, OptionalEnv)
+	return fmt.Errorf("%s at %s. Remedy: start and migrate Postgres at DATABASE_URL, or set %s=1 to explicitly skip DB-backed suites", reason, target, OptionalEnv)
+}
+
+// ExitFailure terminates a TestMain through the shared fail-closed policy.
+// It returns success only for the explicit opt-out, after printing its banner.
+func ExitFailure(reason string) {
+	if err := FailOrSkip(os.Stdout, reason); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 // Main is the TestMain implementation for packages whose existing tests own
