@@ -124,6 +124,29 @@ isolated_settings="$(bash -c '
 [ "$isolated_settings" = '25753|multica_ephemeral-321|postgres://dev:p%40ss@127.0.0.1:25753/dev_db?sslmode=require' ] \
   || fail "ephemeral PostgreSQL settings were not derived together: $isolated_settings"
 
+# The isolated Compose identity must travel in the same checkout env file as
+# its allocated PostgreSQL port. Direct Make targets source this file without
+# going through dev-env.sh or its manifest.
+carrier_root="$tmp_dir/carrier-root"
+carrier_env="$carrier_root/.env.worktree"
+mkdir -p "$carrier_root"
+cat > "$carrier_env" <<'EOF'
+POSTGRES_DB=old_db
+POSTGRES_PORT=5432
+DATABASE_URL=postgres://dev:dev@127.0.0.1:5432/old_db?sslmode=disable
+EOF
+bash -c '
+  source "$1"
+  REPO_ROOT="$2"
+  DATABASE_URL="$3"
+  rewrite_database_endpoint .env.worktree 25753 isolated_db multica_isolated-321
+' _ "$root_dir/scripts/dev-env.sh" "$carrier_root" \
+  'postgres://dev:dev@127.0.0.1:5432/old_db?sslmode=disable'
+grep -Fxq 'POSTGRES_PORT=25753' "$carrier_env" \
+  || fail "isolated PostgreSQL port did not reach the checkout env file"
+grep -Fxq 'COMPOSE_PROJECT_NAME=multica_isolated-321' "$carrier_env" \
+  || fail "isolated Compose project did not reach the checkout env file"
+
 redacted="$(bash -c 'source "$1"; redact_database_url "$2"' _ \
   "$root_dir/scripts/dev-env.sh" 'postgres://dev:real-secret@127.0.0.1:5432/dev')"
 case "$redacted" in
@@ -251,6 +274,7 @@ POSTGRES_DB=multica
 POSTGRES_USER=multica
 POSTGRES_PASSWORD=multica
 POSTGRES_PORT=5432
+COMPOSE_PROJECT_NAME=multica_test
 DATABASE_URL=postgres://multica:multica@localhost:5432/multica?sslmode=disable
 EOF
 cat > "$ensure_bin/docker" <<EOF
@@ -266,6 +290,24 @@ PATH="$ensure_bin:$PATH" MULTICA_POSTGRES_PORT_OVERRIDE=25432 \
   || fail "ensure-postgres rejected an explicit PostgreSQL port"
 [ "$(cat "$ensure_port_marker")" = 25432 ] \
   || fail "ensure-postgres restored the env-file PostgreSQL port"
+
+# A port without its Compose identity is the incident shape. Refuse before any
+# Docker command can fall through to Compose's default `multica` project.
+missing_project_env="$tmp_dir/missing-project.env"
+cat > "$missing_project_env" <<'EOF'
+POSTGRES_DB=multica
+POSTGRES_USER=multica
+POSTGRES_PASSWORD=multica
+POSTGRES_PORT=25432
+DATABASE_URL=postgres://multica:multica@localhost:25432/multica?sslmode=disable
+EOF
+rm -f "$ensure_port_marker"
+status=0
+PATH="$ensure_bin:$PATH" \
+  bash "$root_dir/scripts/ensure-postgres.sh" "$missing_project_env" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "ensure-postgres defaulted a port-bearing env file to project multica"
+[ ! -e "$ensure_port_marker" ] || fail "ensure-postgres invoked Docker without a Compose project"
+require_contains "$out" "POSTGRES_PORT but no COMPOSE_PROJECT_NAME"
 
 # ---------------------------------------------------------------------------
 # A registered environment is visible to both renderings, and the JSON one

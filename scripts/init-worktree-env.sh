@@ -28,6 +28,7 @@ POSTGRES_DB=${postgres_db}
 POSTGRES_USER=multica
 POSTGRES_PASSWORD=multica
 POSTGRES_PORT=${postgres_port}
+COMPOSE_PROJECT_NAME=multica
 DATABASE_URL=postgres://multica:multica@localhost:${postgres_port}/${postgres_db}?sslmode=disable
 
 PORT=${backend_port}

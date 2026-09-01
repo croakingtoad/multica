@@ -454,15 +454,21 @@ run_postgres_probe() {
 }
 
 rewrite_database_endpoint() {
-  local file="$REPO_ROOT/$1" port=$2 database=$3 tmp database_url escaped_database_url
+  local file="$REPO_ROOT/$1" port=$2 database=$3 compose_project=$4
+  local tmp database_url escaped_database_url escaped_compose_project
   database_url="$(database_url_with_port_and_name "${DATABASE_URL:-}" "$port" "$database")" \
     || die "The configured DATABASE_URL is not a valid PostgreSQL URL."
   escaped_database_url="$(printf '%s' "$database_url" | sed 's/[\\&|]/\\&/g')"
+  escaped_compose_project="$(printf '%s' "$compose_project" | sed 's/[\\&|]/\\&/g')"
   tmp="$(mktemp)"
   sed \
     -e "s|^POSTGRES_PORT=.*|POSTGRES_PORT=${port}|" \
     -e "s|^DATABASE_URL=.*|DATABASE_URL=${escaped_database_url}|" \
+    -e "s|^COMPOSE_PROJECT_NAME=.*|COMPOSE_PROJECT_NAME=${escaped_compose_project}|" \
     "$file" > "$tmp"
+  if ! grep -Eq '^COMPOSE_PROJECT_NAME=' "$tmp"; then
+    printf '\nCOMPOSE_PROJECT_NAME=%s\n' "$compose_project" >> "$tmp"
+  fi
   mv "$tmp" "$file"
 }
 
@@ -1271,7 +1277,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
         || die "PostgreSQL port $isolated_postgres_port is already published, listening, or cannot bind on 127.0.0.1."
       POSTGRES_PORT="$isolated_postgres_port"
       COMPOSE_PROJECT_NAME="$(compose_project_for_name "$NAME")"
-      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
       DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
       save_manifest
     elif [ "$lifecycle_requested" = 1 ]; then
@@ -1330,7 +1336,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     if [ "$isolate_postgres" = 1 ]; then
       POSTGRES_PORT="${requested_postgres_port:-$(postgres_port_for_offset "$OFFSET")}"
       COMPOSE_PROJECT_NAME="$(compose_project_for_name "$NAME")"
-      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
       DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
     fi
     save_manifest

@@ -10,10 +10,27 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+env_file_has_postgres_port=0
+env_file_has_compose_project=0
+grep -Eq '^[[:space:]]*(export[[:space:]]+)?POSTGRES_PORT[[:space:]]*=' "$ENV_FILE" \
+  && env_file_has_postgres_port=1
+grep -Eq '^[[:space:]]*(export[[:space:]]+)?COMPOSE_PROJECT_NAME[[:space:]]*=' "$ENV_FILE" \
+  && env_file_has_compose_project=1
+
+if [ "$env_file_has_postgres_port" = 1 ] && [ "$env_file_has_compose_project" != 1 ]; then
+  echo "Refusing PostgreSQL startup: $ENV_FILE carries POSTGRES_PORT but no COMPOSE_PROJECT_NAME."
+  exit 1
+fi
+
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 set +a
+
+if [ "$env_file_has_postgres_port" = 1 ] && [ -z "${COMPOSE_PROJECT_NAME:-}" ]; then
+  echo "Refusing PostgreSQL startup: $ENV_FILE carries POSTGRES_PORT but COMPOSE_PROJECT_NAME is empty."
+  exit 1
+fi
 
 if [ -n "$POSTGRES_PORT_OVERRIDE" ]; then
   POSTGRES_PORT="$POSTGRES_PORT_OVERRIDE"
