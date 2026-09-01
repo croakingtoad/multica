@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/testdb"
 )
 
 var (
@@ -21,11 +22,15 @@ const (
 )
 
 // TestMain builds the workspace the fixture builders hang off, in the same
-// shape internal/handler's TestMain builds it. Without a database the suite
-// exits green rather than red: the same contract every other DB-backed package
-// here follows, so a laptop without Postgres still runs the rest of the tree.
+// shape internal/handler's TestMain builds it. The shared testdb gate fails
+// before this setup when Postgres is unavailable unless the contributor has
+// explicitly opted out of DB-backed suites.
 func TestMain(m *testing.M) {
 	ctx := context.Background()
+	if err := testdb.Require(ctx, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
@@ -33,19 +38,19 @@ func TestMain(m *testing.M) {
 
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
-		fmt.Printf("Skipping DB fixture tests: could not connect: %v\n", err)
-		os.Exit(m.Run())
+		testdb.ExitFailure("test database connection could not be created after the availability probe")
+		return
 	}
 	if err := pool.Ping(ctx); err != nil {
-		fmt.Printf("Skipping DB fixture tests: database not reachable: %v\n", err)
 		pool.Close()
-		os.Exit(m.Run())
+		testdb.ExitFailure("test database became unreachable after the availability probe")
+		return
 	}
 
 	if err := seedFixtureWorkspace(ctx, pool); err != nil {
-		fmt.Printf("Skipping DB fixture tests: seed failed: %v\n", err)
 		pool.Close()
-		os.Exit(m.Run())
+		testdb.ExitFailure("test database fixture could not be seeded")
+		return
 	}
 	testPool = pool
 

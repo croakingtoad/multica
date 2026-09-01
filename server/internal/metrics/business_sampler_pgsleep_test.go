@@ -30,9 +30,8 @@ import (
 //  4. The duration histogram records the cancellation latency, so
 //     dashboards can see it happen.
 //
-// Skips cleanly when no DATABASE_URL is set, mirroring the integration
-// test pattern already used in cmd/server. Operators running CI without a
-// reachable Postgres see "SKIP", not a failure.
+// The package-level testdb gate requires a reachable Postgres by default.
+// Contributors who explicitly opt out still reach this test's local skip.
 func TestBusinessSamplerStatementTimeoutCutsHungQuery(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {

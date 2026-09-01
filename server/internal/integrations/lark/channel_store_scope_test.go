@@ -15,9 +15,9 @@ import (
 )
 
 // channelScopeTestDB connects to the test Postgres (DATABASE_URL or the default
-// local DSN, same as the handler suite) and returns a pool, or skips when no
-// migrated database is reachable. Kept local to this file so the rest of the
-// lark package stays DB-free.
+// local DSN, same as the handler suite) and returns a pool. The package gate
+// handles reachability by default; this helper retains the historical skip for
+// explicit opt-out and unmigrated-database cases.
 func channelScopeTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
