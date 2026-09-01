@@ -443,11 +443,15 @@ func hasDaemonTaskContextMarker() bool {
 	return daemonTaskContextMarkerPath() != ""
 }
 
+// daemonTaskContextSearchRoot is replaceable by tests so their marker lookup
+// cannot inherit daemon state from the process's ambient working directory.
+var daemonTaskContextSearchRoot = os.Getwd
+
 // daemonTaskContextMarkerPath walks up from the current working directory and
 // returns the path of the first readable daemon-task marker whose managed_by
 // matches, or "" when none is found.
 func daemonTaskContextMarkerPath() string {
-	dir, err := os.Getwd()
+	dir, err := daemonTaskContextSearchRoot()
 	if err != nil {
 		return ""
 	}

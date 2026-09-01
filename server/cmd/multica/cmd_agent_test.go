@@ -33,6 +33,16 @@ func freshAgentEnvSetCmd() *cobra.Command {
 	return c
 }
 
+func setDaemonTaskContextSearchRoot(t *testing.T, root string) {
+	t.Helper()
+
+	previous := daemonTaskContextSearchRoot
+	daemonTaskContextSearchRoot = func() (string, error) { return root, nil }
+	t.Cleanup(func() {
+		daemonTaskContextSearchRoot = previous
+	})
+}
+
 func chdirWithDaemonTaskMarker(t *testing.T) {
 	t.Helper()
 
@@ -61,6 +71,7 @@ func chdirWithDaemonTaskMarker(t *testing.T) {
 	if err := os.Chdir(nested); err != nil {
 		t.Fatalf("chdir nested: %v", err)
 	}
+	setDaemonTaskContextSearchRoot(t, nested)
 	t.Cleanup(func() {
 		if err := os.Chdir(prev); err != nil {
 			t.Fatalf("restore cwd: %v", err)
@@ -178,6 +189,7 @@ func TestNewAPIClient_WorkdirParentEscapeFailsClosed(t *testing.T) {
 	if err := os.Chdir(taskDir); err != nil {
 		t.Fatalf("chdir task dir: %v", err)
 	}
+	setDaemonTaskContextSearchRoot(t, taskDir)
 	t.Cleanup(func() {
 		if err := os.Chdir(prev); err != nil {
 			t.Fatalf("restore cwd: %v", err)
@@ -412,6 +424,7 @@ func TestResolveToken_AgentContextSkipsConfig(t *testing.T) {
 		if err := os.Chdir(nested); err != nil {
 			t.Fatalf("chdir nested: %v", err)
 		}
+		setDaemonTaskContextSearchRoot(t, nested)
 		t.Cleanup(func() {
 			if err := os.Chdir(prev); err != nil {
 				t.Fatalf("restore cwd: %v", err)
