@@ -13,9 +13,9 @@ import (
 
 const testResolverSlug = "middleware-resolver-test"
 
-// openPool returns a connected pgxpool, or skips the test if the database is
-// unreachable. Mirrors the handler package's fixture approach so tests don't
-// require a DB in environments where one isn't available.
+// openPool returns a connected pgxpool. The package-level testdb gate fails
+// first when Postgres is unavailable unless the contributor explicitly opts
+// out, in which case this helper retains the suite's historical skip.
 func openPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dbURL := os.Getenv("DATABASE_URL")
