@@ -26,6 +26,7 @@ case "$#" in
 esac
 
 cd "$REPO_ROOT/server"
+go run ./internal/testdbprobe
 packages=$(go list ./...)
 regular_packages=()
 for package in $packages; do
