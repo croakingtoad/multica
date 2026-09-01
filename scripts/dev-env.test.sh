@@ -17,6 +17,17 @@ export MULTICA_DEV_PROFILES_HOME="$tmp_dir/profiles"
 
 fake_bin="$tmp_dir/bin"
 mkdir -p "$fake_bin"
+docker_log="$tmp_dir/docker.log"
+export DOCKER_LOG="$docker_log"
+cat > "$fake_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'project=%s port=%s args=%s\n' \
+  "${COMPOSE_PROJECT_NAME:-<unset>}" "${POSTGRES_PORT:-<unset>}" "$*" >> "$DOCKER_LOG"
+if [ "${FAIL_COMPOSE_DOWN:-0}" = 1 ]; then
+  echo "simulated Compose teardown failure" >&2
+  exit 42
+fi
+EOF
 cat > "$fake_bin/psql" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
@@ -24,7 +35,7 @@ case " $* " in
   *) printf '1\n' ;;
 esac
 EOF
-chmod +x "$fake_bin/psql"
+chmod +x "$fake_bin/docker" "$fake_bin/psql"
 export PATH="$fake_bin:$PATH"
 
 fail() {
@@ -47,7 +58,7 @@ dev_env() {
 }
 
 write_manifest() {
-  local name=$1 dir=$2 offset=$3 owner=${4:-agent} compose_project=${5:-}
+  local name=$1 dir=$2 offset=$3 owner=${4:-agent} compose_project=${5:-} postgres_port=${6:-5432}
   local profile="dev-dev-env-test-$offset"
   mkdir -p "$MULTICA_DEV_HOME/envs/$name/logs"
   cat > "$MULTICA_DEV_HOME/envs/$name/manifest.env" <<EOF
@@ -61,8 +72,8 @@ OFFSET=$offset
 BACKEND_PORT=$((18080 + offset))
 FRONTEND_PORT=$((13000 + offset))
 DB_NAME=multica_dev_env_test_$offset
-DATABASE_URL=postgres://multica:multica@localhost:5432/multica_dev_env_test_$offset?sslmode=disable
-POSTGRES_PORT=5432
+DATABASE_URL=postgres://multica:multica@localhost:$postgres_port/multica_dev_env_test_$offset?sslmode=disable
+POSTGRES_PORT=$postgres_port
 COMPOSE_PROJECT_NAME=$compose_project
 PROFILE=$profile
 WORKSPACES_ROOT=$(printf '%q' "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces_$profile")
@@ -148,7 +159,6 @@ grep -Fxq 'POSTGRES_PORT=25753' "$carrier_env" \
   || fail "isolated PostgreSQL port did not reach the checkout env file"
 grep -Fxq 'COMPOSE_PROJECT_NAME=multica_isolated-321' "$carrier_env" \
   || fail "isolated Compose project did not reach the checkout env file"
-
 redacted="$(bash -c 'source "$1"; redact_database_url "$2"' _ \
   "$root_dir/scripts/dev-env.sh" 'postgres://dev:real-secret@127.0.0.1:5432/dev')"
 case "$redacted" in
@@ -206,9 +216,10 @@ case " $* " in
     exit
     ;;
   *" compose -p "*" down --volumes "*)
-    printf '%s\n' "$*" >> "$COMPOSE_DOWN_MARKER"
-    [ "${FAIL_COMPOSE_DOWN:-0}" != 1 ]
-    exit
+    printf 'project=%s port=%s args=%s\n' \
+      "${COMPOSE_PROJECT_NAME:-<unset>}" "${POSTGRES_PORT:-<unset>}" "$*" >> "$COMPOSE_DOWN_MARKER"
+    [ "${FAIL_COMPOSE_DOWN:-0}" != 1 ] || exit 42
+    exit 0
     ;;
 esac
 exit 1
@@ -219,6 +230,8 @@ printf '%s:%s\n' "\$COMPOSE_PROJECT_NAME" "\$POSTGRES_PORT" > "$fallback_marker"
 EOF
 chmod +x "$probe_bin/go" "$probe_bin/docker" "$probe_root/scripts/ensure-postgres.sh"
 
+# Give the fixture every utility exercised by the registry paths while keeping
+# host PostgreSQL clients out of PATH so the pgx-only contract is non-vacuous.
 for probe_tool in awk basename bash cat chmod date dirname env grep head kill lsof \
   mkdir mktemp mv node nohup ps rm sed seq sleep tr uname wc; do
   probe_tool_path="$(command -v "$probe_tool" || true)"
@@ -239,7 +252,6 @@ empty_identity="$(PATH="$probe_path" COMPOSE_IDENTITY_MARKER="$empty_identity_ma
   "$root_dir/scripts/dev-env.sh")"
 [ -z "$empty_identity" ] || fail "an empty Compose project produced a system identifier"
 [ ! -e "$empty_identity_marker" ] || fail "an empty Compose project invoked Docker"
-
 status=0
 PATH="$probe_path" POSTGRES_PROBE_RESULT=failure REPO_ROOT="$probe_root" \
   DATABASE_URL='postgres://multica:wrong@127.0.0.1:25432/multica?sslmode=disable' \
@@ -333,7 +345,6 @@ PATH="$ensure_bin:$PATH" \
 [ "$status" -ne 0 ] || fail "ensure-postgres defaulted a port-bearing env file to project multica"
 [ ! -e "$ensure_port_marker" ] || fail "ensure-postgres invoked Docker without a Compose project"
 require_contains "$out" "POSTGRES_PORT but no COMPOSE_PROJECT_NAME"
-
 # ---------------------------------------------------------------------------
 # A registered environment is visible to both renderings, and the JSON one
 # parses — agents read it, so a stray log line in it is a broken contract.
@@ -394,6 +405,44 @@ MULTICA_WORKSPACES_ROOT=/owner/workspaces \
 if bash -c 'source "$1"; api_started_after '\''{"status":"ok"}'\'' 1' _ "$root_dir/scripts/dev-env.sh"; then
   fail "legacy /health without started_at was accepted as current"
 fi
+
+# Turbo starts its package task in a nested process group. That listener is
+# still owned by the launcher's live process tree and must be accepted, then
+# pinned by PID for safe teardown.
+descendant_pid_file="$tmp_dir/descendant-pid"
+sh -c 'setsid sh -c '\''printf %s "$$" > "$1"; sleep 30'\'' _ "$1" & wait' _ "$descendant_pid_file" &
+ancestor_pid=$!
+for _ in $(seq 1 50); do
+  [ -s "$descendant_pid_file" ] && break
+  sleep 0.02
+done
+[ -s "$descendant_pid_file" ] || fail "nested process-group fixture did not start"
+descendant_pid="$(cat "$descendant_pid_file")"
+if ! bash -c 'source "$1"; process_descends_from "$2" "$3"' _ \
+  "$root_dir/scripts/dev-env.sh" "$descendant_pid" "$ancestor_pid"; then
+  kill -TERM -"$descendant_pid" "$ancestor_pid" 2>/dev/null || true
+  fail "nested process group was not recognized as launcher-owned"
+fi
+kill -TERM -"$descendant_pid" "$ancestor_pid" 2>/dev/null || true
+wait "$ancestor_pid" 2>/dev/null || true
+
+# Some Linux lsof builds cannot enumerate an IPv6 wildcard listener even
+# though ss reports its owning PID. Listener identity must retain that fallback
+# or a healthy Next.js server is rejected as foreign.
+listener_bin="$tmp_dir/listener-bin"
+mkdir -p "$listener_bin"
+cat > "$listener_bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$listener_bin/ss" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'LISTEN 0 511 *:13691 *:* users:(("next-server",pid=4242,fd=22))'
+EOF
+chmod +x "$listener_bin/lsof" "$listener_bin/ss"
+listener_pid="$(PATH="$listener_bin:$PATH" bash -c 'source "$1"; port_listener_pid 13691' _ \
+  "$root_dir/scripts/dev-env.sh")"
+[ "$listener_pid" = 4242 ] || fail "ss listener fallback returned $listener_pid, want 4242"
 
 # ---------------------------------------------------------------------------
 # Unknown names and components fail loudly instead of doing something else.
@@ -538,6 +587,45 @@ PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
   dev_env destroy drop-fails-904 --yes > "$out" 2>&1 \
   || fail "retrying destroy after database recovery failed"
 
+# Isolated PostgreSQL teardown uses the exact manifest values, even when the
+# invoking shell carries conflicting values from another environment.
+: > "$compose_down_marker"
+write_manifest "compose-destroy-912" "$root_dir" 912 agent multica_compose-destroy-912 26555
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  POSTGRES_PORT=29999 COMPOSE_PROJECT_NAME=multica_wrong-project \
+  dev_env destroy compose-destroy-912 --yes > "$out" 2>&1 \
+  || fail "isolated Compose destroy must succeed"
+require_contains "$compose_down_marker" \
+  "project=multica_compose-destroy-912 port=26555 args=compose -p multica_compose-destroy-912 down --volumes"
+[ ! -d "$MULTICA_DEV_HOME/envs/compose-destroy-912" ] \
+  || fail "successful Compose teardown retained the manifest and slot"
+
+# A failed Compose teardown preserves its exit status and every registry value
+# needed to retry the exact same project cleanup.
+: > "$compose_down_marker"
+write_manifest "compose-fails-913" "$root_dir" 913 agent multica_compose-fails-913 26556
+status=0
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready FAIL_COMPOSE_DOWN=1 \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  POSTGRES_PORT=29999 COMPOSE_PROJECT_NAME=multica_wrong-project \
+  dev_env destroy compose-fails-913 --yes > "$out" 2>&1 || status=$?
+[ "$status" -eq 42 ] || fail "failed Compose teardown exited $status, want 42"
+[ -f "$MULTICA_DEV_HOME/envs/compose-fails-913/manifest.env" ] \
+  || fail "failed Compose teardown discarded the manifest and slot"
+if ! bash -c 'source "$1"; offset_registered "$2"' _ \
+  "$root_dir/scripts/dev-env.sh" 913; then
+  fail "failed Compose teardown released its allocator slot"
+fi
+require_contains "$compose_down_marker" \
+  "project=multica_compose-fails-913 port=26556 args=compose -p multica_compose-fails-913 down --volumes"
+require_contains "$out" "failed to release Compose project multica_compose-fails-913 (exit 42)"
+require_contains "$out" "manifest and other resources were kept"
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  dev_env destroy compose-fails-913 --yes > "$out" 2>&1 \
+  || fail "retrying destroy after Compose recovery failed"
+
 # ---------------------------------------------------------------------------
 # destroy consumes the manifest: the slot is free afterwards, which is what
 # makes the registry an allocator rather than a second place to leak.
@@ -546,6 +634,7 @@ PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
   POSTGRES_DROP_MARKER="$destroy_drop_marker" \
   dev_env destroy probe-901 --yes > "$out" 2>&1 || fail "destroy must succeed"
 [ ! -d "$MULTICA_DEV_HOME/envs/probe-901" ] || fail "destroy left the environment directory behind"
+require_contains "$out" "no Compose project recorded; skipped isolated PostgreSQL teardown"
 
 dev_env list > "$out" 2>&1 || fail "list must succeed after destroy"
 if grep -Fq "probe-901" "$out"; then

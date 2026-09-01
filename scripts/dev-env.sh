@@ -208,7 +208,15 @@ EOF
 # a function aborts the script under `set -e` when fn's last command fails, and
 # "no process is listening" is the normal answer here, not an error.
 port_listener_pid() {
-  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 || true
+  local pid=""
+  if command -v lsof >/dev/null 2>&1; then
+    pid="$(lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+  fi
+  if [ -z "$pid" ] && command -v ss >/dev/null 2>&1; then
+    pid="$(ss -H -ltnp "sport = :$1" 2>/dev/null \
+      | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1 || true)"
+  fi
+  printf '%s' "$pid"
 }
 
 port_free() { [ -z "$(port_listener_pid "$1")" ]; }
@@ -455,8 +463,11 @@ run_postgres_probe() {
 }
 
 release_compose_project() {
-  local expected_project
-  [ -n "$COMPOSE_PROJECT_NAME" ] || return 0
+  local expected_project compose_status
+  if [ -z "$COMPOSE_PROJECT_NAME" ]; then
+    info "$NAME has no Compose project recorded; skipped isolated PostgreSQL teardown."
+    return 0
+  fi
 
   expected_project="$(compose_project_for_name "$NAME")"
   if [ "$COMPOSE_PROJECT_NAME" != "$expected_project" ]; then
@@ -467,10 +478,12 @@ release_compose_project() {
   if (cd "$REPO_ROOT" && docker compose -p "$COMPOSE_PROJECT_NAME" down --volumes); then
     ok "released Compose project $COMPOSE_PROJECT_NAME (containers, networks and volumes)"
     return 0
+  else
+    compose_status=$?
   fi
 
-  warn "failed to release Compose project $COMPOSE_PROJECT_NAME"
-  return 1
+  warn "failed to release Compose project $COMPOSE_PROJECT_NAME (exit $compose_status)"
+  return "$compose_status"
 }
 
 rewrite_database_endpoint() {
@@ -634,6 +647,19 @@ process_group_id() {
   ps -p "$1" -o pgid= 2>/dev/null | tr -d ' ' || true
 }
 
+process_descends_from() {
+  local child=$1 ancestor=$2 parent hops=0
+  while [ -n "$child" ] && [ "$child" != 1 ] && [ "$hops" -lt 64 ]; do
+    parent="$(ps -p "$child" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+    [ -n "$parent" ] || return 1
+    [ "$parent" = "$ancestor" ] && return 0
+    [ "$parent" != "$child" ] || return 1
+    child="$parent"
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
 listener_belongs_to_component() {
   local component=$1 port=$2 launcher listener recorded
   launcher="$(component_pid "$component" || true)"
@@ -641,7 +667,8 @@ listener_belongs_to_component() {
   [ -n "$launcher" ] && [ -n "$listener" ] || return 1
   recorded="$(cat "$(listener_pid_file "$component")" 2>/dev/null || true)"
   [ -n "$recorded" ] && [ "$listener" = "$recorded" ] && return 0
-  [ "$(process_group_id "$listener")" = "$launcher" ]
+  [ "$(process_group_id "$listener")" = "$launcher" ] \
+    || process_descends_from "$listener" "$launcher"
 }
 
 health_belongs_to_api() {
@@ -706,15 +733,19 @@ Run 'make down' here first — a leftover instance answers /health with 200 and 
 
 start_web() {
   local waited=0 listener
-  if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1 \
-    && listener_belongs_to_component web "$FRONTEND_PORT"; then
-    ok "web already running on :$FRONTEND_PORT"
-    return 0
+  if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
+    listener="$(port_listener_pid "$FRONTEND_PORT")"
+    if listener_belongs_to_component web "$FRONTEND_PORT"; then
+      printf '%s\n' "$listener" > "$(listener_pid_file web)"
+      ok "web already running on :$FRONTEND_PORT"
+      return 0
+    fi
   fi
   if ! port_free "$FRONTEND_PORT"; then
     die "Port $FRONTEND_PORT is busy: $(describe_port_owner "$FRONTEND_PORT"). Run 'make down' here first."
   fi
 
+  rm -f "$(listener_pid_file web)"
   launch_detached web make -C "$REPO_ROOT" -s web-dev ENV_FILE="$ENV_FILE"
   info "web launching (pid $(cat "$(pid_file web)")), log: $(log_file web)"
 
@@ -723,8 +754,9 @@ start_web() {
       listener="$(port_listener_pid "$FRONTEND_PORT")"
       if ! listener_belongs_to_component web "$FRONTEND_PORT"; then
         stop_component web
-        die "Web on :$FRONTEND_PORT is not owned by the process group this environment launched."
+        die "Web on :$FRONTEND_PORT is not owned by the process tree this environment launched."
       fi
+      printf '%s\n' "$listener" > "$(listener_pid_file web)"
       ok "web serving http://localhost:$FRONTEND_PORT (pid ${listener:-?})"
       return 0
     fi
@@ -1413,7 +1445,7 @@ cmd_down() {
 }
 
 cmd_destroy() {
-  local name="" assume_yes=0 reply admin_url failures=0
+  local name="" assume_yes=0 reply admin_url compose_status failures=0
   local compose_system_id expected_endpoint probe_endpoint probe_endpoint_value
   local probe_error probe_output probe_result
   local expected_workspaces expected_desktop_data
@@ -1465,8 +1497,12 @@ cmd_destroy() {
     die "Cannot verify the PostgreSQL target; refusing to drop $DB_NAME. Its manifest and other resources were kept."
   fi
 
-  if ! release_compose_project; then
-    die "Cannot finish destroying $NAME. Its manifest and other resources were kept so Compose cleanup can be retried."
+  if release_compose_project; then
+    :
+  else
+    compose_status=$?
+    warn "Cannot finish destroying $NAME. Its manifest and other resources were kept so Compose cleanup can be retried."
+    return "$compose_status"
   fi
 
   if rm -rf "$PROFILE_DIR"; then
