@@ -33,6 +33,46 @@ func freshAgentEnvSetCmd() *cobra.Command {
 	return c
 }
 
+func setDaemonTaskContextSearch(t *testing.T, root, ceiling string) {
+	t.Helper()
+
+	previousRoot := daemonTaskContextSearchRoot
+	previousCeiling := daemonTaskContextSearchCeiling
+	daemonTaskContextSearchRoot = func() (string, error) { return root, nil }
+	daemonTaskContextSearchCeiling = func() string { return ceiling }
+	t.Cleanup(func() {
+		daemonTaskContextSearchRoot = previousRoot
+		daemonTaskContextSearchCeiling = previousCeiling
+	})
+}
+
+func TestDaemonTaskContextSearchCeilingBlocksTMPDIRAncestorMarker(t *testing.T) {
+	ambientRoot := t.TempDir()
+	markerPath := filepath.Join(ambientRoot, execenv.TaskContextMarkerRelPath)
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o755); err != nil {
+		t.Fatalf("create ambient marker dir: %v", err)
+	}
+	marker := []byte(`{"managed_by":"` + execenv.TaskContextMarkerManagedBy + `"}`)
+	if err := os.WriteFile(markerPath, marker, 0o644); err != nil {
+		t.Fatalf("write ambient marker: %v", err)
+	}
+
+	tmpRoot := filepath.Join(ambientRoot, "audit-tmp")
+	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
+		t.Fatalf("create nested TMPDIR: %v", err)
+	}
+	t.Setenv("TMPDIR", tmpRoot)
+	isolationRoot, err := os.MkdirTemp("", "multica-cli-test-marker-root-")
+	if err != nil {
+		t.Fatalf("create isolation root: %v", err)
+	}
+
+	setDaemonTaskContextSearch(t, isolationRoot, isolationRoot)
+	if got := daemonTaskContextMarkerPath(); got != "" {
+		t.Fatalf("daemonTaskContextMarkerPath() = %q, want empty; search crossed test ceiling to %q", got, markerPath)
+	}
+}
+
 func chdirWithDaemonTaskMarker(t *testing.T) {
 	t.Helper()
 
@@ -61,6 +101,7 @@ func chdirWithDaemonTaskMarker(t *testing.T) {
 	if err := os.Chdir(nested); err != nil {
 		t.Fatalf("chdir nested: %v", err)
 	}
+	setDaemonTaskContextSearch(t, nested, "")
 	t.Cleanup(func() {
 		if err := os.Chdir(prev); err != nil {
 			t.Fatalf("restore cwd: %v", err)
@@ -178,6 +219,7 @@ func TestNewAPIClient_WorkdirParentEscapeFailsClosed(t *testing.T) {
 	if err := os.Chdir(taskDir); err != nil {
 		t.Fatalf("chdir task dir: %v", err)
 	}
+	setDaemonTaskContextSearch(t, taskDir, "")
 	t.Cleanup(func() {
 		if err := os.Chdir(prev); err != nil {
 			t.Fatalf("restore cwd: %v", err)
@@ -412,6 +454,7 @@ func TestResolveToken_AgentContextSkipsConfig(t *testing.T) {
 		if err := os.Chdir(nested); err != nil {
 			t.Fatalf("chdir nested: %v", err)
 		}
+		setDaemonTaskContextSearch(t, nested, workDir)
 		t.Cleanup(func() {
 			if err := os.Chdir(prev); err != nil {
 				t.Fatalf("restore cwd: %v", err)

@@ -96,6 +96,7 @@ makehelp: help ## Alias for `make help`
 ##@ Self-hosting
 
 selfhost: ## Create .env if needed, then pull and start the official self-hosted images
+	@bash scripts/require-compose-identity.sh "$(ENV_FILE)"
 	$(REQUIRE_COMPOSE)
 	@if [ ! -f .env ]; then \
 		echo "==> Creating .env from .env.example..."; \
@@ -129,6 +130,7 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 	@bash scripts/selfhost-wait.sh official
 
 selfhost-build: ## Build backend/web from the current checkout and start the self-hosted stack
+	@bash scripts/require-compose-identity.sh "$(ENV_FILE)"
 	$(REQUIRE_COMPOSE)
 	@if [ ! -f .env ]; then \
 		echo "==> Creating .env from .env.example..."; \
@@ -154,6 +156,7 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 	@bash scripts/selfhost-wait.sh build
 
 selfhost-stop: ## Stop the self-hosted Docker Compose stack
+	@bash scripts/require-compose-identity.sh "$(ENV_FILE)"
 	$(REQUIRE_COMPOSE)
 	@echo "==> Stopping Multica services..."
 	$(COMPOSE) -f docker-compose.selfhost.yml down
@@ -250,9 +253,11 @@ check: ## Run typecheck, TS tests, Go tests, and Playwright E2E for the current 
 	@ENV_FILE="$(ENV_FILE)" bash scripts/check.sh
 
 db-up: ## Start the shared PostgreSQL container used by main and worktrees
+	@bash scripts/require-compose-identity.sh "$(ENV_FILE)"
 	@$(COMPOSE) up -d postgres
 
 db-down: ## Stop the shared PostgreSQL container without removing its Docker volume
+	@bash scripts/require-compose-identity.sh "$(ENV_FILE)"
 	@$(COMPOSE) down
 
 db-drop: ## Permanently drop the current env's local database after confirmation

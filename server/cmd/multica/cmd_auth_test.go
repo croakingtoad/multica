@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +26,21 @@ func TestMain(m *testing.M) {
 	} {
 		os.Unsetenv(key)
 	}
-	os.Exit(m.Run())
+
+	markerRoot, err := os.MkdirTemp("", "multica-cli-test-marker-root-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create isolated daemon marker root: %v\n", err)
+		os.Exit(1)
+	}
+	daemonTaskContextSearchRoot = func() (string, error) { return markerRoot, nil }
+	daemonTaskContextSearchCeiling = func() string { return markerRoot }
+
+	code := m.Run()
+	if err := os.RemoveAll(markerRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "remove isolated daemon marker root: %v\n", err)
+		code = 1
+	}
+	os.Exit(code)
 }
 
 // testCmd returns a minimal cobra.Command with the --profile persistent flag

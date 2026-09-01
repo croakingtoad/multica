@@ -152,11 +152,18 @@ load_manifest() {
   [ -f "$file" ] || return 1
   POSTGRES_PORT=""
   COMPOSE_PROJECT_NAME=""
+  MANIFEST_COMPOSE_PROJECT_WAS_EMPTY=0
   # shellcheck disable=SC1090
   . "$file"
   POSTGRES_PORT="${POSTGRES_PORT:-$inherited_postgres_port}"
   COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
   [ "$NAME" = "$1" ] || die "Manifest $file declares NAME=$NAME; expected $1."
+  if [ -z "$COMPOSE_PROJECT_NAME" ]; then
+    MANIFEST_COMPOSE_PROJECT_WAS_EMPTY=1
+    if [ "${OWNER:-}" = human ]; then
+      COMPOSE_PROJECT_NAME="$(compose_project_for_dir "$DIR")"
+    fi
+  fi
 }
 
 # Prints nothing (and succeeds) for a missing manifest or key: callers compare
@@ -224,6 +231,17 @@ port_free() { [ -z "$(port_listener_pid "$1")" ]; }
 postgres_port_for_offset() { printf '%s' $((25432 + $1)); }
 
 compose_project_for_name() { printf 'multica_%s' "$1"; }
+
+# Compose normalizes its implicit directory-derived project name by lowercasing,
+# discarding unsupported characters, and trimming leading dashes/underscores.
+compose_project_for_dir() {
+  local project
+  project="$(basename "$1" | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9_-]//g; s/^[-_]*//')"
+  [ -n "$project" ] \
+    || die "Cannot derive a valid Compose project name from checkout directory $1."
+  printf '%s' "$project"
+}
 
 port_bindable() {
   node -e '
@@ -445,16 +463,68 @@ redact_database_url() {
   ' "$1" 2>/dev/null || printf '<invalid>'
 }
 
+compose_postgres_system_id() {
+  [ -n "${COMPOSE_PROJECT_NAME:-}" ] || return 0
+  docker compose -p "$COMPOSE_PROJECT_NAME" exec -T postgres \
+    psql -U "${POSTGRES_USER:-multica}" -d postgres -Atqc \
+    'SELECT system_identifier::text FROM pg_control_system()' 2>/dev/null || true
+}
+
+run_postgres_probe() {
+  local mode=$1 admin_url=$2 database=$3 expected_system_id=$4 endpoint_file=$5
+  (
+    cd "$REPO_ROOT/server" && \
+      DATABASE_URL="$admin_url" POSTGRES_DB="$database" \
+      EXPECTED_SYSTEM_ID="$expected_system_id" POSTGRES_PROBE_ENDPOINT_FILE="$endpoint_file" \
+      POSTGRES_PROBE_MODE="$mode" POSTGRES_PORT="${POSTGRES_PORT:-5432}" go run ./cmd/postgres-probe
+  )
+}
+
+release_compose_project() {
+  local expected_project compose_status
+  if [ "$OWNER" = human ]; then
+    info "$NAME is human-owned; skipped shared Compose teardown."
+    return 0
+  fi
+
+  if [ -z "$COMPOSE_PROJECT_NAME" ]; then
+    info "$NAME has no Compose project recorded; skipped isolated PostgreSQL teardown."
+    return 0
+  fi
+
+  expected_project="$(compose_project_for_name "$NAME")"
+  if [ "$COMPOSE_PROJECT_NAME" != "$expected_project" ]; then
+    warn "refusing to release unexpected Compose project $COMPOSE_PROJECT_NAME (expected $expected_project)"
+    return 1
+  fi
+
+  if (cd "$REPO_ROOT" && docker compose -p "$COMPOSE_PROJECT_NAME" down --volumes); then
+    ok "released Compose project $COMPOSE_PROJECT_NAME (containers, networks and volumes)"
+    return 0
+  else
+    compose_status=$?
+  fi
+
+  warn "failed to release Compose project $COMPOSE_PROJECT_NAME (exit $compose_status)"
+  return "$compose_status"
+}
+
 rewrite_database_endpoint() {
-  local file="$REPO_ROOT/$1" port=$2 database=$3 tmp database_url escaped_database_url
+  local file="$REPO_ROOT/$1" port=$2 database=$3 compose_project=$4
+  local tmp database_url escaped_database_url escaped_compose_project
   database_url="$(database_url_with_port_and_name "${DATABASE_URL:-}" "$port" "$database")" \
     || die "The configured DATABASE_URL is not a valid PostgreSQL URL."
   escaped_database_url="$(printf '%s' "$database_url" | sed 's/[\\&|]/\\&/g')"
+  escaped_compose_project="$(printf '%s' "$compose_project" | sed 's/[\\&|]/\\&/g')"
   tmp="$(mktemp)"
   sed \
     -e "s|^POSTGRES_PORT=.*|POSTGRES_PORT=${port}|" \
     -e "s|^DATABASE_URL=.*|DATABASE_URL=${escaped_database_url}|" \
+    -e "s|^COMPOSE_PROJECT_NAME=.*|COMPOSE_PROJECT_NAME=${escaped_compose_project}|" \
     "$file" > "$tmp"
+  if ! grep -Eq '^COMPOSE_PROJECT_NAME=' "$tmp"; then
+    printf '\nCOMPOSE_PROJECT_NAME=%s\n' "$compose_project" >> "$tmp"
+  fi
   mv "$tmp" "$file"
 }
 
@@ -476,12 +546,12 @@ ensure_database() {
   local admin_url compose_system_id expected_endpoint probe_endpoint probe_endpoint_bytes probe_endpoint_value
   local probe_error probe_output probe_output_bytes probe_result probe_stdout
   [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is required to verify PostgreSQL."
+  [ -n "${COMPOSE_PROJECT_NAME:-}" ] \
+    || die "No Compose project recorded; refusing to probe or reuse PostgreSQL."
   admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
   [ -n "$admin_url" ] || die "The configured DATABASE_URL is not a valid URL."
 
-  compose_system_id="$(docker compose exec -T postgres \
-    psql -U "${POSTGRES_USER:-multica}" -d postgres -Atqc \
-    'SELECT system_identifier::text FROM pg_control_system()' 2>/dev/null || true)"
+  compose_system_id="$(compose_postgres_system_id)"
   probe_error="$(mktemp)"
   probe_stdout="$(mktemp)"
   probe_endpoint="$(mktemp)"
@@ -490,12 +560,8 @@ ensure_database() {
   # "nothing-listening" token means its TCP connection was refused, positively
   # establishing that nothing owns the Compose endpoint. Authentication,
   # timeout, DNS, build, endpoint and identity failures all abort instead.
-  if (
-    cd "$REPO_ROOT/server" && \
-      DATABASE_URL="$admin_url" POSTGRES_DB="$POSTGRES_DB" \
-      EXPECTED_SYSTEM_ID="$compose_system_id" POSTGRES_PROBE_ENDPOINT_FILE="$probe_endpoint" \
-      go run ./cmd/postgres-probe >"$probe_stdout" 2>"$probe_error"
-  ); then
+  if run_postgres_probe ensure "$admin_url" "$POSTGRES_DB" "$compose_system_id" "$probe_endpoint" \
+    >"$probe_stdout" 2>"$probe_error"; then
     probe_output="$(cat "$probe_stdout")"
     probe_output_bytes="$(wc -c < "$probe_stdout")"
     probe_result="$(printf '%s\n' "$probe_output" | sed -n '1p')"
@@ -1288,8 +1354,11 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
         || die "PostgreSQL port $isolated_postgres_port is already published, listening, or cannot bind on 127.0.0.1."
       POSTGRES_PORT="$isolated_postgres_port"
       COMPOSE_PROJECT_NAME="$(compose_project_for_name "$NAME")"
-      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
       DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
+      save_manifest
+    elif [ "$OWNER" = human ] && [ "$MANIFEST_COMPOSE_PROJECT_WAS_EMPTY" = 1 ]; then
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
       save_manifest
     elif [ "$lifecycle_requested" = 1 ]; then
       save_manifest
@@ -1347,8 +1416,11 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     if [ "$isolate_postgres" = 1 ]; then
       POSTGRES_PORT="${requested_postgres_port:-$(postgres_port_for_offset "$OFFSET")}"
       COMPOSE_PROJECT_NAME="$(compose_project_for_name "$NAME")"
-      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
       DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
+    else
+      COMPOSE_PROJECT_NAME="$(compose_project_for_dir "$REPO_ROOT")"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME" "$COMPOSE_PROJECT_NAME"
     fi
     save_manifest
     load_manifest "$NAME"
@@ -1405,6 +1477,8 @@ cmd_down() {
 
 cmd_destroy() {
   local name="" assume_yes=0 reply admin_url compose_status failures=0
+  local compose_system_id expected_endpoint probe_endpoint probe_endpoint_value
+  local probe_error probe_output probe_result
   local expected_workspaces expected_desktop_data
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1429,33 +1503,40 @@ cmd_destroy() {
     if ! stop_component "$comp"; then failures=$((failures + 1)); fi
   done
 
-  if [ -n "$COMPOSE_PROJECT_NAME" ]; then
-    if (cd "$REPO_ROOT" && docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes); then
-      ok "removed Compose project $COMPOSE_PROJECT_NAME and its volumes"
+  [ -n "$COMPOSE_PROJECT_NAME" ] \
+    || die "$NAME has no Compose project recorded; refusing to probe or drop $DB_NAME. Its manifest and other resources were kept."
+
+  admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
+  [ -n "$admin_url" ] || die "The manifest's DATABASE_URL is invalid; refusing to drop $DB_NAME. Its manifest was kept."
+  compose_system_id="$(compose_postgres_system_id)"
+  expected_endpoint="127.0.0.1:${POSTGRES_PORT:-5432}"
+  probe_endpoint="$(mktemp)"
+  probe_error="$(mktemp)"
+  if probe_output="$(run_postgres_probe destroy "$admin_url" "$DB_NAME" "$compose_system_id" "$probe_endpoint" \
+    2>"$probe_error")"; then
+    probe_result="$(printf '%s\n' "$probe_output" | sed -n '1p')"
+    if [ "$probe_result" = dropped ]; then
+      rm -f "$probe_endpoint" "$probe_error"
+      probe_output="$(printf '%s\n' "$probe_output" | sed '1d')"
+      [ -z "$probe_output" ] || info "$probe_output"
     else
-      compose_status=$?
-      warn "failed to tear down Compose project $COMPOSE_PROJECT_NAME (exit $compose_status); its manifest and slot were kept for retry"
-      return "$compose_status"
+      printf 'Unexpected database destroy probe result: %s\n' "${probe_result:-<empty>}" >> "$probe_error"
     fi
+  fi
+  if [ "${probe_result:-}" != dropped ]; then
+    probe_endpoint_value="$(cat "$probe_endpoint" 2>/dev/null || true)"
+    sed 's/^/    /' "$probe_error" >&2 || true
+    warn "Database destroy probe checked endpoint ${probe_endpoint_value:-<unverified>}; expected this environment's Compose PostgreSQL at $expected_endpoint."
+    rm -f "$probe_endpoint" "$probe_error"
+    die "Cannot verify the PostgreSQL target; refusing to drop $DB_NAME. Its manifest and other resources were kept."
+  fi
+
+  if release_compose_project; then
+    :
   else
-    info "$NAME has no Compose project recorded; skipped isolated PostgreSQL teardown."
-    if command -v psql >/dev/null 2>&1; then
-      admin_url="$(admin_database_url "$DATABASE_URL")"
-      if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-        if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
-          ok "dropped database $DB_NAME"
-        else
-          warn "failed to drop database $DB_NAME; keeping its manifest"
-          failures=$((failures + 1))
-        fi
-      else
-        warn "Nothing answered on the database host; $DB_NAME was left in place."
-        failures=$((failures + 1))
-      fi
-    else
-      warn "psql not found; $DB_NAME was left in place."
-      failures=$((failures + 1))
-    fi
+    compose_status=$?
+    warn "Cannot finish destroying $NAME. Its manifest and other resources were kept so Compose cleanup can be retried."
+    return "$compose_status"
   fi
 
   if rm -rf "$PROFILE_DIR"; then
@@ -1586,6 +1667,8 @@ cmd_gc() {
       [ -n "$reason" ] || exit 0
       if [ "$dry_run" = 1 ]; then
         printf '%s would be collected: %s\n' "$NAME" "$reason"
+      elif [ "$automatic" = 1 ] && [ "$OWNER" = human ]; then
+        warn "automatic cleanup skipped human-owned environment $NAME; $reason"
       else
         printf '%s: %s\n' "$NAME" "$reason"
         if ! bash "$REPO_ROOT/scripts/dev-env.sh" destroy "$NAME" --yes; then

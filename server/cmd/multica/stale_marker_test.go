@@ -30,6 +30,7 @@ func seedMarker(t *testing.T, body string) string {
 		t.Fatalf("create nested cwd: %v", err)
 	}
 	t.Chdir(nested)
+	setDaemonTaskContextSearch(t, nested, "")
 	return markerPath
 }
 

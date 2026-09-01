@@ -34,10 +34,17 @@ func main() {
 func run() int {
 	databaseURL := os.Getenv("DATABASE_URL")
 	databaseName := os.Getenv("POSTGRES_DB")
+	probeMode := os.Getenv("POSTGRES_PROBE_MODE")
 	expectedSystemID := strings.TrimSpace(os.Getenv("EXPECTED_SYSTEM_ID"))
 	endpointFile := os.Getenv("POSTGRES_PROBE_ENDPOINT_FILE")
 	if databaseURL == "" || databaseName == "" || endpointFile == "" {
 		return fail("DATABASE_URL, POSTGRES_DB, and POSTGRES_PROBE_ENDPOINT_FILE are required", nil)
+	}
+	if probeMode == "" {
+		probeMode = "ensure"
+	}
+	if probeMode != "ensure" && probeMode != "destroy" {
+		return fail("POSTGRES_PROBE_MODE must be ensure or destroy", nil)
 	}
 
 	config, err := pgx.ParseConfig(databaseURL)
@@ -80,7 +87,18 @@ func run() int {
 		return fail("DATABASE_URL reached PostgreSQL, but this Compose project's identity could not be read", nil)
 	}
 	if reachedSystemID != expectedSystemID {
-		return fail("DATABASE_URL does not reach this Compose project's PostgreSQL", nil)
+		return fail(fmt.Sprintf("DATABASE_URL reached %s, which is not this Compose project's PostgreSQL", endpoint), nil)
+	}
+
+	if probeMode == "destroy" {
+		if _, err := conn.Exec(ctx,
+			"DROP DATABASE IF EXISTS "+quoteIdentifier(databaseName)+" WITH (FORCE)",
+		); err != nil {
+			return fail("drop development database", err)
+		}
+		fmt.Fprintln(os.Stdout, "dropped")
+		fmt.Fprintf(os.Stdout, "Dropped database %s through verified DATABASE_URL.\n", databaseName)
+		return exitSuccess
 	}
 
 	var exists bool

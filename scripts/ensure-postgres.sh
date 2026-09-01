@@ -10,6 +10,8 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+bash "$(dirname "$0")/require-compose-identity.sh" "$ENV_FILE"
+
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
@@ -77,7 +79,7 @@ if is_local; then
   echo "==> Ensuring this environment's PostgreSQL container is running on localhost:${POSTGRES_PORT:-5432}..."
   docker compose up -d postgres
 
-  echo "==> Waiting for PostgreSQL to be ready..."
+  echo "==> Waiting for PostgreSQL to be ready inside its container..."
   until docker compose exec -T postgres pg_isready -U "$POSTGRES_USER" -d postgres > /dev/null 2>&1; do
     sleep 1
   done
@@ -96,15 +98,15 @@ if is_local; then
   echo "✓ PostgreSQL ready (local Docker). Database: $POSTGRES_DB"
 else
   # ---------- Remote: skip Docker, verify connectivity ----------
-  echo "==> Remote database detected (host: $db_host). Skipping Docker."
+  echo "==> Remote database configured. Skipping Docker."
   if command -v pg_isready > /dev/null 2>&1; then
-    echo "==> Waiting for PostgreSQL at $db_host:$db_port to be ready..."
+    echo "==> Waiting for configured remote PostgreSQL to be ready..."
     until pg_isready -d "$DATABASE_URL" > /dev/null 2>&1; do
       sleep 1
     done
-    echo "✓ PostgreSQL ready (remote: $db_host:$db_port). Database: $db_name"
+    echo "✓ PostgreSQL ready (remote). Database: $db_name"
   else
-    echo "==> pg_isready not found. Skipping remote connectivity preflight."
-    echo "✓ PostgreSQL configured (remote: $db_host:$db_port). Database: $db_name"
+    echo "==> pg_isready not found. Remote connectivity was not verified."
+    echo "✓ PostgreSQL configured (remote; connectivity not verified). Database: $db_name"
   fi
 fi
