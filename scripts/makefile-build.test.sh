@@ -91,4 +91,30 @@ postgres_port="$(
 [ "$postgres_port" = 25432:25432 ] ||
   fail "POSTGRES_PORT=25432 make ... resolved to $postgres_port"
 
-echo "✓ make build names its outputs for the target platform"
+# A direct Compose target must refuse a legacy env file that carries an
+# isolated PostgreSQL port without its Compose project identity. The Docker
+# shim makes this assertion non-vacuous: reaching it records the unsafe call.
+identity_env="$probe_dir/keyless-compose.env"
+docker_marker="$probe_dir/docker-invocation"
+cat >"$identity_env" <<'EOF'
+POSTGRES_PORT=26106
+EOF
+cat >"$probe_dir/docker" <<EOF
+#!/usr/bin/env bash
+printf 'project=%s|port=%s|args=%s\n' \
+  "\${COMPOSE_PROJECT_NAME:-<unset>}" "\${POSTGRES_PORT:-<unset>}" "\$*" >"$docker_marker"
+EOF
+chmod +x "$probe_dir/docker"
+
+status=0
+identity_output="$(
+  PATH="$probe_dir:$PATH" make -s ENV_FILE="$identity_env" db-up 2>&1
+)" || status=$?
+[ "$status" -ne 0 ] || fail "db-up accepted a port-bearing env without COMPOSE_PROJECT_NAME"
+[ ! -e "$docker_marker" ] || fail "db-up reached Docker without a Compose identity: $(cat "$docker_marker")"
+grep -Fq "Refusing Compose: $identity_env carries POSTGRES_PORT but no COMPOSE_PROJECT_NAME." \
+  <<<"$identity_output" || fail "db-up refusal did not name the broken env file: $identity_output"
+grep -Fq "Remediation:" <<<"$identity_output" ||
+  fail "db-up refusal did not include a remediation command: $identity_output"
+
+echo "✓ Makefile build and Compose identity behavior verified"
