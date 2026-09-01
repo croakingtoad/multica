@@ -146,12 +146,16 @@ list_env_names() {
 
 # Loads a manifest into NAME/DIR/BACKEND_PORT/... in the caller's scope.
 load_manifest() {
-  local file
+  local file inherited_postgres_port="${POSTGRES_PORT:-5432}"
   require_env_name "$1"
   file="$(manifest_of "$1")"
   [ -f "$file" ] || return 1
+  POSTGRES_PORT=""
+  COMPOSE_PROJECT_NAME=""
   # shellcheck disable=SC1090
   . "$file"
+  POSTGRES_PORT="${POSTGRES_PORT:-$inherited_postgres_port}"
+  COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
   [ "$NAME" = "$1" ] || die "Manifest $file declares NAME=$NAME; expected $1."
 }
 
@@ -204,10 +208,44 @@ EOF
 # a function aborts the script under `set -e` when fn's last command fails, and
 # "no process is listening" is the normal answer here, not an error.
 port_listener_pid() {
-  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 || true
+  local pid=""
+  if command -v lsof >/dev/null 2>&1; then
+    pid="$(lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+  fi
+  if [ -z "$pid" ] && command -v ss >/dev/null 2>&1; then
+    pid="$(ss -H -ltnp "sport = :$1" 2>/dev/null \
+      | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1 || true)"
+  fi
+  printf '%s' "$pid"
 }
 
 port_free() { [ -z "$(port_listener_pid "$1")" ]; }
+
+postgres_port_for_offset() { printf '%s' $((25432 + $1)); }
+
+compose_project_for_name() { printf 'multica_%s' "$1"; }
+
+port_bindable() {
+  node -e '
+    const net = require("net");
+    const server = net.createServer();
+    server.once("error", () => process.exit(1));
+    server.listen({host: "127.0.0.1", port: Number(process.argv[1]), exclusive: true}, () => {
+      server.close(error => process.exit(error ? 1 : 0));
+    });
+  ' "$1" >/dev/null 2>&1
+}
+
+docker_publishes_port() {
+  local bindings
+  bindings="$(docker ps --format '{{.Ports}}' 2>/dev/null)" \
+    || die "Cannot inspect Docker port bindings; refusing to allocate PostgreSQL."
+  printf '%s\n' "$bindings" | grep -Eq "(^|[^0-9])${1}->"
+}
+
+postgres_port_free() {
+  ! docker_publishes_port "$1" && port_free "$1" && port_bindable "$1"
+}
 
 describe_port_owner() {
   local pid
@@ -274,7 +312,8 @@ EOF
 # are actually free — the registry alone cannot see a process started before
 # this tooling existed.
 allocate_offset() {
-  local dir=$1 self=${2:-} start i offset backend frontend renderer
+  local dir=$1 self=${2:-} isolate_postgres=${3:-0} requested_postgres_port=${4:-}
+  local start i offset backend frontend renderer postgres_port
   start="$(path_offset "$dir")"
   for i in $(seq 0 999); do
     offset=$(((start + i) % 1000))
@@ -285,6 +324,10 @@ allocate_offset() {
     port_free "$backend" || continue
     port_free "$frontend" || continue
     port_free "$renderer" || continue
+    if [ "$isolate_postgres" = 1 ] && [ -z "$requested_postgres_port" ]; then
+      postgres_port="$(postgres_port_for_offset "$offset")"
+      postgres_port_free "$postgres_port" || continue
+    fi
     printf '%s' "$offset"
     return 0
   done
@@ -306,13 +349,19 @@ detect_env_file() {
 }
 
 load_env_file() {
-  local root="${2:-$REPO_ROOT}"
+  local root="${2:-$REPO_ROOT}" postgres_port_override="${MULTICA_POSTGRES_PORT_OVERRIDE:-}"
   set -a
   # shellcheck disable=SC1090
   . "$root/$1"
   set +a
   # shellcheck disable=SC1091
   . "$root/scripts/local-env.sh"
+  if [ -n "$postgres_port_override" ]; then
+    POSTGRES_PORT="$postgres_port_override"
+    DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$POSTGRES_DB")" \
+      || die "The configured DATABASE_URL is not a valid PostgreSQL URL."
+    export POSTGRES_PORT DATABASE_URL
+  fi
 }
 
 # The verification code has to be in the file BEFORE the backend starts: the
@@ -360,9 +409,13 @@ rewrite_env_ports() {
 admin_database_url() {
   node -e '
     const url = new URL(process.argv[1]);
+    if (process.argv[2]) {
+      url.hostname = "127.0.0.1";
+      url.port = process.argv[2];
+    }
     url.pathname = "/postgres";
     process.stdout.write(url.toString());
-  ' "$1" 2>/dev/null || true
+  ' "$1" "${2:-}" 2>/dev/null || true
 }
 
 database_url_with_name() {
@@ -374,6 +427,37 @@ database_url_with_name() {
   ' "$1" "$2" 2>/dev/null
 }
 
+database_url_with_port_and_name() {
+  node -e '
+    const url = new URL(process.argv[1]);
+    if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") process.exit(1);
+    url.port = process.argv[2];
+    url.pathname = "/" + process.argv[3];
+    process.stdout.write(url.toString());
+  ' "$1" "$2" "$3" 2>/dev/null
+}
+
+redact_database_url() {
+  node -e '
+    const url = new URL(process.argv[1]);
+    if (url.password) url.password = "REDACTED";
+    process.stdout.write(url.toString());
+  ' "$1" 2>/dev/null || printf '<invalid>'
+}
+
+rewrite_database_endpoint() {
+  local file="$REPO_ROOT/$1" port=$2 database=$3 tmp database_url escaped_database_url
+  database_url="$(database_url_with_port_and_name "${DATABASE_URL:-}" "$port" "$database")" \
+    || die "The configured DATABASE_URL is not a valid PostgreSQL URL."
+  escaped_database_url="$(printf '%s' "$database_url" | sed 's/[\\&|]/\\&/g')"
+  tmp="$(mktemp)"
+  sed \
+    -e "s|^POSTGRES_PORT=.*|POSTGRES_PORT=${port}|" \
+    -e "s|^DATABASE_URL=.*|DATABASE_URL=${escaped_database_url}|" \
+    "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
 # Diagnoses the failure mode this whole script exists to make impossible:
 # something other than the container owns 5432, so the container never bound
 # the host port and a docker-exec create landed in the wrong server.
@@ -383,28 +467,69 @@ diagnose_database() {
   printf '\n'
   warn "The database the tooling created is not the one the application reaches."
   info "Port ${POSTGRES_PORT:-5432} is served by: ${owner:-nothing}"
-  info "DATABASE_URL: ${DATABASE_URL}"
+  info "DATABASE_URL: $(redact_database_url "$DATABASE_URL")"
   info "If that is a native PostgreSQL, the Docker container never bound the host port."
   info "Either stop it (brew services stop postgresql@17) or point DATABASE_URL at it."
 }
 
 ensure_database() {
-  local admin_url=""
-  if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
-    admin_url="$(admin_database_url "$DATABASE_URL")"
+  local admin_url compose_system_id expected_endpoint probe_endpoint probe_endpoint_bytes probe_endpoint_value
+  local probe_error probe_output probe_output_bytes probe_result probe_stdout
+  [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is required to verify PostgreSQL."
+  admin_url="$(admin_database_url "$DATABASE_URL" "${POSTGRES_PORT:-5432}")"
+  [ -n "$admin_url" ] || die "The configured DATABASE_URL is not a valid URL."
+
+  compose_system_id="$(docker compose exec -T postgres \
+    psql -U "${POSTGRES_USER:-multica}" -d postgres -Atqc \
+    'SELECT system_identifier::text FROM pg_control_system()' 2>/dev/null || true)"
+  probe_error="$(mktemp)"
+  probe_stdout="$(mktemp)"
+  probe_endpoint="$(mktemp)"
+
+  # The repo-owned pgx probe has exactly one start-safe result: the
+  # "nothing-listening" token means its TCP connection was refused, positively
+  # establishing that nothing owns the Compose endpoint. Authentication,
+  # timeout, DNS, build, endpoint and identity failures all abort instead.
+  if (
+    cd "$REPO_ROOT/server" && \
+      DATABASE_URL="$admin_url" POSTGRES_DB="$POSTGRES_DB" \
+      EXPECTED_SYSTEM_ID="$compose_system_id" POSTGRES_PROBE_ENDPOINT_FILE="$probe_endpoint" \
+      go run ./cmd/postgres-probe >"$probe_stdout" 2>"$probe_error"
+  ); then
+    probe_output="$(cat "$probe_stdout")"
+    probe_output_bytes="$(wc -c < "$probe_stdout")"
+    probe_result="$(printf '%s\n' "$probe_output" | sed -n '1p')"
+    if [ "$probe_result" = ready ]; then
+      rm -f "$probe_endpoint" "$probe_error" "$probe_stdout"
+      probe_output="$(printf '%s\n' "$probe_output" | sed '1d')"
+      [ -z "$probe_output" ] || info "$probe_output"
+      return 0
+    fi
+    expected_endpoint="127.0.0.1:${POSTGRES_PORT:-5432}"
+    probe_endpoint_value="$(cat "$probe_endpoint")"
+    probe_endpoint_bytes="$(wc -c < "$probe_endpoint")"
+    if [ "$probe_output" = nothing-listening ] \
+      && [ "$probe_output_bytes" -eq 17 ] \
+      && [ "$probe_endpoint_value" = "$expected_endpoint" ] \
+      && [ "$probe_endpoint_bytes" -eq "${#expected_endpoint}" ]; then
+      sed 's/^/    /' "$probe_error"
+      rm -f "$probe_endpoint" "$probe_error" "$probe_stdout"
+      info "Nothing is listening on ${POSTGRES_PORT:-5432}; starting this environment's Compose PostgreSQL."
+      bash "$REPO_ROOT/scripts/ensure-postgres.sh" "$ENV_FILE" | sed 's/^/    /'
+      return 0
+    fi
+    if [ "$probe_output" = nothing-listening ] && [ "$probe_output_bytes" -eq 17 ]; then
+      printf 'Database probe checked endpoint %s; expected %s.\n' \
+        "$probe_endpoint_value" "$expected_endpoint" >> "$probe_error"
+    else
+      printf 'Unexpected database probe result: %s\n' "${probe_result:-<empty>}" >> "$probe_error"
+    fi
   fi
 
-  # Preferred path: create through the same connection string the application
-  # uses, so "created" and "reachable" cannot describe two different servers.
-  if [ -n "$admin_url" ] && PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-    if ! PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1; then
-      psql "$admin_url" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${POSTGRES_DB}\"" >/dev/null
-      info "Created database ${POSTGRES_DB} through DATABASE_URL."
-    fi
-  else
-    info "Nothing is answering on ${POSTGRES_PORT:-5432} yet; starting the shared container."
-    bash "$REPO_ROOT/scripts/ensure-postgres.sh" "$ENV_FILE" | sed 's/^/    /'
-  fi
+  sed 's/^/    /' "$probe_error" >&2 || true
+  rm -f "$probe_endpoint" "$probe_error" "$probe_stdout"
+  diagnose_database || true
+  die "Cannot verify PostgreSQL on ${POSTGRES_PORT:-5432}; refusing to start or reuse a Compose service."
 }
 
 migrate_database() {
@@ -481,6 +606,19 @@ process_group_id() {
   ps -p "$1" -o pgid= 2>/dev/null | tr -d ' ' || true
 }
 
+process_descends_from() {
+  local child=$1 ancestor=$2 parent hops=0
+  while [ -n "$child" ] && [ "$child" != 1 ] && [ "$hops" -lt 64 ]; do
+    parent="$(ps -p "$child" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+    [ -n "$parent" ] || return 1
+    [ "$parent" = "$ancestor" ] && return 0
+    [ "$parent" != "$child" ] || return 1
+    child="$parent"
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
 listener_belongs_to_component() {
   local component=$1 port=$2 launcher listener recorded
   launcher="$(component_pid "$component" || true)"
@@ -488,7 +626,8 @@ listener_belongs_to_component() {
   [ -n "$launcher" ] && [ -n "$listener" ] || return 1
   recorded="$(cat "$(listener_pid_file "$component")" 2>/dev/null || true)"
   [ -n "$recorded" ] && [ "$listener" = "$recorded" ] && return 0
-  [ "$(process_group_id "$listener")" = "$launcher" ]
+  [ "$(process_group_id "$listener")" = "$launcher" ] \
+    || process_descends_from "$listener" "$launcher"
 }
 
 health_belongs_to_api() {
@@ -553,15 +692,19 @@ Run 'make down' here first — a leftover instance answers /health with 200 and 
 
 start_web() {
   local waited=0 listener
-  if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1 \
-    && listener_belongs_to_component web "$FRONTEND_PORT"; then
-    ok "web already running on :$FRONTEND_PORT"
-    return 0
+  if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
+    listener="$(port_listener_pid "$FRONTEND_PORT")"
+    if listener_belongs_to_component web "$FRONTEND_PORT"; then
+      printf '%s\n' "$listener" > "$(listener_pid_file web)"
+      ok "web already running on :$FRONTEND_PORT"
+      return 0
+    fi
   fi
   if ! port_free "$FRONTEND_PORT"; then
     die "Port $FRONTEND_PORT is busy: $(describe_port_owner "$FRONTEND_PORT"). Run 'make down' here first."
   fi
 
+  rm -f "$(listener_pid_file web)"
   launch_detached web make -C "$REPO_ROOT" -s web-dev ENV_FILE="$ENV_FILE"
   info "web launching (pid $(cat "$(pid_file web)")), log: $(log_file web)"
 
@@ -570,8 +713,9 @@ start_web() {
       listener="$(port_listener_pid "$FRONTEND_PORT")"
       if ! listener_belongs_to_component web "$FRONTEND_PORT"; then
         stop_component web
-        die "Web on :$FRONTEND_PORT is not owned by the process group this environment launched."
+        die "Web on :$FRONTEND_PORT is not owned by the process tree this environment launched."
       fi
+      printf '%s\n' "$listener" > "$(listener_pid_file web)"
       ok "web serving http://localhost:$FRONTEND_PORT (pid ${listener:-?})"
       return 0
     fi
@@ -1035,6 +1179,8 @@ save_manifest() {
     write_manifest_value FRONTEND_PORT "$FRONTEND_PORT"
     write_manifest_value DB_NAME "$DB_NAME"
     write_manifest_value DATABASE_URL "$DATABASE_URL"
+    write_manifest_value POSTGRES_PORT "$POSTGRES_PORT"
+    write_manifest_value COMPOSE_PROJECT_NAME "$COMPOSE_PROJECT_NAME"
     write_manifest_value PROFILE "$PROFILE"
     write_manifest_value WORKSPACES_ROOT "$WORKSPACES_ROOT"
     write_manifest_value DESKTOP_RENDERER_PORT "$DESKTOP_RENDERER_PORT"
@@ -1046,6 +1192,7 @@ save_manifest() {
 
 cmd_up() {
   local requested="$DEFAULT_COMPONENTS" name="" owner=human ttl=0 lifecycle_requested=0 comp
+  local isolate_postgres=0 requested_postgres_port="${MULTICA_POSTGRES_PORT_OVERRIDE:-}"
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1060,6 +1207,7 @@ cmd_up() {
 
   [ -z "$name" ] || require_env_name "$name"
   [ "$ttl" = 0 ] || require_ttl "$ttl"
+  [ "$owner" != agent ] || isolate_postgres=1
 
   for comp in $requested; do
     case " $ALL_COMPONENTS " in *" $comp "*) ;; *) die "Unknown component '$comp'. Valid: $ALL_COMPONENTS" ;; esac
@@ -1123,10 +1271,27 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     load_manifest "$existing"
     NAME="$existing"
     bind_paths
+    if [ -n "$requested_postgres_port" ]; then
+      [ "$requested_postgres_port" = "$POSTGRES_PORT" ] \
+        || die "Environment $NAME already owns PostgreSQL port $POSTGRES_PORT; refusing requested port $requested_postgres_port."
+      DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
+    fi
     if [ "$lifecycle_requested" = 1 ]; then
       OWNER="$owner"
       TTL_HOURS="$ttl"
       EXPIRES_AT="$(expires_at_after_hours "$ttl")"
+    fi
+    if [ "$OWNER" = agent ] && [ -z "$COMPOSE_PROJECT_NAME" ]; then
+      local isolated_postgres_port
+      isolated_postgres_port="${requested_postgres_port:-$(postgres_port_for_offset "$OFFSET")}"
+      postgres_port_free "$isolated_postgres_port" \
+        || die "PostgreSQL port $isolated_postgres_port is already published, listening, or cannot bind on 127.0.0.1."
+      POSTGRES_PORT="$isolated_postgres_port"
+      COMPOSE_PROJECT_NAME="$(compose_project_for_name "$NAME")"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME"
+      DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
+      save_manifest
+    elif [ "$lifecycle_requested" = 1 ]; then
       save_manifest
     fi
     info "Reusing environment $NAME (ports $BACKEND_PORT/$FRONTEND_PORT, database $DB_NAME)"
@@ -1135,15 +1300,23 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     # A slot is adopted only when the registry does not hold it and both ports
     # are genuinely free; otherwise a fresh one is allocated and the env file is
     # rewritten, which is the whole point of allocating instead of computing.
-    local candidate_renderer
+    local candidate_renderer candidate_postgres_port=""
     candidate_renderer="$(renderer_port_for_offset "$offset")"
+    if [ "$isolate_postgres" = 1 ]; then
+      candidate_postgres_port="${requested_postgres_port:-$(postgres_port_for_offset "$offset")}"
+      if [ -n "$requested_postgres_port" ] && ! postgres_port_free "$requested_postgres_port"; then
+        die "Requested PostgreSQL port $requested_postgres_port is already published, listening, or cannot bind on 127.0.0.1."
+      fi
+    fi
     if [ "$PORT" -lt 18080 ] || [ "$FRONTEND_PORT" -ne $((13000 + offset)) ] \
       || offset_registered "$offset" || ! port_free "$PORT" \
-      || ! port_free "$FRONTEND_PORT" || ! port_free "$candidate_renderer"; then
+      || ! port_free "$FRONTEND_PORT" || ! port_free "$candidate_renderer" \
+      || { [ "$isolate_postgres" = 1 ] && ! postgres_port_free "$candidate_postgres_port"; }; then
       if [ "$PORT" -ge 18080 ] && { offset_registered "$offset" || ! port_free "$PORT"; }; then
         warn "Slot $offset (port $PORT) is taken: $(describe_port_owner "$PORT"). Allocating another."
       fi
-      offset="$(allocate_offset "$REPO_ROOT")" || die "No free slot left; run 'make gc' or 'make list'."
+      offset="$(allocate_offset "$REPO_ROOT" "" "$isolate_postgres" "$requested_postgres_port")" \
+        || die "No free slot left; run 'make gc' or 'make list'."
       local new_backend=$((18080 + offset)) new_frontend=$((13000 + offset))
       local new_db="multica_$(slugify "$(basename "$REPO_ROOT")")_${offset}"
       rewrite_env_ports "$ENV_FILE" "$offset" "$new_backend" "$new_frontend" "$new_db"
@@ -1170,6 +1343,13 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     OFFSET="$offset"
     BACKEND_PORT="$PORT"
     DB_NAME="$POSTGRES_DB"
+    COMPOSE_PROJECT_NAME=""
+    if [ "$isolate_postgres" = 1 ]; then
+      POSTGRES_PORT="${requested_postgres_port:-$(postgres_port_for_offset "$OFFSET")}"
+      COMPOSE_PROJECT_NAME="$(compose_project_for_name "$NAME")"
+      rewrite_database_endpoint "$ENV_FILE" "$POSTGRES_PORT" "$DB_NAME"
+      DATABASE_URL="$(database_url_with_port_and_name "$DATABASE_URL" "$POSTGRES_PORT" "$DB_NAME")"
+    fi
     save_manifest
     load_manifest "$NAME"
     ok "Registered environment $NAME"
@@ -1181,6 +1361,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
   # The manifest is the source of truth from here on; re-export so every child
   # sees the same values the registry recorded.
   export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export POSTGRES_PORT COMPOSE_PROJECT_NAME
 
   if [ ! -d "$REPO_ROOT/node_modules" ] && { component_selected web || component_selected desktop; }; then
     step "Dependencies"
@@ -1223,7 +1404,7 @@ cmd_down() {
 }
 
 cmd_destroy() {
-  local name="" assume_yes=0 reply admin_url failures=0
+  local name="" assume_yes=0 reply admin_url compose_status failures=0
   local expected_workspaces expected_desktop_data
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1241,28 +1422,40 @@ cmd_destroy() {
   fi
 
   export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export POSTGRES_PORT COMPOSE_PROJECT_NAME
   step "Destroying $NAME"
   local comp
   for comp in $ALL_COMPONENTS; do
     if ! stop_component "$comp"; then failures=$((failures + 1)); fi
   done
 
-  if command -v psql >/dev/null 2>&1; then
-    admin_url="$(admin_database_url "$DATABASE_URL")"
-    if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-      if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
-        ok "dropped database $DB_NAME"
+  if [ -n "$COMPOSE_PROJECT_NAME" ]; then
+    if (cd "$REPO_ROOT" && docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes); then
+      ok "removed Compose project $COMPOSE_PROJECT_NAME and its volumes"
+    else
+      compose_status=$?
+      warn "failed to tear down Compose project $COMPOSE_PROJECT_NAME (exit $compose_status); its manifest and slot were kept for retry"
+      return "$compose_status"
+    fi
+  else
+    info "$NAME has no Compose project recorded; skipped isolated PostgreSQL teardown."
+    if command -v psql >/dev/null 2>&1; then
+      admin_url="$(admin_database_url "$DATABASE_URL")"
+      if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
+        if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
+          ok "dropped database $DB_NAME"
+        else
+          warn "failed to drop database $DB_NAME; keeping its manifest"
+          failures=$((failures + 1))
+        fi
       else
-        warn "failed to drop database $DB_NAME; keeping its manifest"
+        warn "Nothing answered on the database host; $DB_NAME was left in place."
         failures=$((failures + 1))
       fi
     else
-      warn "Nothing answered on the database host; $DB_NAME was left in place."
+      warn "psql not found; $DB_NAME was left in place."
       failures=$((failures + 1))
     fi
-  else
-    warn "psql not found; $DB_NAME was left in place."
-    failures=$((failures + 1))
   fi
 
   if rm -rf "$PROFILE_DIR"; then

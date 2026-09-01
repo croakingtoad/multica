@@ -17,6 +17,17 @@ export MULTICA_DEV_PROFILES_HOME="$tmp_dir/profiles"
 
 fake_bin="$tmp_dir/bin"
 mkdir -p "$fake_bin"
+docker_log="$tmp_dir/docker.log"
+export DOCKER_LOG="$docker_log"
+cat > "$fake_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'project=%s port=%s args=%s\n' \
+  "${COMPOSE_PROJECT_NAME:-<unset>}" "${POSTGRES_PORT:-<unset>}" "$*" >> "$DOCKER_LOG"
+if [ "${FAIL_COMPOSE_DOWN:-0}" = 1 ]; then
+  echo "simulated Compose teardown failure" >&2
+  exit 42
+fi
+EOF
 cat > "$fake_bin/psql" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
@@ -24,7 +35,7 @@ case " $* " in
   *) printf '1\n' ;;
 esac
 EOF
-chmod +x "$fake_bin/psql"
+chmod +x "$fake_bin/docker" "$fake_bin/psql"
 export PATH="$fake_bin:$PATH"
 
 fail() {
@@ -47,7 +58,7 @@ dev_env() {
 }
 
 write_manifest() {
-  local name=$1 dir=$2 offset=$3
+  local name=$1 dir=$2 offset=$3 compose_project=${4:-} postgres_port=${5:-}
   local profile="dev-dev-env-test-$offset"
   mkdir -p "$MULTICA_DEV_HOME/envs/$name/logs"
   cat > "$MULTICA_DEV_HOME/envs/$name/manifest.env" <<EOF
@@ -67,6 +78,12 @@ WORKSPACES_ROOT=$(printf '%q' "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces
 DESKTOP_RENDERER_PORT=$((5174 + offset))
 DESKTOP_APP_SUFFIX=$name
 EOF
+  if [ -n "$compose_project" ]; then
+    cat >> "$MULTICA_DEV_HOME/envs/$name/manifest.env" <<EOF
+COMPOSE_PROJECT_NAME=$compose_project
+POSTGRES_PORT=$postgres_port
+EOF
+  fi
 }
 
 out="$tmp_dir/out"
@@ -112,6 +129,145 @@ rewritten="$(bash -c 'source "$1"; database_url_with_name "$2" "$3"' _ \
   'new_db')"
 [ "$rewritten" = 'postgres://dev:p%40ss@127.0.0.1:55432/new_db?sslmode=require&application_name=dev' ] \
   || fail "database URL rewrite changed more than the database name: $rewritten"
+
+isolated_settings="$(bash -c '
+  source "$1"
+  printf "%s|%s|%s" \
+    "$(postgres_port_for_offset 321)" \
+    "$(compose_project_for_name ephemeral-321)" \
+    "$(database_url_with_port_and_name "$2" 25753 dev_db)"
+' _ "$root_dir/scripts/dev-env.sh" \
+  'postgres://dev:p%40ss@127.0.0.1:5432/old_db?sslmode=require')"
+[ "$isolated_settings" = '25753|multica_ephemeral-321|postgres://dev:p%40ss@127.0.0.1:25753/dev_db?sslmode=require' ] \
+  || fail "ephemeral PostgreSQL settings were not derived together: $isolated_settings"
+
+redacted="$(bash -c 'source "$1"; redact_database_url "$2"' _ \
+  "$root_dir/scripts/dev-env.sh" 'postgres://dev:real-secret@127.0.0.1:5432/dev')"
+case "$redacted" in
+  *real-secret*) fail "database URL diagnostics exposed the password" ;;
+  'postgres://dev:REDACTED@127.0.0.1:5432/dev') ;;
+  *) fail "database URL redaction returned $redacted" ;;
+esac
+
+# A pgx probe is mandatory even when neither host PostgreSQL client is on PATH.
+# Only its dedicated "connection refused" result may enter the Compose fallback;
+# authentication, timeout, build and unknown failures all fail closed.
+probe_root="$tmp_dir/probe-root"
+probe_bin="$tmp_dir/probe-bin"
+fallback_marker="$tmp_dir/ensure-postgres-called"
+mkdir -p "$probe_root/scripts" "$probe_root/server" "$probe_bin"
+cat > "$probe_bin/go" <<'EOF'
+#!/usr/bin/env bash
+write_probe_endpoint() {
+  [ -z "${POSTGRES_PROBE_ENDPOINT_FILE:-}" ] \
+    || printf '127.0.0.1:%s' "$POSTGRES_PORT" > "$POSTGRES_PROBE_ENDPOINT_FILE"
+}
+case "${POSTGRES_PROBE_RESULT:-failure}" in
+  refused) write_probe_endpoint; printf %s "nothing-listening" ;;
+  token-extra) write_probe_endpoint; printf 'nothing-listening\nunexpected-output' ;;
+  real)
+    cd "$POSTGRES_PROBE_SOURCE"
+    exec "$REAL_GO" run ./cmd/postgres-probe
+    ;;
+  *) echo "pgx probe could not verify the listener" >&2; exit 1 ;;
+esac
+EOF
+cat > "$probe_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+cat > "$probe_root/scripts/ensure-postgres.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s:%s\n' "\$COMPOSE_PROJECT_NAME" "\$POSTGRES_PORT" > "$fallback_marker"
+EOF
+chmod +x "$probe_bin/go" "$probe_bin/docker" "$probe_root/scripts/ensure-postgres.sh"
+
+# Give the fixture only the tools its pgx-only path needs. In particular, do
+# not inherit host PostgreSQL clients from /usr/bin: some developer machines
+# install them there and some do not.
+for tool in bash cat dirname mktemp node rm sed wc; do
+  ln -s "$(command -v "$tool")" "$probe_bin/$tool"
+done
+probe_path="$probe_bin"
+if PATH="$probe_path" command -v psql >/dev/null 2>&1 \
+  || PATH="$probe_path" command -v pg_isready >/dev/null 2>&1; then
+  fail "database guard test PATH unexpectedly contains psql or pg_isready"
+fi
+
+status=0
+PATH="$probe_path" POSTGRES_PROBE_RESULT=failure REPO_ROOT="$probe_root" \
+  DATABASE_URL='postgres://multica:wrong@127.0.0.1:25432/multica?sslmode=disable' \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "unverifiable pgx result reached the Compose fallback"
+[ ! -e "$fallback_marker" ] || fail "unverifiable pgx result started PostgreSQL"
+require_contains "$out" "pgx probe could not verify the listener"
+
+PATH="$probe_path" POSTGRES_PROBE_RESULT=refused REPO_ROOT="$probe_root" \
+  DATABASE_URL='postgres://multica:multica@127.0.0.1:25432/multica?sslmode=disable' \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 ENV_FILE=.env \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 \
+  || fail "a positively refused connection did not reach the Compose fallback"
+[ "$(cat "$fallback_marker")" = 'multica_ephemeral_321:25432' ] \
+  || fail "Compose fallback did not receive the upstream project and port"
+
+rm -f "$fallback_marker"
+status=0
+real_go="$(command -v go)"
+query_port="$(node -e '
+  const server = require("net").createServer();
+  server.listen(0, "127.0.0.1", () => {
+    process.stdout.write(String(server.address().port));
+    server.close();
+  });
+')"
+PATH="$probe_path" POSTGRES_PROBE_RESULT=real REAL_GO="$real_go" \
+  POSTGRES_PROBE_SOURCE="$root_dir/server" REPO_ROOT="$probe_root" \
+  DATABASE_URL="postgres://multica:multica@127.0.0.1:25432/multica?sslmode=disable&port=$query_port" \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 ENV_FILE=.env \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "a pgx query-port override reached the Compose fallback"
+[ ! -e "$fallback_marker" ] || fail "a refused connection on a different effective endpoint started PostgreSQL"
+
+rm -f "$fallback_marker"
+status=0
+PATH="$probe_path" POSTGRES_PROBE_RESULT=token-extra REPO_ROOT="$probe_root" \
+  DATABASE_URL='postgres://multica:multica@127.0.0.1:25432/multica?sslmode=disable' \
+  POSTGRES_DB=multica POSTGRES_PORT=25432 COMPOSE_PROJECT_NAME=multica_ephemeral_321 ENV_FILE=.env \
+  bash -c 'source "$1"; REPO_ROOT="$2"; ensure_database' _ \
+    "$root_dir/scripts/dev-env.sh" "$probe_root" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "a multi-line nothing-listening result reached the Compose fallback"
+[ ! -e "$fallback_marker" ] || fail "trailing probe output started PostgreSQL"
+
+# ensure-postgres sources the checkout env file in a subprocess. It must retain
+# the explicit Make override instead of silently restoring the file's port.
+ensure_bin="$tmp_dir/ensure-bin"
+ensure_env="$tmp_dir/ensure.env"
+ensure_port_marker="$tmp_dir/ensure-port"
+mkdir -p "$ensure_bin"
+cat > "$ensure_env" <<'EOF'
+POSTGRES_DB=multica
+POSTGRES_USER=multica
+POSTGRES_PASSWORD=multica
+POSTGRES_PORT=5432
+DATABASE_URL=postgres://multica:multica@localhost:5432/multica?sslmode=disable
+EOF
+cat > "$ensure_bin/docker" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" compose up "*) printf '%s\n' "\$POSTGRES_PORT" > "$ensure_port_marker" ;;
+  *" psql "*) printf '1\n' ;;
+esac
+EOF
+chmod +x "$ensure_bin/docker"
+PATH="$ensure_bin:$PATH" MULTICA_POSTGRES_PORT_OVERRIDE=25432 \
+  bash "$root_dir/scripts/ensure-postgres.sh" "$ensure_env" > "$out" 2>&1 \
+  || fail "ensure-postgres rejected an explicit PostgreSQL port"
+[ "$(cat "$ensure_port_marker")" = 25432 ] \
+  || fail "ensure-postgres restored the env-file PostgreSQL port"
 
 # ---------------------------------------------------------------------------
 # A registered environment is visible to both renderings, and the JSON one
@@ -174,6 +330,44 @@ if bash -c 'source "$1"; api_started_after '\''{"status":"ok"}'\'' 1' _ "$root_d
   fail "legacy /health without started_at was accepted as current"
 fi
 
+# Turbo starts its package task in a nested process group. That listener is
+# still owned by the launcher's live process tree and must be accepted, then
+# pinned by PID for safe teardown.
+descendant_pid_file="$tmp_dir/descendant-pid"
+sh -c 'setsid sh -c '\''printf %s "$$" > "$1"; sleep 30'\'' _ "$1" & wait' _ "$descendant_pid_file" &
+ancestor_pid=$!
+for _ in $(seq 1 50); do
+  [ -s "$descendant_pid_file" ] && break
+  sleep 0.02
+done
+[ -s "$descendant_pid_file" ] || fail "nested process-group fixture did not start"
+descendant_pid="$(cat "$descendant_pid_file")"
+if ! bash -c 'source "$1"; process_descends_from "$2" "$3"' _ \
+  "$root_dir/scripts/dev-env.sh" "$descendant_pid" "$ancestor_pid"; then
+  kill -TERM -"$descendant_pid" "$ancestor_pid" 2>/dev/null || true
+  fail "nested process group was not recognized as launcher-owned"
+fi
+kill -TERM -"$descendant_pid" "$ancestor_pid" 2>/dev/null || true
+wait "$ancestor_pid" 2>/dev/null || true
+
+# Some Linux lsof builds cannot enumerate an IPv6 wildcard listener even
+# though ss reports its owning PID. Listener identity must retain that fallback
+# or a healthy Next.js server is rejected as foreign.
+listener_bin="$tmp_dir/listener-bin"
+mkdir -p "$listener_bin"
+cat > "$listener_bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$listener_bin/ss" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'LISTEN 0 511 *:13691 *:* users:(("next-server",pid=4242,fd=22))'
+EOF
+chmod +x "$listener_bin/lsof" "$listener_bin/ss"
+listener_pid="$(PATH="$listener_bin:$PATH" bash -c 'source "$1"; port_listener_pid 13691' _ \
+  "$root_dir/scripts/dev-env.sh")"
+[ "$listener_pid" = 4242 ] || fail "ss listener fallback returned $listener_pid, want 4242"
+
 # ---------------------------------------------------------------------------
 # Unknown names and components fail loudly instead of doing something else.
 # ---------------------------------------------------------------------------
@@ -212,12 +406,46 @@ FAIL_DROP=1 dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || status=$?
 require_contains "$out" "manifest and slot were kept"
 dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || fail "retrying destroy after database recovery failed"
 
+# Isolated PostgreSQL teardown uses the exact manifest values, even when the
+# invoking shell carries conflicting values from another environment.
+: > "$docker_log"
+write_manifest "compose-destroy-905" "$root_dir" 905 "multica_manifest-project-905" 26555
+POSTGRES_PORT=29999 COMPOSE_PROJECT_NAME=multica_wrong-project \
+  dev_env destroy compose-destroy-905 --yes > "$out" 2>&1 \
+  || fail "isolated Compose destroy must succeed"
+require_contains "$docker_log" \
+  "project=multica_manifest-project-905 port=26555 args=compose --project-name multica_manifest-project-905 down --volumes"
+[ ! -d "$MULTICA_DEV_HOME/envs/compose-destroy-905" ] \
+  || fail "successful Compose teardown retained the manifest and slot"
+
+# A failed Compose teardown preserves its exit status and every registry value
+# needed to retry the exact same project cleanup.
+: > "$docker_log"
+write_manifest "compose-fails-906" "$root_dir" 906 "multica_manifest-project-906" 26556
+status=0
+FAIL_COMPOSE_DOWN=1 POSTGRES_PORT=29999 COMPOSE_PROJECT_NAME=multica_wrong-project \
+  dev_env destroy compose-fails-906 --yes > "$out" 2>&1 || status=$?
+[ "$status" -eq 42 ] || fail "failed Compose teardown exited $status, want 42"
+[ -f "$MULTICA_DEV_HOME/envs/compose-fails-906/manifest.env" ] \
+  || fail "failed Compose teardown discarded the manifest and slot"
+if ! bash -c 'source "$1"; offset_registered "$2"' _ \
+  "$root_dir/scripts/dev-env.sh" 906; then
+  fail "failed Compose teardown released its allocator slot"
+fi
+require_contains "$docker_log" \
+  "project=multica_manifest-project-906 port=26556 args=compose --project-name multica_manifest-project-906 down --volumes"
+require_contains "$out" "failed to tear down Compose project multica_manifest-project-906 (exit 42)"
+require_contains "$out" "manifest and slot were kept"
+dev_env destroy compose-fails-906 --yes > "$out" 2>&1 \
+  || fail "retrying destroy after Compose recovery failed"
+
 # ---------------------------------------------------------------------------
 # destroy consumes the manifest: the slot is free afterwards, which is what
 # makes the registry an allocator rather than a second place to leak.
 # ---------------------------------------------------------------------------
 dev_env destroy probe-901 --yes > "$out" 2>&1 || fail "destroy must succeed"
 [ ! -d "$MULTICA_DEV_HOME/envs/probe-901" ] || fail "destroy left the environment directory behind"
+require_contains "$out" "no Compose project recorded; skipped isolated PostgreSQL teardown"
 
 dev_env list > "$out" 2>&1 || fail "list must succeed after destroy"
 if grep -Fq "probe-901" "$out"; then

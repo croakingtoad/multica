@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ENV_FILE="${1:-.env}"
+POSTGRES_PORT_OVERRIDE="${MULTICA_POSTGRES_PORT_OVERRIDE:-}"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing env file: $ENV_FILE"
@@ -13,6 +14,11 @@ set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 set +a
+
+if [ -n "$POSTGRES_PORT_OVERRIDE" ]; then
+  POSTGRES_PORT="$POSTGRES_PORT_OVERRIDE"
+  export POSTGRES_PORT
+fi
 
 POSTGRES_DB="${POSTGRES_DB:-multica}"
 POSTGRES_USER="${POSTGRES_USER:-multica}"
@@ -68,7 +74,7 @@ is_local() {
 
 if is_local; then
   # ---------- Local: use Docker ----------
-  echo "==> Ensuring shared PostgreSQL container is running on localhost:5432..."
+  echo "==> Ensuring this environment's PostgreSQL container is running on localhost:${POSTGRES_PORT:-5432}..."
   docker compose up -d postgres
 
   echo "==> Waiting for PostgreSQL to be ready..."

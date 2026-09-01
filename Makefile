@@ -4,14 +4,30 @@ MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
 ENV_FILE ?= $(if $(wildcard $(MAIN_ENV_FILE)),$(MAIN_ENV_FILE),$(if $(wildcard $(WORKTREE_ENV_FILE)),$(WORKTREE_ENV_FILE),$(MAIN_ENV_FILE)))
 
+# Preserve an explicitly exported port across the env-file include below. Make
+# normally gives a file assignment precedence over the process environment,
+# which made `POSTGRES_PORT=25432 make up` silently publish 5432 instead.
+ifneq ($(findstring environment,$(origin POSTGRES_PORT)),)
+POSTGRES_PORT_FROM_ENV := $(POSTGRES_PORT)
+endif
+
 ifneq ($(wildcard $(ENV_FILE)),)
 include $(ENV_FILE)
 endif
+
+ifneq ($(POSTGRES_PORT_FROM_ENV),)
+override POSTGRES_PORT := $(POSTGRES_PORT_FROM_ENV)
+endif
+unexport POSTGRES_PORT_FROM_ENV
 
 POSTGRES_DB ?= multica
 POSTGRES_USER ?= multica
 POSTGRES_PASSWORD ?= multica
 POSTGRES_PORT ?= 5432
+ifneq ($(or $(findstring command,$(origin POSTGRES_PORT)),$(findstring override,$(origin POSTGRES_PORT))),)
+MULTICA_POSTGRES_PORT_OVERRIDE := $(POSTGRES_PORT)
+export MULTICA_POSTGRES_PORT_OVERRIDE
+endif
 PORT := $(or $(BACKEND_PORT),$(API_PORT),$(SERVER_PORT),$(PORT),8080)
 ifeq ($(origin MULTICA_PUBLIC_URL), undefined)
 MULTICA_PUBLIC_URL := http://localhost:$(PORT)

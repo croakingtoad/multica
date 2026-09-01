@@ -82,4 +82,13 @@ else
   echo "skipping the host-default case: no go toolchain on PATH"
 fi
 
+# A shell-exported PostgreSQL port is an explicit caller choice. The checked-in
+# env file must not silently replace it during Make's include phase.
+postgres_port="$(
+  POSTGRES_PORT=25432 make -s ENV_FILE=.env.example \
+    --eval 'print-postgres-port:;@echo $(POSTGRES_PORT):$(MULTICA_POSTGRES_PORT_OVERRIDE)' print-postgres-port
+)"
+[ "$postgres_port" = 25432:25432 ] ||
+  fail "POSTGRES_PORT=25432 make ... resolved to $postgres_port"
+
 echo "✓ make build names its outputs for the target platform"
