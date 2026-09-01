@@ -36,6 +36,7 @@ function initCore(
   onLogout?: () => void,
   cookieAuth?: boolean,
   identity?: ClientIdentity,
+  sharedStateMutationGuard?: CoreProviderProps["sharedStateMutationGuard"],
 ) {
   if (initialized) return;
 
@@ -59,6 +60,7 @@ function initCore(
       storage.removeItem("multica_token");
     },
     identity,
+    sharedStateMutationGuard,
   });
   setApiInstance(api);
   setSchemaLogger(createLogger("api-schema"));
@@ -91,14 +93,34 @@ export function CoreProvider({
   onLogin,
   onLogout,
   identity,
+  sharedStateMutationGuard,
   locale,
   resources,
   localeAdapter,
 }: CoreProviderProps) {
   // Initialize singletons on first render only. Dependencies are read-once:
   // apiBaseUrl, storage, and callbacks are set at app boot and never change at runtime.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useMemo(() => initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, identity), []);
+  useMemo(
+    () =>
+      initCore(
+        apiBaseUrl,
+        storage,
+        onLogin,
+        onLogout,
+        cookieAuth,
+        identity,
+        sharedStateMutationGuard,
+      ),
+    [
+      apiBaseUrl,
+      cookieAuth,
+      identity,
+      onLogin,
+      onLogout,
+      sharedStateMutationGuard,
+      storage,
+    ],
+  );
 
   // Client-only freeze watchdog — shared by web and desktop. No-op on the
   // server and idempotent, so mounting it here covers both apps in one place.

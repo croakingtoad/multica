@@ -1,6 +1,12 @@
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { AppCrashBoundary } from "./components/app-crash-boundary";
+import {
+  BUILD_CHANNEL,
+  BUILD_CHANNEL_CONFIG,
+  decorateWindowTitle,
+} from "../../shared/build-channel";
+import { Badge } from "@multica/ui/components/ui/badge";
 // Inter variable font covers all weights (100-900) in a single file.
 // CJK is handled by system font fallback (see globals.css --font-sans chain).
 // Keep font stack in sync with apps/web/app/layout.tsx.
@@ -24,6 +30,30 @@ import "@fontsource-variable/source-serif-4/wght-italic.css";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
 
+// Brand the native window before React/routing mounts. Route and dynamic page
+// titles use the same decorator, but startup and fatal-config screens may be
+// visible before either of those effects runs.
+document.title = decorateWindowTitle(
+  document.title,
+  BUILD_CHANNEL_CONFIG.titlePrefix,
+  BUILD_CHANNEL_CONFIG.titleFallback,
+);
+
+function DevChannelIndicator() {
+  if (BUILD_CHANNEL !== "dev") return null;
+
+  const left = /Mac/.test(navigator.platform) ? "left-24" : "left-3";
+  return (
+    <Badge
+      aria-label="Development channel"
+      className={`pointer-events-none fixed top-3 ${left} z-50 select-none`}
+      variant="warning"
+    >
+      DEV
+    </Badge>
+  );
+}
+
 // react-grab: dev-only element inspector. Hold ⌘C (Mac) / Ctrl+C and click any
 // element to copy its source path + line + component stack for pasting to an AI.
 // Opt-in per developer: only loads when VITE_REACT_GRAB is set in a local,
@@ -39,7 +69,10 @@ if (import.meta.env.DEV && import.meta.env.VITE_REACT_GRAB) {
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <AppCrashBoundary>
-    <App />
-  </AppCrashBoundary>,
+  <>
+    <DevChannelIndicator />
+    <AppCrashBoundary>
+      <App />
+    </AppCrashBoundary>
+  </>,
 );

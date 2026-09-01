@@ -52,9 +52,17 @@ import {
   isAuthStatusError,
   type AuthProbeResult,
 } from "./daemon-auth-probe";
+import { BUILD_CHANNEL_CONFIG } from "../shared/build-channel";
+import { daemonPrefsConfig } from "./daemon-prefs";
 
 const POLL_INTERVAL_MS = 5_000;
-const PREFS_PATH = join(homedir(), ".multica", "desktop_prefs.json");
+const { path: PREFS_PATH, defaults: DEFAULT_PREFS } = daemonPrefsConfig(
+  homedir(),
+  {
+    filename: BUILD_CHANNEL_CONFIG.daemonPrefsFilename,
+    autoStart: BUILD_CHANNEL_CONFIG.daemonAutoStart,
+  },
+);
 const LOG_TAIL_RETRY_MS = 2_000;
 const LOG_TAIL_MAX_RETRIES = 5;
 // How long a start may sit in "starting" (with no /health) before we probe the
@@ -73,8 +81,6 @@ const HEALTH_PROBE_TIMEOUT_MS = 2_000;
 // Five times the UI probe and equal to the auth-probe grace: a daemon that
 // misses this second independent window is no longer treated as merely busy.
 const RECOVERY_HEALTH_PROBE_TIMEOUT_MS = 10_000;
-
-const DEFAULT_PREFS: DaemonPrefs = { autoStart: true, autoStop: false };
 
 // Always a resolved Desktop-owned profile. "Not resolved yet" is represented by
 // `null` at every call site, never by an empty name — see daemon-profile.ts.
@@ -274,7 +280,10 @@ async function resolveActiveProfile(): Promise<ActiveProfile | null> {
   const target = targetApiBaseUrl;
   if (!target) return null;
 
-  const name = deriveProfileName(target);
+  const name = deriveProfileName(
+    target,
+    BUILD_CHANNEL_CONFIG.daemonProfileSuffix,
+  );
   const cfg = await readProfileConfig(name);
 
   if (cfg.server_url !== target) {

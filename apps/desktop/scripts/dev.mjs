@@ -25,6 +25,7 @@ applyWorktreeDevEnv(process.env, {
   root: repoRootFromScriptDir(here),
   log: true,
 });
+process.env.MULTICA_SHARED_STATE_COMPAT ??= "stable";
 
 function run(command, args, { shell = false, env = process.env } = {}) {
   const result = spawnSync(command, args, {
