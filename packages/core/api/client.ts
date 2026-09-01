@@ -1,4 +1,5 @@
 import { configStore } from "../config";
+import { PLAN_WRITE_METHODS, planWriteRoutes } from "../project-plan/write-routes";
 import type {
   Issue,
   IssuePriority,
@@ -104,6 +105,14 @@ import type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
   ProjectPlanOverview,
+  CreateManualProjectPlanRequest,
+  UpdateProjectPlanRequest,
+  SupersedeProjectPlanRequest,
+  CreateProjectPlanPhaseRequest,
+  UpdateProjectPlanPhaseRequest,
+  CreateProjectPlanPartRequest,
+  UpdateProjectPlanPartRequest,
+  ReorderProjectPlanRequest,
   Label,
   IssueProperty,
   IssuePropertyValue,
@@ -3643,6 +3652,166 @@ export class ApiClient {
       throw new Error(`GET /api/projects/{id}/plans/{planId}: response failed schema validation`);
     }
     return parsed.data;
+  }
+
+  // Project plan writes (LOCO-591). Every path and verb below comes from
+  // `planWriteRoutes` / `PLAN_WRITE_METHODS` — there is deliberately not one
+  // URL literal in this block, so re-pointing the client at Slice A's real
+  // route table is a one-file edit (see project-plan/write-routes.ts).
+  //
+  // These all resolve to `void`: the mutation hooks invalidate the plan
+  // overview query and re-read, rather than reconciling a write response whose
+  // shape Slice A has not pinned. Nothing here invents a response body.
+
+  async createManualProjectPlan(
+    projectId: string,
+    data: CreateManualProjectPlanRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.createPlan(projectId), {
+      method: PLAN_WRITE_METHODS.createPlan,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateProjectPlan(
+    projectId: string,
+    planId: string,
+    data: UpdateProjectPlanRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.updatePlan(projectId, planId), {
+      method: PLAN_WRITE_METHODS.updatePlan,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async supersedeProjectPlan(
+    projectId: string,
+    planId: string,
+    data: SupersedeProjectPlanRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.supersedePlan(projectId, planId), {
+      method: PLAN_WRITE_METHODS.supersedePlan,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteProjectPlan(projectId: string, planId: string): Promise<void> {
+    await this.fetch(planWriteRoutes.deletePlan(projectId, planId), {
+      method: PLAN_WRITE_METHODS.deletePlan,
+    });
+  }
+
+  async createProjectPlanPhase(
+    projectId: string,
+    planId: string,
+    data: CreateProjectPlanPhaseRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.addPhase(projectId, planId), {
+      method: PLAN_WRITE_METHODS.addPhase,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateProjectPlanPhase(
+    projectId: string,
+    planId: string,
+    phaseId: string,
+    data: UpdateProjectPlanPhaseRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.updatePhase(projectId, planId, phaseId), {
+      method: PLAN_WRITE_METHODS.updatePhase,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderProjectPlanPhases(
+    projectId: string,
+    planId: string,
+    data: ReorderProjectPlanRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.reorderPhases(projectId, planId), {
+      method: PLAN_WRITE_METHODS.reorderPhases,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteProjectPlanPhase(
+    projectId: string,
+    planId: string,
+    phaseId: string,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.deletePhase(projectId, planId, phaseId), {
+      method: PLAN_WRITE_METHODS.deletePhase,
+    });
+  }
+
+  async createProjectPlanPart(
+    projectId: string,
+    planId: string,
+    phaseId: string,
+    data: CreateProjectPlanPartRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.addPart(projectId, planId, phaseId), {
+      method: PLAN_WRITE_METHODS.addPart,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateProjectPlanPart(
+    projectId: string,
+    planId: string,
+    partId: string,
+    data: UpdateProjectPlanPartRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.updatePart(projectId, planId, partId), {
+      method: PLAN_WRITE_METHODS.updatePart,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderProjectPlanParts(
+    projectId: string,
+    planId: string,
+    phaseId: string,
+    data: ReorderProjectPlanRequest,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.reorderParts(projectId, planId, phaseId), {
+      method: PLAN_WRITE_METHODS.reorderParts,
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteProjectPlanPart(
+    projectId: string,
+    planId: string,
+    partId: string,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.deletePart(projectId, planId, partId), {
+      method: PLAN_WRITE_METHODS.deletePart,
+    });
+  }
+
+  async linkProjectPlanPartIssue(
+    projectId: string,
+    planId: string,
+    partId: string,
+    issueId: string,
+  ): Promise<void> {
+    // Issue id in the path, no body — Slice A's route shape.
+    await this.fetch(planWriteRoutes.linkIssue(projectId, planId, partId, issueId), {
+      method: PLAN_WRITE_METHODS.linkIssue,
+    });
+  }
+
+  async unlinkProjectPlanPartIssue(
+    projectId: string,
+    planId: string,
+    partId: string,
+    issueId: string,
+  ): Promise<void> {
+    await this.fetch(planWriteRoutes.unlinkIssue(projectId, planId, partId, issueId), {
+      method: PLAN_WRITE_METHODS.unlinkIssue,
+    });
   }
 
   // Labels

@@ -619,6 +619,111 @@
       "col_assignees": "负责人",
       "not_decomposed": "——尚未拆解——",
       "no_assignees": "——"
+    },
+    "authoring": {
+      "cancel": "取消",
+      "save": "保存",
+      "saving": "保存中…",
+      "done": "完成",
+      "rename": "重命名",
+      "move_up": "上移",
+      "move_down": "下移",
+      "edit_plan_trigger": "编辑计划",
+      "plan_menu_label": "计划操作",
+      "phase_menu_label": "阶段 {{title}} 的操作",
+      "part_menu_label": "部分 {{title}} 的操作",
+      "field": {
+        "plan_title": "计划标题",
+        "phase_title": "阶段标题",
+        "part_title": "部分标题",
+        "description": "描述",
+        "acceptance_criteria": "验收标准"
+      },
+      "create_plan": {
+        "title": "创建计划",
+        "description": "为该项目新建一个空计划，然后手动添加阶段和部分。",
+        "title_placeholder": "例如：Q3 发布计划",
+        "submit": "创建计划"
+      },
+      "edit_plan": {
+        "title": "编辑计划信息",
+        "description": "直接修改当前版本，阶段、部分和已关联的任务不受影响。"
+      },
+      "supersede": {
+        "title": "创建新版本",
+        "description": "归档版本 {{version}}，并将版本 {{next}} 设为当前计划。",
+        "consequences": "阶段、部分、任务关联和依赖关系都会复制到新版本。版本 {{version}} 仍可查看，并标记为已归档。",
+        "submit": "创建新版本",
+        "confirm_title": "确认创建新版本？"
+      },
+      "delete_plan": {
+        "title": "删除计划",
+        "description": "删除“{{title}}”及其中的所有阶段和部分？",
+        "consequences": "已关联的任务只会解除关联，任务本身不会被删除。此操作无法撤销。",
+        "submit": "删除计划"
+      },
+      "add_phase": {
+        "title": "添加阶段",
+        "description": "阶段用于把一起交付的部分归为一组。",
+        "title_placeholder": "例如：阶段 1 — 基础建设",
+        "submit": "添加阶段"
+      },
+      "edit_phase": {
+        "title": "编辑阶段",
+        "description": "只重命名该阶段，其下的部分及任务关联保持不变。"
+      },
+      "delete_phase": {
+        "title": "删除阶段",
+        "description": "删除“{{title}}”？",
+        "consequences_other": "其下的 {{count}} 个部分也会被删除，关联的任务会解除关联，任务本身不会被删除。",
+        "submit": "删除阶段",
+        "consequences_empty": "该阶段目前没有任何部分，不会影响其他内容。此操作无法撤销。"
+      },
+      "add_part": {
+        "title": "添加部分",
+        "description": "{{phase}} 中的一个部分 —— 需要由任务覆盖的一项工作。",
+        "title_placeholder": "例如：数据库结构迁移",
+        "coverage_note": "在关联任务之前，该部分会显示为“尚无任务”，既不是已完成，也不是 0%。",
+        "submit": "添加部分",
+        "trigger_label": "向 {{title}} 添加部分"
+      },
+      "edit_part": {
+        "title": "编辑部分",
+        "description": "只修改该部分自身的字段，已关联的任务不受影响。"
+      },
+      "delete_part": {
+        "title": "删除部分",
+        "description": "删除“{{title}}”？",
+        "consequences": "关联到该部分的任务只会解除关联，任务本身不会被删除。",
+        "submit": "删除部分"
+      },
+      "link_issues": {
+        "title": "关联任务",
+        "description": "覆盖“{{part}}”的任务。",
+        "linked_heading": "已关联的任务",
+        "search_heading": "从本项目中添加",
+        "search_placeholder": "搜索本项目的任务…",
+        "searching": "搜索中…",
+        "no_candidates": "本项目中没有匹配的任务。",
+        "unlink_label": "解除关联 {{identifier}}",
+        "deleted_issue": "已删除",
+        "load_failed": "无法搜索本项目的任务",
+        "load_failed_hint": "请求失败，因此该列表并不完整，不代表没有结果。",
+        "retry": "重试"
+      },
+      "error": {
+        "conflict_title": "该计划已被改动",
+        "failed_title": "保存失败",
+        "conflict": "其他人改动了该计划，请重新加载后再试。",
+        "active_plan_exists": "该项目已有一个进行中的计划。",
+        "issue_already_linked": "该任务已关联到本计划的某个部分。",
+        "not_found": "该计划条目已不存在，或该工作区已关闭项目计划功能。",
+        "not_active": "只能编辑当前生效的计划版本。",
+        "invalid": "计划服务拒绝了这些内容。",
+        "disabled": "该工作区已关闭项目计划功能。",
+        "unavailable": "请求未送达计划服务，未保存任何内容。"
+      },
+      "continue_label": "继续"
     }
   },
   "agent_live": {

@@ -20,6 +20,7 @@ import { NavigationProvider, type NavigationAdapter } from "../../../navigation"
 import { renderWithI18n } from "../../../test/i18n";
 import { PlanModePane } from "./plan-mode-pane";
 import { PlanDocumentPane } from "./plan-document-pane";
+import { PlanAuthoringProvider } from "./authoring/plan-authoring-context";
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -92,7 +93,16 @@ function renderWithProviders(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
     <QueryClientProvider client={qc}>
-      <NavigationProvider value={navigation}>{ui}</NavigationProvider>
+      <NavigationProvider value={navigation}>
+        {/* A pane rendered directly still needs the authoring provider —
+            `usePlanAuthoring` throws without one rather than silently
+            swallowing actions. `enabled: false` is the flag-off shape, which
+            renders no authoring control and so leaves this file's assertions
+            about the read presentation exactly as they were. */}
+        <PlanAuthoringProvider enabled={false} projectId="project-1" overview={null}>
+          {ui}
+        </PlanAuthoringProvider>
+      </NavigationProvider>
     </QueryClientProvider>,
   );
 }
