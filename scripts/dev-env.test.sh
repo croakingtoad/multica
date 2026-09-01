@@ -47,7 +47,7 @@ dev_env() {
 }
 
 write_manifest() {
-  local name=$1 dir=$2 offset=$3 owner=${4:-agent}
+  local name=$1 dir=$2 offset=$3 owner=${4:-agent} compose_project=${5:-}
   local profile="dev-dev-env-test-$offset"
   mkdir -p "$MULTICA_DEV_HOME/envs/$name/logs"
   cat > "$MULTICA_DEV_HOME/envs/$name/manifest.env" <<EOF
@@ -62,6 +62,8 @@ BACKEND_PORT=$((18080 + offset))
 FRONTEND_PORT=$((13000 + offset))
 DB_NAME=multica_dev_env_test_$offset
 DATABASE_URL=postgres://multica:multica@localhost:5432/multica_dev_env_test_$offset?sslmode=disable
+POSTGRES_PORT=5432
+COMPOSE_PROJECT_NAME=$compose_project
 PROFILE=$profile
 WORKSPACES_ROOT=$(printf '%q' "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces_$profile")
 DESKTOP_RENDERER_PORT=$((5174 + offset))
@@ -196,6 +198,13 @@ esac
 EOF
 cat > "$probe_bin/docker" <<'EOF'
 #!/usr/bin/env bash
+case " $* " in
+  *" compose -p "*" down --volumes "*)
+    printf '%s\n' "$*" >> "$COMPOSE_DOWN_MARKER"
+    [ "${FAIL_COMPOSE_DOWN:-0}" != 1 ]
+    exit
+    ;;
+esac
 exit 1
 EOF
 cat > "$probe_root/scripts/ensure-postgres.sh" <<EOF
@@ -452,6 +461,46 @@ PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
 [ ! -e "$MULTICA_DEV_HOME/envs/destroy-ready-908/manifest.env" ] \
   || fail "successful destroy retained its manifest"
 require_contains "$out" "Dropped database multica_dev_env_test_908 through verified DATABASE_URL."
+
+# An isolated environment owns its explicitly recorded Compose project. A
+# successful destroy must release that project's container, network and named
+# volumes before discarding the only manifest that names the target.
+compose_down_marker="$tmp_dir/compose-down-marker"
+write_manifest "destroy-compose-909" "$root_dir" 909 agent multica_destroy-compose-909
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  dev_env destroy destroy-compose-909 --yes > "$out" 2>&1 \
+  || fail "destroy did not release its isolated Compose project"
+require_contains "$compose_down_marker" "compose -p multica_destroy-compose-909 down --volumes"
+[ ! -e "$MULTICA_DEV_HOME/envs/destroy-compose-909/manifest.env" ] \
+  || fail "destroy retained the manifest after Compose teardown succeeded"
+require_contains "$out" "released Compose project multica_destroy-compose-909"
+
+# Compose teardown is part of destroy's success contract. If it fails, report
+# failure and retain the manifest so the same explicit project can be retried.
+write_manifest "destroy-compose-fails-910" "$root_dir" 910 agent multica_destroy-compose-fails-910
+status=0
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready FAIL_COMPOSE_DOWN=1 \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  dev_env destroy destroy-compose-fails-910 --yes > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "destroy succeeded after Compose teardown failed"
+[ -f "$MULTICA_DEV_HOME/envs/destroy-compose-fails-910/manifest.env" ] \
+  || fail "destroy discarded the manifest after Compose teardown failed"
+require_contains "$out" "failed to release Compose project multica_destroy-compose-fails-910"
+require_contains "$out" "manifest and other resources were kept"
+if grep -Fq "destroy-compose-fails-910 destroyed" "$out"; then
+  fail "destroy reported success after Compose teardown failed"
+fi
+
+# Automatic GC must route through the same release rather than consuming the
+# manifest while leaving the isolated Compose project behind.
+write_manifest "gc-compose-911" "$tmp_dir/deleted-gc-compose-checkout" 911 agent multica_gc-compose-911
+PATH="$probe_path" POSTGRES_PROBE_RESULT=destroy-ready \
+  POSTGRES_DROP_MARKER="$destroy_drop_marker" COMPOSE_DOWN_MARKER="$compose_down_marker" \
+  dev_env gc --auto > "$out" 2>&1 || fail "automatic gc did not release its isolated Compose project"
+require_contains "$compose_down_marker" "compose -p multica_gc-compose-911 down --volumes"
+[ ! -e "$MULTICA_DEV_HOME/envs/gc-compose-911/manifest.env" ] \
+  || fail "automatic gc retained the manifest after Compose teardown succeeded"
 
 # A failed database drop keeps the manifest and slot so cleanup can be retried;
 # destroy must never print success and forget the only deletion recipe.

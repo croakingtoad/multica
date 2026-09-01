@@ -453,6 +453,25 @@ run_postgres_probe() {
   )
 }
 
+release_compose_project() {
+  local expected_project
+  [ -n "$COMPOSE_PROJECT_NAME" ] || return 0
+
+  expected_project="$(compose_project_for_name "$NAME")"
+  if [ "$COMPOSE_PROJECT_NAME" != "$expected_project" ]; then
+    warn "refusing to release unexpected Compose project $COMPOSE_PROJECT_NAME (expected $expected_project)"
+    return 1
+  fi
+
+  if (cd "$REPO_ROOT" && docker compose -p "$COMPOSE_PROJECT_NAME" down --volumes); then
+    ok "released Compose project $COMPOSE_PROJECT_NAME (containers, networks and volumes)"
+    return 0
+  fi
+
+  warn "failed to release Compose project $COMPOSE_PROJECT_NAME"
+  return 1
+}
+
 rewrite_database_endpoint() {
   local file="$REPO_ROOT/$1" port=$2 database=$3 compose_project=$4
   local tmp database_url escaped_database_url escaped_compose_project
@@ -1443,6 +1462,10 @@ cmd_destroy() {
     warn "Database destroy probe checked endpoint ${probe_endpoint_value:-<unverified>}; expected this environment's Compose PostgreSQL at $expected_endpoint."
     rm -f "$probe_endpoint" "$probe_error"
     die "Cannot verify the PostgreSQL target; refusing to drop $DB_NAME. Its manifest and other resources were kept."
+  fi
+
+  if ! release_compose_project; then
+    die "Cannot finish destroying $NAME. Its manifest and other resources were kept so Compose cleanup can be retried."
   fi
 
   if rm -rf "$PROFILE_DIR"; then
