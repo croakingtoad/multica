@@ -8,6 +8,11 @@ afterEach(() => {
 });
 
 const okResponse = () => new Response(null, { status: 204 });
+const jsonResponse = () =>
+  new Response("{}", {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 
 describe("ApiClient shared-state mutation guard", () => {
   it("leaves every mutating method unchanged when no breaking-build guard is installed", async () => {
@@ -98,5 +103,72 @@ describe("ApiClient shared-state mutation guard", () => {
       "throwaway-one",
       "throwaway-two",
     ]);
+  });
+
+  it("blocks plugin package multipart publishing before confirmation and permits it after", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse());
+    const confirmTarget = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://sacrificial.example.test", {
+      sharedStateMutationGuard: { confirmTarget },
+    });
+    const bundle = new File(["plugin"], "plugin.zip", {
+      type: "application/zip",
+    });
+
+    await expect(
+      client.publishPluginPackage("workspace-1", bundle),
+    ).rejects.toBeInstanceOf(SharedStateMutationBlockedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await client.publishPluginPackage("workspace-1", bundle);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks attachment multipart uploading before confirmation and permits it after", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse());
+    const confirmTarget = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://sacrificial.example.test", {
+      sharedStateMutationGuard: { confirmTarget },
+    });
+    const file = new File(["attachment"], "attachment.txt", {
+      type: "text/plain",
+    });
+
+    await expect(client.uploadFile(file)).rejects.toBeInstanceOf(
+      SharedStateMutationBlockedError,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await client.uploadFile(file);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends both multipart requests unchanged on stable without setting a boundary", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://stable.example.test");
+
+    await client.publishPluginPackage(
+      "workspace-1",
+      new File(["plugin"], "plugin.zip", { type: "application/zip" }),
+    );
+    await client.uploadFile(
+      new File(["attachment"], "attachment.txt", { type: "text/plain" }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBeInstanceOf(FormData);
+      expect(init?.headers).not.toHaveProperty("Content-Type");
+    }
   });
 });

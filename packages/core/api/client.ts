@@ -755,16 +755,6 @@ export class ApiClient {
     this.options.onUnauthorized?.();
   }
 
-  private async parseErrorMessage(res: Response, fallback: string): Promise<string> {
-    try {
-      const data = await res.json() as { error?: string };
-      if (typeof data.error === "string" && data.error) return data.error;
-    } catch {
-      // Ignore non-JSON error bodies.
-    }
-    return fallback;
-  }
-
   // Reads the response body once for both human-readable error message and
   // structured fields. The Response stream can only be consumed once, so
   // both pieces have to come from a single read.
@@ -2745,23 +2735,20 @@ export class ApiClient {
    * names. This is the whole publishing path — a plugin author needs no server
    * of their own, and nothing about a published version changes afterwards.
    *
-   * Not routed through `this.fetch`, for the same reason uploadFile is not: the
-   * browser has to set the multipart boundary itself.
+   * Routed through `fetchRaw` rather than `fetch` so the browser can set the
+   * multipart boundary itself without the JSON content type.
    */
   async publishPluginPackage(workspaceId: string, bundle: File): Promise<PluginPackage> {
     const formData = new FormData();
     formData.append("bundle", bundle);
 
-    const res = await fetch(`${this.baseUrl}/api/workspaces/${workspaceId}/plugins/packages`, {
-      method: "POST",
-      headers: this.authHeaders(),
-      body: formData,
-      credentials: "include",
-    });
-    if (!res.ok) {
-      if (res.status === 401) this.handleUnauthorized();
-      throw new Error(await this.parseErrorMessage(res, `Publishing failed: ${res.status}`));
-    }
+    const res = await this.fetchRaw(
+      `/api/workspaces/${workspaceId}/plugins/packages`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
     const raw = (await res.json()) as unknown;
     return parseWithFallback(raw, PluginPackageSchema, EMPTY_PLUGIN_PACKAGE, {
       endpoint: "POST /api/workspaces/{id}/plugins/packages",
@@ -3216,26 +3203,11 @@ export class ApiClient {
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
     if (opts?.chatSessionId) formData.append("chat_session_id", opts.chatSessionId);
 
-    const rid = createRequestId();
-    const start = Date.now();
-    this.logger.info("→ POST /api/upload-file", { rid });
-
-    const res = await fetch(`${this.baseUrl}/api/upload-file`, {
+    const res = await this.fetchRaw("/api/upload-file", {
       method: "POST",
-      headers: this.authHeaders(),
       body: formData,
-      credentials: "include",
       signal,
     });
-
-    if (!res.ok) {
-      if (res.status === 401) this.handleUnauthorized();
-      const message = await this.parseErrorMessage(res, `Upload failed: ${res.status}`);
-      this.logger.error(`← ${res.status} /api/upload-file`, { rid, duration: `${Date.now() - start}ms`, error: message });
-      throw new Error(message);
-    }
-
-    this.logger.info(`← ${res.status} /api/upload-file`, { rid, duration: `${Date.now() - start}ms` });
     const raw = (await res.json()) as unknown;
     return parseWithFallback(raw, AttachmentResponseSchema, EMPTY_ATTACHMENT, {
       endpoint: "POST /api/upload-file",
