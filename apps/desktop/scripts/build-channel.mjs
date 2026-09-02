@@ -1,5 +1,6 @@
 const stable = Object.freeze({
   name: "stable",
+  packageName: "@multica/desktop",
   productName: "Multica",
   appId: "ai.multica.desktop",
   executableName: "multica-desktop",
@@ -20,6 +21,11 @@ const stable = Object.freeze({
 
 const dev = Object.freeze({
   name: "dev",
+  // A one-click NSIS install directory comes from package name, not
+  // productName. Keep this name distinct without making either channel's
+  // sanitized directory a prefix of the other: electron-builder's generated
+  // process check uses Path.StartsWith($INSTDIR) before replacing files.
+  packageName: "@multica/dev-desktop",
   productName: "Multica Dev",
   appId: "ai.multica.desktop.dev",
   executableName: "multica-desktop-dev",
@@ -86,6 +92,10 @@ export function builderConfigForChannel(channel, sharedStateCompat) {
     appId: channel.appId,
     productName: channel.productName,
     extraMetadata: {
+      // electron-builder derives one-click NSIS's APP_FILENAME (and therefore
+      // $INSTDIR) from package name. This must be channel-specific even though
+      // productName already gives the payload executable a different name.
+      name: channel.packageName,
       productName: channel.productName,
       multicaChannel: channel.name,
       multicaSharedStateCompat: sharedStateCompat,

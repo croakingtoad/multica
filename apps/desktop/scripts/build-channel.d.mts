@@ -3,6 +3,7 @@ export type SharedStateCompatibility = "stable" | "breaking";
 
 export interface BuildChannelConfig {
   readonly name: BuildChannelName;
+  readonly packageName: string;
   readonly productName: string;
   readonly appId: string;
   readonly executableName: string;

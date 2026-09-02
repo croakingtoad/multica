@@ -22,6 +22,7 @@ describe("resolveBuildChannel", () => {
 
     expect(dev).toMatchObject({
       name: "dev",
+      packageName: "@multica/dev-desktop",
       productName: "Multica Dev",
       appId: "ai.multica.desktop.dev",
       executableName: "multica-desktop-dev",
@@ -39,6 +40,7 @@ describe("resolveBuildChannel", () => {
       updatesEnabled: false,
     });
     for (const key of [
+      "packageName",
       "productName",
       "appId",
       "executableName",
@@ -101,6 +103,7 @@ describe("builderConfigForChannel", () => {
       appId: "ai.multica.desktop",
       productName: "Multica",
       extraMetadata: {
+        name: "@multica/desktop",
         productName: "Multica",
         multicaChannel: "stable",
         multicaSharedStateCompat: "stable",
@@ -129,6 +132,7 @@ describe("builderConfigForChannel", () => {
       appId: "ai.multica.desktop.dev",
       productName: "Multica Dev",
       extraMetadata: {
+        name: "@multica/dev-desktop",
         productName: "Multica Dev",
         multicaChannel: "dev",
         multicaSharedStateCompat: "breaking",
@@ -157,5 +161,19 @@ describe("builderConfigForChannel", () => {
         desktop: { entry: { StartupWMClass: "Multica Dev" } },
       },
     });
+
+    // electron-builder 26.8.1 removes the package-name slash to derive the
+    // one-click NSIS install directory. The generated installer matches and
+    // kills every process whose path starts with that directory, so neither
+    // channel's directory may equal or prefix the other.
+    const stableInstallDir = BUILD_CHANNELS.stable.packageName.replace(
+      "/",
+      "",
+    );
+    const devInstallDir = BUILD_CHANNELS.dev.packageName.replace("/", "");
+    expect(stableInstallDir).toBe("@multicadesktop");
+    expect(devInstallDir).toBe("@multicadev-desktop");
+    expect(stableInstallDir.startsWith(devInstallDir)).toBe(false);
+    expect(devInstallDir.startsWith(stableInstallDir)).toBe(false);
   });
 });
