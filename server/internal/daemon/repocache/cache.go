@@ -1110,13 +1110,19 @@ func createIsolatedCheckoutContext(ctx context.Context, barePath, repoURL, check
 		}
 	}
 
+	// The cache resolves baseCommit from refs/remotes/origin/*, while a local
+	// clone initially advertises only the cache's refs/heads/* snapshot. Fetch
+	// the tracking refs and selected base before the first checkout so every
+	// commit the resolver can select is materialized here. The forced tracking
+	// refspec intentionally accepts upstream history rewrites as well as
+	// fast-forwards.
+	if err := syncIsolatedCheckoutRefsContext(ctx, barePath, checkoutPath, baseRef); err != nil {
+		return "", err
+	}
 	if out, err := runGitCombinedOutputContext(ctx, "-C", checkoutPath, "checkout", "--detach", baseCommit); err != nil {
 		return "", fmt.Errorf("git checkout --detach: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	if err := deleteAllLocalBranchesContext(ctx, checkoutPath); err != nil {
-		return "", err
-	}
-	if err := syncIsolatedCheckoutRefsContext(ctx, barePath, checkoutPath, baseRef); err != nil {
 		return "", err
 	}
 	if out, err := runGitCombinedOutputContext(ctx, "-C", checkoutPath, "config", isolatedCheckoutConfigKey, isolatedCheckoutConfigValue); err != nil {
@@ -1215,8 +1221,8 @@ func setIsolatedCheckoutOriginContext(ctx context.Context, path, repoURL string)
 
 // syncIsolatedCheckoutRefs mirrors the cache's real origin/* and tag refs into
 // the task-local repository. It also fetches the selected base ref directly so
-// a reused checkout can move to a newly-fetched commit without depending on
-// the cache after this function returns.
+// a fresh or reused checkout can move to a newly-fetched commit without
+// depending on the cache after this function returns.
 func syncIsolatedCheckoutRefs(barePath, checkoutPath, baseRef string) error {
 	return syncIsolatedCheckoutRefsContext(context.Background(), barePath, checkoutPath, baseRef)
 }

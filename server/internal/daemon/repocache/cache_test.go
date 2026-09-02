@@ -827,6 +827,130 @@ func TestCreateWorktreeWithIsolatedGitMetadata(t *testing.T) {
 	}
 }
 
+func TestCreateIsolatedCheckoutMaterializesLaggingTrackingHead(t *testing.T) {
+	sourceRepo := createTestRepo(t)
+	runGitAuthored(t, sourceRepo, "branch", "-m", "main")
+	const defaultBranch = "main"
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	staleHead := gitRefCommit(t, barePath, "refs/heads/"+defaultBranch)
+	addEmptyCommit(t, sourceRepo, "upstream advance")
+	wantHead := gitHead(t, sourceRepo)
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("refresh sync failed: %v", err)
+	}
+
+	baseRef := "refs/remotes/origin/" + defaultBranch
+	if got := gitRefCommit(t, barePath, baseRef); got != wantHead {
+		t.Fatalf("cache tracking head = %s, want %s", got, wantHead)
+	}
+	if got := gitRefCommit(t, barePath, "refs/heads/"+defaultBranch); got != staleHead {
+		t.Fatalf("cache local head = %s, want stale snapshot %s", got, staleHead)
+	}
+
+	if os.PathSeparator == '\\' {
+		t.Skip("test git wrapper requires a POSIX shell")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("find real git: %v", err)
+	}
+	binDir := t.TempDir()
+	wrapper := filepath.Join(binDir, "git")
+	// A local clone may copy unreachable loose objects as an optimization,
+	// masking the advertised-ref boundary that production crossed. Repack the
+	// fresh clone to retain only reachable objects before checkout, which makes
+	// the failure deterministic without changing the cache being exercised.
+	wrapperScript := fmt.Sprintf(`#!/bin/sh
+real_git=%q
+"$real_git" "$@"
+status=$?
+if [ "$status" -ne 0 ]; then
+  exit "$status"
+fi
+if [ "$1" = "clone" ]; then
+  for arg do checkout_path=$arg; done
+  "$real_git" -C "$checkout_path" repack -ad
+  "$real_git" -C "$checkout_path" prune --expire=now
+fi
+`, realGit)
+	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
+		t.Fatalf("write git wrapper: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID:         "ws-1",
+		RepoURL:             sourceRepo,
+		WorkDir:             t.TempDir(),
+		AgentName:           "Linux Codex",
+		TaskID:              "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		IsolatedGitMetadata: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree from tracking head failed: %v", err)
+	}
+	if got := gitHead(t, result.Path); got != wantHead {
+		t.Fatalf("isolated checkout HEAD = %s, want tracking head %s", got, wantHead)
+	}
+}
+
+func TestCreateIsolatedCheckoutMaterializesForcePushedTrackingHead(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	runGitAuthored(t, sourceRepo, "branch", "-m", "main")
+	const defaultBranch = "main"
+	initialHead := gitHead(t, sourceRepo)
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+
+	addEmptyCommit(t, sourceRepo, "upstream commit before rewrite")
+	preRewriteHead := gitHead(t, sourceRepo)
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("pre-rewrite sync failed: %v", err)
+	}
+
+	runGitAuthored(t, sourceRepo, "reset", "--hard", initialHead)
+	addEmptyCommit(t, sourceRepo, "rewritten upstream commit")
+	wantHead := gitHead(t, sourceRepo)
+	if err := runGit("-C", sourceRepo, "merge-base", "--is-ancestor", preRewriteHead, wantHead); err == nil {
+		t.Fatalf("test setup did not rewrite history: %s is an ancestor of %s", preRewriteHead, wantHead)
+	}
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("post-rewrite sync failed: %v", err)
+	}
+
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	baseRef := "refs/remotes/origin/" + defaultBranch
+	if got := gitRefCommit(t, barePath, baseRef); got != wantHead {
+		t.Fatalf("cache tracking head after rewrite = %s, want %s", got, wantHead)
+	}
+	if got := gitRefCommit(t, barePath, "refs/heads/"+defaultBranch); got != initialHead {
+		t.Fatalf("cache local head = %s, want original snapshot %s", got, initialHead)
+	}
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID:         "ws-1",
+		RepoURL:             sourceRepo,
+		WorkDir:             t.TempDir(),
+		AgentName:           "Linux Codex",
+		TaskID:              "b1c2d3e4-f5a6-7890-bcde-f12345678901",
+		IsolatedGitMetadata: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree from force-pushed tracking head failed: %v", err)
+	}
+	if got := gitHead(t, result.Path); got != wantHead {
+		t.Fatalf("isolated checkout HEAD = %s, want rewritten tracking head %s", got, wantHead)
+	}
+}
+
 func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
