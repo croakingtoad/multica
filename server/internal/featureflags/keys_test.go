@@ -2,6 +2,7 @@ package featureflags
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/featureflag"
@@ -65,26 +66,100 @@ func TestPluginsV1DefaultsOff(t *testing.T) {
 	}
 }
 
-func TestProjectPlansDefaultsOff(t *testing.T) {
-	if ProjectPlansEnabled(context.Background(), nil) {
-		t.Fatal("project_plans must stay disabled unless explicitly enabled")
+// LOCO-878: plans are default-on with the flag retained. The route gate and
+// the frontend publication resolve their default at two separate call sites,
+// so this walks all three environment states and holds the two together — a
+// route must never serve a surface /api/config reports as off, or vice versa.
+// FF_PROJECT_PLANS=false surviving as a kill switch is the point of flipping
+// the default rather than deleting the gate.
+func TestProjectPlansEnvironmentStatesKeepBackendAndFrontendAligned(t *testing.T) {
+	t.Setenv(featureflag.EnvFlagFile, "")
+	falseValue := "false"
+	trueValue := "true"
+	tests := []struct {
+		name     string
+		envValue *string
+		want     bool
+	}{
+		{name: "unset defaults on", want: true},
+		{name: "false is kill switch", envValue: &falseValue, want: false},
+		{name: "true stays on", envValue: &trueValue, want: true},
 	}
-	publishedValue, published := EvaluateFrontendPublicFlags(context.Background(), nil)[ProjectPlans]
-	if !published {
-		t.Fatal("project_plans must be published for the frontend")
-	}
-	if publishedValue {
-		t.Fatal("published project_plans must stay disabled unless explicitly enabled")
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setOptionalEnv(t, "FF_PROJECT_PLANS", test.envValue)
+			flags, err := featureflag.NewServiceFromEnv()
+			if err != nil {
+				t.Fatalf("build feature flag service: %v", err)
+			}
+
+			backendEnabled := ProjectPlansEnabled(context.Background(), flags)
+			if backendEnabled != test.want {
+				t.Fatalf("backend project_plans = %t, want %t", backendEnabled, test.want)
+			}
+			frontendEnabled, published := EvaluateFrontendPublicFlags(context.Background(), flags)[ProjectPlans]
+			if !published {
+				t.Fatal("project_plans must be published for the frontend")
+			}
+			if frontendEnabled != backendEnabled {
+				t.Fatalf("frontend project_plans = %t, backend = %t", frontendEnabled, backendEnabled)
+			}
+		})
 	}
 }
 
-func TestProjectPlansPublishedValueTracksService(t *testing.T) {
-	provider := featureflag.NewStaticProvider()
-	provider.Set(ProjectPlans, featureflag.Rule{Default: true})
-	flags := featureflag.NewService(provider)
+// project_plans is the only default that moved. Every other published flag
+// stays off when no provider supplies a decision, and a key absent from
+// flagDefaults keeps the old fail-closed behaviour.
+func TestOnlyProjectPlansDefaultsOn(t *testing.T) {
+	published := EvaluateFrontendPublicFlags(context.Background(), nil)
+	for _, key := range frontendPublicFlags {
+		want := key == ProjectPlans
+		if published[key] != want {
+			t.Fatalf("published default for %q = %t, want %t", key, published[key], want)
+		}
+		if got := defaultFor(key); got != want {
+			t.Fatalf("defaultFor(%q) = %t, want %t", key, got, want)
+		}
+	}
+	if BillingWorkspaceSubscriptionsEnabled(context.Background(), nil) {
+		t.Fatal("billing_workspace_subscriptions must stay disabled by default")
+	}
+	if ComposioMCPAppsEnabled(context.Background(), nil) {
+		t.Fatal("composio_mcp_apps must stay disabled by default")
+	}
+	if len(flagDefaults) != 1 {
+		t.Fatalf("flagDefaults must list project_plans only, got %v", flagDefaults)
+	}
+	if defaultFor("some_flag_nobody_registered") {
+		t.Fatal("a key absent from flagDefaults must default to off")
+	}
+}
 
-	if !EvaluateFrontendPublicFlags(context.Background(), flags)[ProjectPlans] {
-		t.Fatal("published project_plans must reflect an enabled flag service")
+func setOptionalEnv(t *testing.T, key string, value *string) {
+	t.Helper()
+	previous, present := os.LookupEnv(key)
+	t.Cleanup(func() {
+		var err error
+		if present {
+			err = os.Setenv(key, previous)
+		} else {
+			err = os.Unsetenv(key)
+		}
+		if err != nil {
+			t.Errorf("restore %s: %v", key, err)
+		}
+	})
+
+	var err error
+	if value == nil {
+		err = os.Unsetenv(key)
+	} else {
+		err = os.Setenv(key, *value)
+	}
+	if err != nil {
+		t.Fatalf("set %s: %v", key, err)
 	}
 }
 

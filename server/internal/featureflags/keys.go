@@ -24,7 +24,11 @@ const (
 	// mutate an immutable execution manifest that is already in flight.
 	PluginsV1 = "plugins_v1"
 	// ProjectPlans gates the plan repository plus its read and write services.
-	// It is published for the frontend Plan views and remains off by default.
+	// It is published for the frontend Plan views and defaults ON — see
+	// flagDefaults. The key is deliberately retained rather than deleted so
+	// FF_PROJECT_PLANS=false stays an operator kill switch. Default-on is also
+	// what makes plans reachable from the self-host Compose path, which cannot
+	// pass FF_* through to the API at all.
 	ProjectPlans = "project_plans"
 	// agentBuilderCompat is no longer a release flag. Keep publishing the key
 	// as enabled so installed desktop clients that still gate the AI creation
@@ -50,26 +54,52 @@ var frontendPublicFlags = []string{
 	ProjectPlans,
 }
 
+// flagDefaults is the single source of truth for what a flag evaluates to when
+// no provider supplies a decision — no FF_<KEY> env override and no entry in
+// the MULTICA_FEATURE_FLAGS_FILE rules. An env override still beats a default,
+// which is what keeps FF_<KEY>=false working as a kill switch for a flag
+// listed here as on.
+//
+// Keys absent from the map default to false, so registering a flag leaves it
+// off until it is listed here deliberately.
+//
+// Both read paths take their default from here: the *Enabled gates below, and
+// the frontend publication in EvaluateFrontendPublicFlags. Neither writes a
+// default literal of its own, so the route gate and the /api/config payload
+// cannot drift apart — a route can never serve a surface the published config
+// reports as off, or vice versa.
+var flagDefaults = map[string]bool{
+	// Plans work without anyone setting an environment variable.
+	// FF_PROJECT_PLANS=false still turns them off.
+	ProjectPlans: true,
+}
+
+// defaultFor reports the configured fallback for a flag key. Unlisted keys are
+// off.
+func defaultFor(key string) bool {
+	return flagDefaults[key]
+}
+
 func BillingWorkspaceSubscriptionsEnabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, BillingWorkspaceSubscriptions, false)
+	return flags.IsEnabled(ctx, BillingWorkspaceSubscriptions, defaultFor(BillingWorkspaceSubscriptions))
 }
 
 func ComposioMCPAppsEnabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, ComposioMCPApps, false)
+	return flags.IsEnabled(ctx, ComposioMCPApps, defaultFor(ComposioMCPApps))
 }
 
 func PluginsV1Enabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, PluginsV1, false)
+	return flags.IsEnabled(ctx, PluginsV1, defaultFor(PluginsV1))
 }
 
 func ProjectPlansEnabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, ProjectPlans, false)
+	return flags.IsEnabled(ctx, ProjectPlans, defaultFor(ProjectPlans))
 }
 
 func EvaluateFrontendPublicFlags(ctx context.Context, flags *featureflag.Service) map[string]bool {
 	out := make(map[string]bool, len(frontendPublicFlags)+3)
 	for _, key := range frontendPublicFlags {
-		out[key] = flags.IsEnabled(ctx, key, false)
+		out[key] = flags.IsEnabled(ctx, key, defaultFor(key))
 	}
 	out[agentBuilderCompat] = true
 	out[agentSkillTogglesCompat] = true
