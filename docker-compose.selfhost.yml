@@ -104,10 +104,6 @@ services:
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
       DISABLE_WORKSPACE_CREATION: ${DISABLE_WORKSPACE_CREATION:-}
-      # Null mappings omit unset variables instead of injecting empty values
-      # that would override feature-flag files and defaults.
-      FF_PROJECT_PLANS:
-      MULTICA_FEATURE_FLAGS_FILE:
       # Managed Cloud stays off for self-hosting. All managed Cloud clients use
       # this single URL when it is configured.
       MULTICA_CLOUD_URL: ${MULTICA_CLOUD_URL:-}
