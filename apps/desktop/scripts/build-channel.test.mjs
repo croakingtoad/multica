@@ -36,6 +36,7 @@ describe("resolveBuildChannel", () => {
       linuxIcon: "build/dev/icons",
       daemonProfileSuffix: "-dev",
       daemonPrefsFilename: "desktop_prefs-dev.json",
+      runtimeConfigFilename: "desktop-dev.json",
       daemonAutoStart: false,
       updatesEnabled: false,
     });
@@ -47,9 +48,11 @@ describe("resolveBuildChannel", () => {
       "startupWmClass",
       "protocolScheme",
       "daemonPrefsFilename",
+      "runtimeConfigFilename",
     ]) {
       expect(dev[key]).not.toBe(stable[key]);
     }
+    expect(stable.runtimeConfigFilename).toBe("desktop.json");
   });
 
   it("rejects unknown channels instead of silently producing stable", () => {

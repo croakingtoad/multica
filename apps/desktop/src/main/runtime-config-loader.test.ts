@@ -1,9 +1,26 @@
 // @vitest-environment node
-import { mkdtemp, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { describe, expect, it } from "vitest";
-import { loadRuntimeConfig } from "./runtime-config-loader";
+import {
+  desktopConfigPath,
+  loadRuntimeConfig,
+} from "./runtime-config-loader";
+
+describe("desktopConfigPath", () => {
+  it("keeps the stable config path unchanged", () => {
+    expect(desktopConfigPath("C:\\Users\\Marty", "desktop.json")).toBe(
+      join("C:\\Users\\Marty", ".multica", "desktop.json"),
+    );
+  });
+
+  it("uses the channel-conventional -dev suffix for dev", () => {
+    expect(desktopConfigPath("C:\\Users\\Marty", "desktop-dev.json")).toBe(
+      join("C:\\Users\\Marty", ".multica", "desktop-dev.json"),
+    );
+  });
+});
 
 describe("loadRuntimeConfig", () => {
   it("uses dev env and ignores desktop.json during electron-vite dev", async () => {
@@ -72,6 +89,41 @@ describe("loadRuntimeConfig", () => {
         wsUrl: "wss://api.example.com/ws",
         appUrl: "https://example.com",
       },
+    });
+  });
+
+  it("reads each channel's config when both files are present", async () => {
+    const homePath = await mkdtemp(join(tmpdir(), "multica-desktop-config-"));
+    const configDir = join(homePath, ".multica");
+    const stablePath = desktopConfigPath(homePath, "desktop.json");
+    const devPath = desktopConfigPath(homePath, "desktop-dev.json");
+    await mkdir(configDir);
+    await Promise.all([
+      writeFile(
+        stablePath,
+        JSON.stringify({
+          schemaVersion: 1,
+          apiUrl: "https://stable.example.com",
+        }),
+      ),
+      writeFile(
+        devPath,
+        JSON.stringify({ schemaVersion: 1, apiUrl: "https://dev.example.com" }),
+      ),
+    ]);
+
+    const [stable, dev] = await Promise.all([
+      loadRuntimeConfig({ isDev: false, configPath: stablePath, env: {} }),
+      loadRuntimeConfig({ isDev: false, configPath: devPath, env: {} }),
+    ]);
+
+    expect(stable).toMatchObject({
+      ok: true,
+      config: { apiUrl: "https://stable.example.com" },
+    });
+    expect(dev).toMatchObject({
+      ok: true,
+      config: { apiUrl: "https://dev.example.com" },
     });
   });
 

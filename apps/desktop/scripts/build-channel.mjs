@@ -15,6 +15,7 @@ const stable = Object.freeze({
   linuxIcon: "build/icons",
   daemonProfileSuffix: "",
   daemonPrefsFilename: "desktop_prefs.json",
+  runtimeConfigFilename: "desktop.json",
   daemonAutoStart: true,
   updatesEnabled: true,
 });
@@ -40,6 +41,7 @@ const dev = Object.freeze({
   linuxIcon: "build/dev/icons",
   daemonProfileSuffix: "-dev",
   daemonPrefsFilename: "desktop_prefs-dev.json",
+  runtimeConfigFilename: "desktop-dev.json",
   daemonAutoStart: false,
   updatesEnabled: false,
 });

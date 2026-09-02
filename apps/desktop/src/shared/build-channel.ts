@@ -18,6 +18,7 @@ export interface BuildChannelConfig {
   readonly linuxIcon: string;
   readonly daemonProfileSuffix: string;
   readonly daemonPrefsFilename: string;
+  readonly runtimeConfigFilename: string;
   readonly daemonAutoStart: boolean;
   readonly updatesEnabled: boolean;
 }
