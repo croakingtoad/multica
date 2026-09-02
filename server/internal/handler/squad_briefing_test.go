@@ -415,6 +415,17 @@ func claimAndDecodeAgent(t *testing.T, runtimeID string) *TaskAgentData {
 func queueSquadIssueTaskFor(t *testing.T, squadID, agentID, runtimeID string, issueNumber int) (issueID, taskID string) {
 	t.Helper()
 	ctx := context.Background()
+
+	// The race-enabled handler suite can run longer than the claim freshness
+	// window. This fixture queues directly instead of through TaskService, so
+	// refresh the claiming runtime just as a real daemon heartbeat would before
+	// asking ClaimTaskByRuntime to dispatch the task.
+	if _, err := testPool.Exec(ctx,
+		`UPDATE agent_runtime SET last_seen_at = now() WHERE id = $1`, runtimeID,
+	); err != nil {
+		t.Fatalf("refresh claiming runtime: %v", err)
+	}
+
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO issue (
 workspace_id, title, status, priority, creator_id, creator_type,
