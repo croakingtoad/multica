@@ -124,7 +124,7 @@ export function PlanLinkIssuesDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
+        <div className="min-w-0 flex flex-col gap-3">
           <section className="flex flex-col gap-1.5">
             <h3 className="text-caption font-medium text-muted-foreground">
               {t(($) => $.plan.authoring.link_issues.linked_heading)}

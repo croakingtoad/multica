@@ -477,6 +477,30 @@ describe("a failed candidate query is not reported as an empty one (AC 7)", () =
   });
 });
 
+describe("dialog layout containment", () => {
+  it("lets the link-issues grid item shrink around long issue titles", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      getActiveProjectPlan: async () => makeOverview(),
+      listIssues: async () => ({
+        issues: [
+          makeIssue({
+            title:
+              "Publish the plans default-on commit onto the integration branch after every required verification",
+          }),
+        ],
+        total: 1,
+      }),
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Link issues" }));
+    await screen.findByText(/Publish the plans default-on commit/);
+
+    const dialogBody = screen.getByText("Linked issues").parentElement?.parentElement;
+    expect(dialogBody?.classList.contains("min-w-0")).toBe(true);
+  });
+});
+
 describe("honest error surfacing (acceptance criteria: a 409 reads as a conflict)", () => {
   it("renders a 409 as a conflict and keeps the dialog open", async () => {
     const user = userEvent.setup();
