@@ -49,6 +49,7 @@ import { ApiError, type ApiClient } from "@multica/core/api/client";
 import { configStore } from "@multica/core/config";
 import { PROJECT_PLANS_FLAG } from "@multica/core/feature-flags";
 import type { Issue, ProjectPlanOverview } from "@multica/core/types";
+import { TooltipProvider } from "@multica/ui/components/ui/tooltip";
 import { NavigationProvider, type NavigationAdapter } from "../../../navigation";
 import { renderWithI18n } from "../../../test/i18n";
 import { PlanModePane } from "./plan-mode-pane";
@@ -133,9 +134,11 @@ function renderPane(api: Partial<ApiClient>, mode: "plan_document" = "plan_docum
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
     <QueryClientProvider client={qc}>
-      <NavigationProvider value={navigation}>
-        <PlanModePane mode={mode} projectId="project-1" />
-      </NavigationProvider>
+      <TooltipProvider delay={0}>
+        <NavigationProvider value={navigation}>
+          <PlanModePane mode={mode} projectId="project-1" />
+        </NavigationProvider>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -478,6 +481,9 @@ describe("a failed candidate query is not reported as an empty one (AC 7)", () =
 });
 
 describe("dialog layout containment", () => {
+  const longTitle =
+    "Publish the plans default-on commit onto the integration branch after every required verification";
+
   it("lets the link-issues grid item shrink around long issue titles", async () => {
     const user = userEvent.setup();
     renderPane({
@@ -485,8 +491,7 @@ describe("dialog layout containment", () => {
       listIssues: async () => ({
         issues: [
           makeIssue({
-            title:
-              "Publish the plans default-on commit onto the integration branch after every required verification",
+            title: longTitle,
           }),
         ],
         total: 1,
@@ -498,6 +503,36 @@ describe("dialog layout containment", () => {
 
     const dialogBody = screen.getByText("Linked issues").parentElement?.parentElement;
     expect(dialogBody?.classList.contains("min-w-0")).toBe(true);
+  });
+
+  it("reveals the complete candidate title on pointer hover and keyboard focus", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      getActiveProjectPlan: async () => makeOverview(),
+      listIssues: async () => ({ issues: [makeIssue({ title: longTitle })], total: 1 }),
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Link issues" }));
+    const row = await screen.findByRole("button", { name: longTitle });
+
+    await user.hover(row);
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(longTitle),
+    );
+
+    await user.unhover(row);
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull(),
+    );
+
+    const search = screen.getByPlaceholderText("Search this project's issues…");
+    search.focus();
+    await user.tab();
+
+    expect(row).toHaveFocus();
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(longTitle),
+    );
   });
 });
 

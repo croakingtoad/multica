@@ -16,6 +16,11 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../../../i18n";
 import { StatusIcon } from "../../../components/status-icon";
 import { PlanWriteNotice } from "./plan-write-notice";
@@ -146,7 +151,19 @@ export function PlanLinkIssuesDialog({
                     <span className="w-16 shrink-0 text-micro text-muted-foreground tabular-nums">
                       {issue.identifier}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-caption">{issue.title}</span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        aria-label={issue.title}
+                        render={
+                          <span tabIndex={0} className="min-w-0 flex-1 truncate text-caption" />
+                        }
+                      >
+                        {issue.title}
+                      </TooltipTrigger>
+                      <TooltipContent className="whitespace-normal break-words">
+                        {issue.title}
+                      </TooltipContent>
+                    </Tooltip>
                     {issue.id && !issue.deleted ? (
                       <Button
                         type="button"
@@ -229,27 +246,39 @@ export function PlanLinkIssuesDialog({
                 <ul>
                   {selectable.map((issue) => (
                     <li key={issue.id}>
-                      <button
-                        type="button"
-                        disabled={!!pendingId}
-                        onClick={() => void run(issue.id, onLink)}
-                        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-surface-hover disabled:opacity-60 transition-colors"
-                      >
-                        <StatusIcon
-                          status={issue.status}
-                          category={issueStatusCategory(issue) ?? undefined}
-                          className="size-3.5 shrink-0"
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={issue.title}
+                              disabled={!!pendingId}
+                              onClick={() => void run(issue.id, onLink)}
+                              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-surface-hover disabled:opacity-60 transition-colors"
+                            >
+                              <StatusIcon
+                                status={issue.status}
+                                category={issueStatusCategory(issue) ?? undefined}
+                                className="size-3.5 shrink-0"
+                              />
+                              <span className="w-16 shrink-0 text-micro text-muted-foreground tabular-nums">
+                                {issue.identifier}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-caption">
+                                {issue.title}
+                              </span>
+                              {pendingId === issue.id ? (
+                                <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                              ) : (
+                                <Link2 className="size-3.5 shrink-0 text-faint-foreground" />
+                              )}
+                            </button>
+                          }
                         />
-                        <span className="w-16 shrink-0 text-micro text-muted-foreground tabular-nums">
-                          {issue.identifier}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-caption">{issue.title}</span>
-                        {pendingId === issue.id ? (
-                          <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-                        ) : (
-                          <Link2 className="size-3.5 shrink-0 text-faint-foreground" />
-                        )}
-                      </button>
+                        <TooltipContent className="whitespace-normal break-words">
+                          {issue.title}
+                        </TooltipContent>
+                      </Tooltip>
                     </li>
                   ))}
                 </ul>
