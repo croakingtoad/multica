@@ -109,8 +109,8 @@ the mention-link form instead, with the project UUID from
 Every client makes it navigable, with different presentation: web and desktop
 render a chip carrying the project's icon and current title, while mobile
 renders an ordinary link that opens the project on tap. Unlike `@agent` /
-`@squad`, it is a pure link: `util.MentionRe` does not even include `project`,
-so it enqueues nothing and notifies nobody — the same no-side-effect contract
+`@squad`, it is a pure link: nothing is parsed
+into it server-side, so it enqueues nothing and notifies nobody — the same no-side-effect contract
 as an `issue` mention.
 
 Prefer this form over pasting the project's URL. Web and desktop do unfurl a
@@ -138,4 +138,3 @@ is task-local checkout state.
 
 Project create/update/delete/status, plan authoring/linking, and project resource add/update/remove mutate durable workspace state and affect future tasks. Ask before changing `local_directory` unless the user explicitly requested that exact local path.
 
-More source-backed details: `references/projects-and-resources-source-map.md`.

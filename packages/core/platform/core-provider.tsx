@@ -29,15 +29,30 @@ import {
 let initialized = false;
 let authStore: ReturnType<typeof createAuthStore>;
 let chatStore: ReturnType<typeof createChatStore>;
-function initCore(
-  apiBaseUrl: string,
-  storage: StorageAdapter,
-  onLogin?: () => void,
-  onLogout?: () => void,
-  cookieAuth?: boolean,
-  identity?: ClientIdentity,
-  sharedStateMutationGuard?: CoreProviderProps["sharedStateMutationGuard"],
-) {
+// Named rather than positional: onLogin / onLogout / onSessionExpired are
+// three adjacent `() => void`, and nothing but the argument order would tell
+// them apart at the call site.
+interface InitCoreOptions {
+  apiBaseUrl: string;
+  storage: StorageAdapter;
+  onLogin?: () => void;
+  onLogout?: () => void;
+  onSessionExpired?: () => void;
+  cookieAuth?: boolean;
+  identity?: ClientIdentity;
+  sharedStateMutationGuard?: CoreProviderProps["sharedStateMutationGuard"];
+}
+
+function initCore({
+  apiBaseUrl,
+  storage,
+  onLogin,
+  onLogout,
+  onSessionExpired,
+  cookieAuth,
+  identity,
+  sharedStateMutationGuard,
+}: InitCoreOptions) {
   if (initialized) return;
 
   configureShortcutPlatform(
@@ -56,8 +71,17 @@ function initCore(
 
   const api = new ApiClient(apiBaseUrl, {
     logger: createLogger("api"),
+    // A 401 mid-session has to end the session, not just drop the token.
+    // Dropping it alone left the shell mounted with `user` still set, so no
+    // shell ever showed the login page and every following request went out
+    // unauthenticated — the user got a wall of "missing authorization"
+    // toasts with no way forward (MUL-7028). The store action is idempotent,
+    // so a screenful of parallel 401s is still one expiry.
+    //
+    // `authStore` is assigned a few lines below, synchronously, and this
+    // callback can only run from a request — never before boot finishes.
     onUnauthorized: () => {
-      storage.removeItem("multica_token");
+      authStore.getState().sessionExpired();
     },
     identity,
     sharedStateMutationGuard,
@@ -75,7 +99,14 @@ function initCore(
   // client reads the slug from that singleton for the X-Workspace-Slug
   // header. No boot-time hydration from storage is required.
 
-  authStore = createAuthStore({ api, storage, onLogin, onLogout, cookieAuth });
+  authStore = createAuthStore({
+    api,
+    storage,
+    onLogin,
+    onLogout,
+    onSessionExpired,
+    cookieAuth,
+  });
   registerAuthStore(authStore);
 
   chatStore = createChatStore({ storage });
@@ -92,34 +123,30 @@ export function CoreProvider({
   cookieAuth,
   onLogin,
   onLogout,
+  onSessionExpired,
   identity,
   sharedStateMutationGuard,
   locale,
   resources,
   localeAdapter,
+  syncUserLocale = true,
 }: CoreProviderProps) {
   // Initialize singletons on first render only. Dependencies are read-once:
   // apiBaseUrl, storage, and callbacks are set at app boot and never change at runtime.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useMemo(
     () =>
-      initCore(
+      initCore({
         apiBaseUrl,
         storage,
         onLogin,
         onLogout,
+        onSessionExpired,
         cookieAuth,
         identity,
         sharedStateMutationGuard,
-      ),
-    [
-      apiBaseUrl,
-      cookieAuth,
-      identity,
-      onLogin,
-      onLogout,
-      sharedStateMutationGuard,
-      storage,
-    ],
+      }),
+    [],
   );
 
   // Client-only freeze watchdog — shared by web and desktop. No-op on the
@@ -135,7 +162,6 @@ export function CoreProvider({
     <QueryProvider>
       <AuthInitializer
         onLogin={onLogin}
-        onLogout={onLogout}
         storage={storage}
         cookieAuth={cookieAuth}
         identity={identity}
@@ -162,7 +188,7 @@ export function CoreProvider({
   // the host app provides one (web layout + desktop App both do).
   const withAdapter = localeAdapter ? (
     <LocaleAdapterProvider adapter={localeAdapter}>
-      <UserLocaleSync />
+      {syncUserLocale && <UserLocaleSync />}
       {tree}
     </LocaleAdapterProvider>
   ) : (
