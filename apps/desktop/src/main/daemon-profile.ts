@@ -25,13 +25,16 @@ export function assertResolvedProfile(profile: string): void {
 // Desktop owns a dedicated CLI profile named after the target API host, so it
 // never reads or writes the user's hand-configured profiles. Profile dir:
 //   ~/.multica/profiles/desktop-<host>/
-export function deriveProfileName(targetUrl: string): string {
+export function deriveProfileName(
+  targetUrl: string,
+  channelSuffix = "",
+): string {
   try {
     const url = new URL(targetUrl);
     const host = url.host.replace(/:/g, "-").toLowerCase();
-    return `desktop-${host}`;
+    return `desktop-${host}${channelSuffix}`;
   } catch {
-    return "desktop";
+    return `desktop${channelSuffix}`;
   }
 }
 
@@ -58,6 +61,10 @@ export function profileConfigPath(profile: string): string {
 
 export function profileLogPath(profile: string): string {
   return join(profileDir(profile), "daemon.log");
+}
+
+export function profilePidPath(profile: string): string {
+  return join(profileDir(profile), "daemon.pid");
 }
 
 // Sidecar file that records which Multica user the cached PAT in config.json

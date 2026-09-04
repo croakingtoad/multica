@@ -20,6 +20,18 @@ Web is more convenient for a quick look or on a shared computer.
 
 You can be signed in to both at the same time. As long as they connect to the same Multica service, the data they show is shared.
 
+## Stable and development builds
+
+The stable and development Desktop builds can run side by side. They read the same `~/.multica/desktop.json`, so they connect to the same backend and show the same issues, agents, and workspaces.
+
+Their local app state is separate. Each build has its own sign-in token, tabs, drafts, preferences, window state, updater and crash state, and fallback CLI under its Electron `userData` directory. The development build also uses `~/.multica/desktop_prefs-dev.json` and `~/.multica/profiles/desktop-<host>-dev`; stable keeps `desktop_prefs.json` and `profiles/desktop-<host>`. The backend selector at `~/.multica/desktop.json` is the deliberate exception that stays shared. As a result, the development build starts signed out and changes to its tabs or unsent drafts do not appear in stable.
+
+Use the shared workspace for UI work and changes that keep existing API and file formats readable. Use a separate disposable workspace or backend whenever the development build changes API payload meaning, the server schema, generated workspace files, or daemon/task file formats. Do the same for any experiment that might rewrite existing data in a form the stable build has never read before.
+
+Schema drift is recognizable when stable starts rejecting or ignoring a value written by development, shows missing or malformed state, reports response parsing errors, or fails to open a generated workspace/task file. Stop using the shared target if one build works and the other begins failing immediately after the development build writes data.
+
+Development packages must declare their shared-state compatibility when they are built. A package declared `stable` writes normally. A package declared `breaking` stays read-only until you confirm the exact disposable backend/workspace in its warning; GET and HEAD still work. This guard enforces a human declaration—it does not detect schema drift automatically, because the shared data has no compatibility marker that can prove a change is safe.
+
 ## Installation
 
 Pick the installer that matches your OS and CPU architecture from the [Multica downloads page](https://multica.ai/download):

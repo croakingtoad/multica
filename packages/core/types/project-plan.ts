@@ -130,7 +130,7 @@ export interface ProjectPlanOverview {
 //   * `origin`, `source_issue_id`, and the other `source_*` columns —
 //     `CreateManual` hardcodes origin="manual" with a NULL source, which is
 //     what `project_plan_source_provenance_check`
-//     (server/migrations/441_project_plan.up.sql:45) requires. A manually
+//     (server/migrations/446_project_plan.up.sql:45) requires. A manually
 //     authored plan must never claim issue provenance, so there is no field
 //     here through which it could.
 // ---------------------------------------------------------------------------

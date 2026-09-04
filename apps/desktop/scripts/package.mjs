@@ -27,9 +27,14 @@
 // real `git describe` invocation against a throwaway repo.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  builderConfigForChannel,
+  requireSharedStateCompatibility,
+  resolveBuildChannel,
+} from "./build-channel.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -311,12 +316,15 @@ export function builderArgsForTarget(
   parsed,
   version,
   {
+    buildChannel = null,
+    channelConfigPath = null,
     disableMacNotarize = false,
     hostPlatform = process.platform,
     useScopedOutputDir = false,
   } = {},
 ) {
   const builderArgs = [];
+  if (channelConfigPath) builderArgs.push("--config", channelConfigPath);
   if (version) builderArgs.push(`-c.extraMetadata.version=${version}`);
   if (disableMacNotarize) builderArgs.push("-c.mac.notarize=false");
   builderArgs.push(PLATFORM_CONFIG[target.platform].builderFlag);
@@ -335,7 +343,12 @@ export function builderArgsForTarget(
   }
   builderArgs.push(`--${target.arch}`);
   builderArgs.push(...parsed.sharedArgs);
-  if (useScopedOutputDir) {
+  if (buildChannel?.name === "dev") {
+    const targetDirectory = useScopedOutputDir
+      ? `/${target.platform}-${target.arch}`
+      : "";
+    builderArgs.push(`-c.directories.output=dist/dev${targetDirectory}`);
+  } else if (useScopedOutputDir) {
     builderArgs.push(
       `-c.directories.output=dist/${target.platform}-${target.arch}`,
     );
@@ -359,12 +372,16 @@ export function builderArgsForTarget(
 }
 
 function main() {
+  const buildChannel = resolveBuildChannel(process.env);
+  const sharedStateCompat = requireSharedStateCompatibility(process.env);
   const passthrough = stripLeadingSeparator(process.argv.slice(2));
   const parsed = parsePackageArgs(passthrough);
   const buildMatrix = resolveBuildMatrix(parsed);
   console.log(
     `[package] build matrix → ${buildMatrix.map(formatTarget).join(", ")}`,
   );
+  console.log(`[package] build channel → ${buildChannel.name}`);
+  console.log(`[package] shared-state compatibility → ${sharedStateCompat}`);
 
   // Step 0: start every release from an empty output directory. Stale
   // artifacts from a prior run would otherwise be repacked into this run's
@@ -373,8 +390,18 @@ function main() {
   // cross-arch contamination that broke the Intel DMG, because the first
   // arch writes into dist/ mid-run before the next arch is packaged; the
   // `!dist/**` files exclusion is what actually guarantees isolation.
-  const distDir = resolve(desktopRoot, "dist");
+  const distDir = resolve(
+    desktopRoot,
+    buildChannel.name === "dev" ? "dist/dev" : "dist",
+  );
   rmSync(distDir, { recursive: true, force: true });
+  mkdirSync(distDir, { recursive: true });
+  const channelConfigPath = resolve(distDir, "electron-builder-channel.json");
+  writeFileSync(
+    channelConfigPath,
+    `${JSON.stringify(builderConfigForChannel(buildChannel, sharedStateCompat), null, 2)}\n`,
+    "utf-8",
+  );
   console.log(`[package] cleaned output dir → ${distDir}`);
 
   // Step 1: build the Electron main/preload/renderer bundles. Without
@@ -448,19 +475,22 @@ function main() {
     );
 
     const builderArgs = builderArgsForTarget(target, parsed, version, {
+      buildChannel,
+      channelConfigPath,
       disableMacNotarize,
       hostPlatform: process.platform,
       useScopedOutputDir,
     });
 
     // Step 4: invoke electron-builder for the current target only.
-    // `shell: true` for the same Windows `.cmd` shim reason as the
-    // electron-vite invocation above.
+    // Native Windows needs a shell for the `.cmd` shim. POSIX must avoid one:
+    // channel overrides include spaces and JSON and need to remain single argv
+    // values instead of being reparsed by `/bin/sh`.
     const result = spawnSync("electron-builder", builderArgs, {
       stdio: "inherit",
       cwd: desktopRoot,
       env: envWithLocalBins(),
-      shell: true,
+      shell: process.platform === "win32",
     });
 
     if (result.error) {

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CoreProvider } from "@multica/core/platform";
+import { DESKTOP_SHARED_STATE_MUTATION_GUARD } from "./shared-state-mutation-guard";
 import { pickLocale, type SupportedLocale } from "@multica/core/i18n";
 import { useAuthStore } from "@multica/core/auth";
 import { useWelcomeStore } from "@multica/core/onboarding";
@@ -458,6 +459,7 @@ export default function App() {
             windowContext.kind === "main" ? handleDaemonLogout : undefined
           }
           identity={identity}
+          sharedStateMutationGuard={DESKTOP_SHARED_STATE_MUTATION_GUARD}
           locale={locale}
           resources={resources}
           localeAdapter={localeAdapter}

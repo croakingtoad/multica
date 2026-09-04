@@ -11,6 +11,7 @@ import {
   profileConfigPath,
   profileDir,
   profileLogPath,
+  profilePidPath,
   profileUserIdPath,
 } from "./daemon-profile";
 
@@ -33,6 +34,20 @@ describe("deriveProfileName", () => {
   it("falls back to a fixed name on an unparseable URL", () => {
     expect(deriveProfileName("not a url")).toBe("desktop");
   });
+
+  it("channel-suffixes every dev profile without changing stable names", () => {
+    for (const target of [
+      "https://api.multica.ai",
+      "http://localhost:8080",
+      "not a url",
+    ]) {
+      const stable = deriveProfileName(target, "");
+      const dev = deriveProfileName(target, "-dev");
+
+      expect(dev).toBe(`${stable}-dev`);
+      expect(healthPortForProfile(dev)).not.toBe(healthPortForProfile(stable));
+    }
+  });
 });
 
 describe("profile paths", () => {
@@ -45,6 +60,9 @@ describe("profile paths", () => {
     expect(profileLogPath("desktop-api.multica.ai")).toBe(
       join(dir, "daemon.log"),
     );
+    expect(profilePidPath("desktop-api.multica.ai")).toBe(
+      join(dir, "daemon.pid"),
+    );
     expect(profileUserIdPath("desktop-api.multica.ai")).toBe(
       join(dir, ".desktop-user-id"),
     );
@@ -56,6 +74,7 @@ describe("profile paths", () => {
     expect(() => profileDir("")).toThrow(/unresolved/);
     expect(() => profileConfigPath("")).toThrow(/unresolved/);
     expect(() => profileLogPath("")).toThrow(/unresolved/);
+    expect(() => profilePidPath("")).toThrow(/unresolved/);
     expect(() => profileUserIdPath("")).toThrow(/unresolved/);
   });
 

@@ -226,6 +226,11 @@ func TestGetActiveProjectPlanFlagAndResponse(t *testing.T) {
 		)
 	}
 
+	originalFlags := testHandler.FeatureFlags
+	testHandler.FeatureFlags = nil
+	t.Cleanup(func() { testHandler.FeatureFlags = originalFlags })
+	testutil.Call(t, testHandler.GetActiveProjectPlan, request()).Want(http.StatusOK)
+
 	withFeatureFlag(t, testHandler, featureflags.ProjectPlans, false)
 	testutil.Call(t, testHandler.GetActiveProjectPlan, request()).Want(http.StatusNotFound)
 

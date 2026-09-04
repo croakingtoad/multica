@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -13,6 +13,41 @@ import {
   resolveBuildMatrix,
   stripLeadingSeparator,
 } from "./package.mjs";
+import { BUILD_CHANNELS } from "./build-channel.mjs";
+
+describe("package shared-state declaration", () => {
+  function runPackage(sharedStateCompat) {
+    const env = { ...process.env };
+    delete env.MULTICA_CHANNEL;
+    delete env.MULTICA_SHARED_STATE_COMPAT;
+    if (sharedStateCompat !== undefined) {
+      env.MULTICA_SHARED_STATE_COMPAT = sharedStateCompat;
+    }
+    return spawnSync(process.execPath, [resolve("scripts/package.mjs")], {
+      cwd: resolve("."),
+      env,
+      encoding: "utf-8",
+    });
+  }
+
+  it("fails before packaging when the declaration is absent", () => {
+    const result = runPackage(undefined);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(
+      /MULTICA_SHARED_STATE_COMPAT must be "stable" or "breaking"/,
+    );
+  });
+
+  it("fails before packaging when the declaration is invalid", () => {
+    const result = runPackage("safe-ish");
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(
+      /MULTICA_SHARED_STATE_COMPAT must be "stable" or "breaking"/,
+    );
+  });
+});
 
 describe("normalizeGitVersion", () => {
   it("returns null for empty / nullish input", () => {
@@ -267,6 +302,47 @@ describe("resolveBuildMatrix", () => {
 });
 
 describe("builderArgsForTarget", () => {
+  it("loads the generated stable channel config", () => {
+    const args = builderArgsForTarget(
+      { platform: "linux", arch: "x64" },
+      {
+        allPlatforms: false,
+        sharedArgs: [],
+        platformTargets: { mac: [], win: [], linux: ["dir"] },
+        requestedPlatforms: ["linux"],
+        requestedArchs: ["x64"],
+      },
+      "1.2.3",
+      {
+        buildChannel: BUILD_CHANNELS.stable,
+        channelConfigPath: "/tmp/stable-channel.json",
+        hostPlatform: "linux",
+      },
+    );
+
+    expect(args.slice(0, 2)).toEqual(["--config", "/tmp/stable-channel.json"]);
+  });
+
+  it("overrides every installer identity surface for the dev channel", () => {
+    const args = builderArgsForTarget(
+      { platform: "linux", arch: "x64" },
+      {
+        allPlatforms: false,
+        sharedArgs: ["--publish", "never"],
+        platformTargets: { mac: [], win: [], linux: ["dir"] },
+        requestedPlatforms: ["linux"],
+        requestedArchs: ["x64"],
+      },
+      "1.2.3",
+      {
+        buildChannel: BUILD_CHANNELS.dev,
+        hostPlatform: "linux",
+      },
+    );
+
+    expect(args).toContain("-c.directories.output=dist/dev");
+  });
+
   it("adds scoped output directories for multi-target builds", () => {
     expect(
       builderArgsForTarget(

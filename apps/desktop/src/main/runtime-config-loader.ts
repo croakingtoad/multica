@@ -1,6 +1,7 @@
 import { app } from "electron";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { BUILD_CHANNEL_CONFIG } from "../shared/build-channel";
 import {
   DEFAULT_RUNTIME_CONFIG,
   parseRuntimeConfig,
@@ -40,8 +41,11 @@ export async function loadRuntimeConfig(options: {
   }
 }
 
-export function desktopConfigPath(): string {
-  return join(app.getPath("home"), ".multica", "desktop.json");
+export function desktopConfigPath(
+  homePath = app.getPath("home"),
+  filename = BUILD_CHANNEL_CONFIG.runtimeConfigFilename,
+): string {
+  return join(homePath, ".multica", filename);
 }
 
 function isMissingFileError(err: unknown): boolean {

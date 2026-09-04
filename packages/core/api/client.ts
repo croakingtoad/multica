@@ -475,11 +475,24 @@ export interface ApiClientIdentity {
   os?: string;
 }
 
+export interface SharedStateMutationTarget {
+  backendUrl: string;
+  workspaceSlug: string | null;
+}
+
+export interface SharedStateMutationGuard {
+  confirmTarget(
+    target: SharedStateMutationTarget,
+  ): boolean | Promise<boolean>;
+}
+
 export interface ApiClientOptions {
   logger?: Logger;
   onUnauthorized?: () => void;
   /** Identifies the client to the server. Sent as X-Client-* headers. */
   identity?: ApiClientIdentity;
+  /** Installed only by a dev build declared incompatible with shared state. */
+  sharedStateMutationGuard?: SharedStateMutationGuard;
 }
 
 export interface ClientRuntimeSnapshot {
@@ -516,6 +529,24 @@ export class ApiError extends Error {
     this.body = body;
   }
 }
+
+export class SharedStateMutationBlockedError extends Error {
+  constructor(method: string, path: string, target: SharedStateMutationTarget) {
+    const workspace = target.workspaceSlug ?? "no workspace selected";
+    super(
+      `Blocked ${method} ${path}: this breaking dev build has not unlocked ` +
+        `the sacrificial target ${target.backendUrl} (workspace: ${workspace}).`,
+    );
+    this.name = "SharedStateMutationBlockedError";
+  }
+}
+
+const SHARED_STATE_MUTATION_METHODS = new Set([
+  "POST",
+  "PATCH",
+  "PUT",
+  "DELETE",
+]);
 
 function assertAgentConversationStartersWriteSupported(data: {
   conversation_starters?: unknown;
@@ -677,6 +708,7 @@ export class ApiClient {
   private token: string | null = null;
   private logger: Logger;
   private options: ApiClientOptions;
+  private unlockedSharedStateTarget: SharedStateMutationTarget | null = null;
 
   constructor(baseUrl: string, options?: ApiClientOptions) {
     this.baseUrl = baseUrl;
@@ -723,16 +755,6 @@ export class ApiClient {
     this.options.onUnauthorized?.();
   }
 
-  private async parseErrorMessage(res: Response, fallback: string): Promise<string> {
-    try {
-      const data = await res.json() as { error?: string };
-      if (typeof data.error === "string" && data.error) return data.error;
-    } catch {
-      // Ignore non-JSON error bodies.
-    }
-    return fallback;
-  }
-
   // Reads the response body once for both human-readable error message and
   // structured fields. The Response stream can only be consumed once, so
   // both pieces have to come from a single read.
@@ -757,7 +779,7 @@ export class ApiClient {
   ): Promise<Response> {
     const rid = createRequestId();
     const start = Date.now();
-    const method = init?.method ?? "GET";
+    const method = (init?.method ?? "GET").toUpperCase();
 
     const headers: Record<string, string> = {
       "X-Request-ID": rid,
@@ -765,6 +787,24 @@ export class ApiClient {
       ...(init?.extraHeaders ?? {}),
       ...((init?.headers as Record<string, string>) ?? {}),
     };
+
+    const mutationGuard = this.options.sharedStateMutationGuard;
+    if (mutationGuard && SHARED_STATE_MUTATION_METHODS.has(method)) {
+      const target = {
+        backendUrl: this.baseUrl,
+        workspaceSlug: headers["X-Workspace-Slug"] ?? null,
+      };
+      const unlocked = this.unlockedSharedStateTarget;
+      if (
+        unlocked?.backendUrl !== target.backendUrl ||
+        unlocked.workspaceSlug !== target.workspaceSlug
+      ) {
+        if (!(await mutationGuard.confirmTarget(target))) {
+          throw new SharedStateMutationBlockedError(method, path, target);
+        }
+        this.unlockedSharedStateTarget = target;
+      }
+    }
 
     this.logger.info(`→ ${method} ${path}`, { rid });
 
@@ -2695,23 +2735,20 @@ export class ApiClient {
    * names. This is the whole publishing path — a plugin author needs no server
    * of their own, and nothing about a published version changes afterwards.
    *
-   * Not routed through `this.fetch`, for the same reason uploadFile is not: the
-   * browser has to set the multipart boundary itself.
+   * Routed through `fetchRaw` rather than `fetch` so the browser can set the
+   * multipart boundary itself without the JSON content type.
    */
   async publishPluginPackage(workspaceId: string, bundle: File): Promise<PluginPackage> {
     const formData = new FormData();
     formData.append("bundle", bundle);
 
-    const res = await fetch(`${this.baseUrl}/api/workspaces/${workspaceId}/plugins/packages`, {
-      method: "POST",
-      headers: this.authHeaders(),
-      body: formData,
-      credentials: "include",
-    });
-    if (!res.ok) {
-      if (res.status === 401) this.handleUnauthorized();
-      throw new Error(await this.parseErrorMessage(res, `Publishing failed: ${res.status}`));
-    }
+    const res = await this.fetchRaw(
+      `/api/workspaces/${workspaceId}/plugins/packages`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
     const raw = (await res.json()) as unknown;
     return parseWithFallback(raw, PluginPackageSchema, EMPTY_PLUGIN_PACKAGE, {
       endpoint: "POST /api/workspaces/{id}/plugins/packages",
@@ -3166,26 +3203,11 @@ export class ApiClient {
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
     if (opts?.chatSessionId) formData.append("chat_session_id", opts.chatSessionId);
 
-    const rid = createRequestId();
-    const start = Date.now();
-    this.logger.info("→ POST /api/upload-file", { rid });
-
-    const res = await fetch(`${this.baseUrl}/api/upload-file`, {
+    const res = await this.fetchRaw("/api/upload-file", {
       method: "POST",
-      headers: this.authHeaders(),
       body: formData,
-      credentials: "include",
       signal,
     });
-
-    if (!res.ok) {
-      if (res.status === 401) this.handleUnauthorized();
-      const message = await this.parseErrorMessage(res, `Upload failed: ${res.status}`);
-      this.logger.error(`← ${res.status} /api/upload-file`, { rid, duration: `${Date.now() - start}ms`, error: message });
-      throw new Error(message);
-    }
-
-    this.logger.info(`← ${res.status} /api/upload-file`, { rid, duration: `${Date.now() - start}ms` });
     const raw = (await res.json()) as unknown;
     return parseWithFallback(raw, AttachmentResponseSchema, EMPTY_ATTACHMENT, {
       endpoint: "POST /api/upload-file",

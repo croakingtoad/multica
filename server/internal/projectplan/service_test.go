@@ -177,8 +177,19 @@ func (f *planTestFixture) issue(t *testing.T, title, description string) pgtype.
 	return parsePlanTestUUID(t, issueID)
 }
 
-func TestServiceDefaultsOff(t *testing.T) {
+func TestServiceDefaultsOnWithoutFlagProvider(t *testing.T) {
 	service := &Service{}
+	_, err := service.CreateManual(context.Background(), CreateManualParams{})
+	if got := planErrorKind(t, err); got != ErrorInvalid {
+		t.Fatalf("error kind = %q, want %q", got, ErrorInvalid)
+	}
+}
+
+func TestServiceRespectsDisabledProjectPlansFlag(t *testing.T) {
+	provider := featureflag.NewStaticProvider()
+	provider.Set(featureflags.ProjectPlans, featureflag.Rule{Default: false})
+	service := &Service{FeatureFlags: featureflag.NewService(provider)}
+
 	_, err := service.CreateManual(context.Background(), CreateManualParams{})
 	if got := planErrorKind(t, err); got != ErrorDisabled {
 		t.Fatalf("error kind = %q, want %q", got, ErrorDisabled)
