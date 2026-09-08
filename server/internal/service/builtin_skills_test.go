@@ -769,16 +769,23 @@ func TestPlatformSkillTeachesTheParserContract(t *testing.T) {
 	}
 }
 
-// TestProjectsAndResourcesSkillCoversDurableContext is the content pin the
-// upstream consolidation deleted along with the per-topic skills it covered:
-// its durable-context strings migrated to the platform skill's projects
-// reference, but the plan-authoring flow, the execution-mode worktree
-// contract, the mention-link form, and the local_directory safety line below
-// were left asserted nowhere, and the surviving fork skill had no pinning
-// test at all (LOCO-897 W1). This is the adapted pin, in the assertion-table
-// form the platform-skill tests use: anchors are user-observable contract
-// lines, matched with whitespace collapsed so a Markdown reflow cannot read
-// as a deleted contract.
+// TestProjectsAndResourcesSkillCoversDurableContext is the content pin
+// (LOCO-897 W1) for the surviving fork-owned multica-projects-and-resources
+// skill. The upstream consolidation (MUL-6986) deleted the per-topic tests
+// with the skills they covered; the durable-context strings migrated to the
+// platform skill's projects reference, but this skill's plan-authoring flow,
+// execution-mode worktree contract, and ask-before-changing safety line were
+// left asserted nowhere.
+//
+// This is the adapted pin, in the assertion-table form the platform-skill
+// tests use. Anchors are user-observable contract lines only (per
+// TestBuiltinSkillPayloadCarriesNoSourceReferences), matched with whitespace
+// collapsed so a Markdown reflow cannot read as a deleted contract. The
+// anchor set is the union of the two W1 commits: the durable-context,
+// command, mention-link, and safety-line anchors from 01ba4fa26 (LOCO-1388)
+// plus the plan-authoring prose and detailed worktree contract from
+// 96ecc856f (LOCO-1371) — deduplicated, preferring the longer, more
+// specific form where one anchor was a substring of the other.
 func TestProjectsAndResourcesSkillCoversDurableContext(t *testing.T) {
 	const skillName = "multica-projects-and-resources"
 
@@ -786,6 +793,19 @@ func TestProjectsAndResourcesSkillCoversDurableContext(t *testing.T) {
 	if !ok {
 		return
 	}
+
+	// Frontmatter pins the original pre-consolidation test also carried: a
+	// platform-contract skill triggers from context, and allowed-tools is an
+	// allowlist — pinned exactly, so adding a tool to the list fails here
+	// instead of silently widening the pre-approved scope.
+	fm, _, _ := splitFrontmatter(skill.Content)
+	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
+		t.Errorf("user-invocable = %q, want false (a platform-contract skill triggers from context, not a slash command)", got)
+	}
+	if got := strings.TrimSpace(fm["allowed-tools"]); got != "Bash(multica *)" {
+		t.Errorf("allowed-tools = %q, want exactly %q (the allowlist is the fence)", got, "Bash(multica *)")
+	}
+
 	files := make(map[string]string, len(skill.Files)+1)
 	files["SKILL.md"] = skill.Content
 	for _, f := range skill.Files {
@@ -801,33 +821,56 @@ func TestProjectsAndResourcesSkillCoversDurableContext(t *testing.T) {
 			want: []string{
 				// Durable-context model: these strings are also pinned against
 				// the platform skill's references/projects.md; the surviving
-				// skill still carries its own copy, and both must stay in sync.
+				// skill still carries its own copy, so both pins must stand
+				// together.
 				"Projects are durable context containers",
 				".multica/project/resources.json",
 				"multica project resource list <project-id> --output json",
 				"multica project resource add <project-id> --type github_repo --url <github-url> --output json",
 				"multica project resource add <project-id> --type github_repo --url <github-url> --ref <branch-or-sha> --output json",
-				"multica project resource add <project-id> --type local_directory",
 				"Project resources are durable and affect future tasks",
 				"github_repo.resource_ref.url",
 				"resource_ref.ref",
-				// Plan authoring is explicit and issue-sourced: the commands an
-				// agent must issue, the provenance snapshot taken at create
-				// time, and the coverage state visible until each part is
-				// linked.
+				// Plan authoring is an explicit, issue-sourced flow, not a
+				// flag on issue create. The four commands are the whole
+				// surface an agent has for building and linking a plan.
+				"Plan authoring is explicit. Point at the source issue, then add the phases and parts from its decomposition.",
+				"`issue create` intentionally has no plan flag.",
 				"multica project plan create-from-issue <project-id> <source-issue-id> --output json",
-				"multica project plan add-phase <project-id> <plan-id>",
-				"multica project plan add-part <project-id> <plan-id> <phase-id>",
-				"multica project plan link-issue <project-id> <plan-id> <part-id> <issue-id>",
-				"Creating the plan snapshots its title, description, revision, and content digest",
-				"no_tasks_yet",
-				// Execution mode: how tasks share a local_directory, and the
-				// capability gate that keeps an incapable daemon from running
-				// a worktree task in place.
-				"--execution-mode` decides how tasks share a `local_directory",
-				"waits in `waiting_local_directory`",
+				`multica project plan add-phase <project-id> <plan-id> --title "<phase>" --position 0 --output json`,
+				`multica project plan add-part <project-id> <plan-id> <phase-id> --title "<part>" --description "<scope>" --acceptance-criteria "<criteria>" --position 0 --output json`,
+				"multica project plan link-issue <project-id> <plan-id> <part-id> <issue-id> --output json",
+				// The plan is anchored to a project issue, and that anchor is
+				// snapshotted at creation, not re-read; a part with no linked
+				// issue is a first-class state, and linking is one link-issue
+				// per sub-issue.
+				"The source issue must belong to the project",
+				"Creating the plan snapshots its title, description, revision, and content digest on the server",
+				"A part may be created before its tasks exist",
+				"the plan shows the distinct `no_tasks_yet` coverage state",
+				"Call `link-issue` once for every sub-issue that implements the part.",
+				// Execution mode: how tasks share a local_directory — the
+				// worktree semantics, branch naming, ownership, and mid-merge
+				// replay — and the capability gate that keeps an incapable
+				// daemon from running a worktree task in place.
+				"`--execution-mode` decides how tasks share a `local_directory`.",
+				"a second task waits in `waiting_local_directory`.",
+				"`worktree` gives each task its own git worktree of that repo, so tasks run concurrently",
+				"`agent/<agent>/<issue>` for an issue, `agent/<agent>/chat-<session>` for a chat",
+				"a task with no conversation behind it gets `agent/<agent>/<task>`",
+				"never by the branch name",
+				"is left alone and the task falls back to `agent/<agent>/<issue>-<id>`",
+				"the worktree is handed to the agent mid-merge and the run delivers nothing until the agent resolves it",
+				"`worktree` requires the path to be a git repository with at least one commit; tasks fail with an explicit error otherwise",
 				"The gate is the `local-worktree-v1` capability the daemon advertises",
-				"`daemon_version_unsupported`",
+				"not its version string",
+				"checked twice: at save time, and again against the daemon that claims each task",
+				"a machine whose runtime cannot do worktrees gets its tasks cancelled rather than run in place",
+				"Saving `worktree` is also refused (HTTP 422, code `daemon_version_unsupported`)",
+				"Pass an empty value to clear it back to the default",
+				// The CLI surface for setting and clearing the mode.
+				"multica project resource add <project-id> --type local_directory --local-path <abs-path> --daemon-id <daemon-id> --execution-mode worktree --output json",
+				"multica project resource update <project-id> <resource-id> --execution-mode in_place --output json",
 				// The mention-link form is the one a reader must write; a bare
 				// project URL is dead text on mobile.
 				"[Roadmap](mention://project/<project-id>)",
