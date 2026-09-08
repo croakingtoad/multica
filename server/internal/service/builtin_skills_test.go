@@ -769,6 +769,91 @@ func TestPlatformSkillTeachesTheParserContract(t *testing.T) {
 	}
 }
 
+// TestProjectsAndResourcesSkillCoversDurableContext is the content pin the
+// upstream consolidation deleted along with the per-topic skills it covered:
+// its durable-context strings migrated to the platform skill's projects
+// reference, but the plan-authoring flow, the execution-mode worktree
+// contract, the mention-link form, and the local_directory safety line below
+// were left asserted nowhere, and the surviving fork skill had no pinning
+// test at all (LOCO-897 W1). This is the adapted pin, in the assertion-table
+// form the platform-skill tests use: anchors are user-observable contract
+// lines, matched with whitespace collapsed so a Markdown reflow cannot read
+// as a deleted contract.
+func TestProjectsAndResourcesSkillCoversDurableContext(t *testing.T) {
+	const skillName = "multica-projects-and-resources"
+
+	skill, ok := findSkill(t, skillName)
+	if !ok {
+		return
+	}
+	files := make(map[string]string, len(skill.Files)+1)
+	files["SKILL.md"] = skill.Content
+	for _, f := range skill.Files {
+		files[f.Path] = f.Content
+	}
+
+	cases := []struct {
+		file string
+		want []string
+	}{
+		{
+			file: "SKILL.md",
+			want: []string{
+				// Durable-context model: these strings are also pinned against
+				// the platform skill's references/projects.md; the surviving
+				// skill still carries its own copy, and both must stay in sync.
+				"Projects are durable context containers",
+				".multica/project/resources.json",
+				"multica project resource list <project-id> --output json",
+				"multica project resource add <project-id> --type github_repo --url <github-url> --output json",
+				"multica project resource add <project-id> --type github_repo --url <github-url> --ref <branch-or-sha> --output json",
+				"multica project resource add <project-id> --type local_directory",
+				"Project resources are durable and affect future tasks",
+				"github_repo.resource_ref.url",
+				"resource_ref.ref",
+				// Plan authoring is explicit and issue-sourced: the commands an
+				// agent must issue, the provenance snapshot taken at create
+				// time, and the coverage state visible until each part is
+				// linked.
+				"multica project plan create-from-issue <project-id> <source-issue-id> --output json",
+				"multica project plan add-phase <project-id> <plan-id>",
+				"multica project plan add-part <project-id> <plan-id> <phase-id>",
+				"multica project plan link-issue <project-id> <plan-id> <part-id> <issue-id>",
+				"Creating the plan snapshots its title, description, revision, and content digest",
+				"no_tasks_yet",
+				// Execution mode: how tasks share a local_directory, and the
+				// capability gate that keeps an incapable daemon from running
+				// a worktree task in place.
+				"--execution-mode` decides how tasks share a `local_directory",
+				"waits in `waiting_local_directory`",
+				"The gate is the `local-worktree-v1` capability the daemon advertises",
+				"`daemon_version_unsupported`",
+				// The mention-link form is the one a reader must write; a bare
+				// project URL is dead text on mobile.
+				"[Roadmap](mention://project/<project-id>)",
+				// The safety line LOCO-786's audit named: mutating a
+				// local_directory without being asked is a real side effect,
+				// and this is the line that says stop and ask first.
+				"Ask before changing `local_directory` unless the user explicitly requested that exact local path",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.file, func(t *testing.T) {
+			content, ok := files[tc.file]
+			if !ok {
+				t.Fatalf("%s skill does not ship %q", skillName, tc.file)
+			}
+			for _, want := range tc.want {
+				if !containsUnwrapped(content, want) {
+					t.Errorf("%s missing %q", tc.file, want)
+				}
+			}
+		})
+	}
+}
+
 // TestOnboardingSkillIsScopedToMika pins the agent-scoping rule (MUL-6986).
 //
 // The onboarding walkthrough is one agent's procedure, not a platform contract.
