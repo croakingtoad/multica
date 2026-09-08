@@ -1109,6 +1109,14 @@ func createIsolatedCheckoutContext(ctx context.Context, barePath, repoURL, check
 			return "", err
 		}
 	}
+	// A shallow bare cache can have a freshly fetched base commit reachable
+	// only from refs/remotes/origin/* while its copied refs/heads/* remain
+	// stale. Git ignores --local for a shallow source and the initial clone can
+	// therefore omit baseCommit even though it exists in the cache. Import the
+	// cache refs and selected base before trying to check it out.
+	if err := syncIsolatedCheckoutRefsContext(ctx, barePath, checkoutPath, baseRef); err != nil {
+		return "", err
+	}
 
 	// The cache resolves baseCommit from refs/remotes/origin/*, while a local
 	// clone initially advertises only the cache's refs/heads/* snapshot. Fetch
