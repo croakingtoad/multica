@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -87,23 +88,140 @@ func TestMain(m *testing.M) {
 	})
 	testPool = pool
 
-	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
-	if err != nil {
-		fmt.Printf("Failed to set up handler test fixture: %v\n", err)
-		pool.Close()
-		os.Exit(1)
-	}
-	dbfx = testutil.New(pool, testWorkspaceID, testUserID)
-
-	code := m.Run()
-	if err := cleanupHandlerTestFixture(context.Background(), pool); err != nil {
-		fmt.Printf("Failed to clean up handler test fixture: %v\n", err)
-		if code == 0 {
-			code = 1
-		}
-	}
+	code := runHandlerTestIterations(m, pool)
 	pool.Close()
 	os.Exit(code)
+}
+
+// runHandlerTestIterations owns the fixture lifecycle for the package.
+//
+// The fixture is per-workspace, but `-count=N` runs the whole test list N
+// times inside one m.Run() (testing.runTests loops on -test.count), so a
+// setup/teardown pair wrapped around a single m.Run() is -count-invariant and
+// nothing resets between iterations. Rows a test creates through the HTTP API
+// therefore survive into the next iteration — dbfx removes its own rows when
+// the asking test ends, the API path has no such contract — and the second
+// pass re-creates the same issue title, skill name or agent name in the same
+// workspace and gets a 409 or a unique-violation where it asserts success
+// (LOCO-798).
+//
+// So take the repeat count off the testing package and run the list here,
+// once per iteration, re-provisioning the fixture each time. Iteration order
+// is unchanged (runTests would have run the same list the same number of
+// times), and every iteration now sees the clean workspace `-count=1` sees.
+// Repeated m.Run() calls are tolerated by testing (go.dev/issue/23129).
+func runHandlerTestIterations(m *testing.M, pool *pgxpool.Pool) int {
+	iterations, budget := takeOverRepeatCount()
+
+	code := 0
+	started := time.Now()
+	for i := 0; i < iterations; i++ {
+		if i > 0 && budget > 0 {
+			// m.Run() restarts the -timeout alarm, so charge each iteration
+			// against what the earlier ones already spent; otherwise
+			// -count=N would silently grant N times the package budget.
+			remaining := budget - time.Since(started)
+			if remaining <= 0 {
+				fmt.Printf("handler test fixture: -timeout budget of %s exhausted after %d of %d iterations\n", budget, i, iterations)
+				return 1
+			}
+			if err := flag.Set("test.timeout", remaining.String()); err != nil {
+				fmt.Printf("Failed to rebudget test timeout: %v\n", err)
+				return 1
+			}
+		}
+
+		var err error
+		testUserID, testWorkspaceID, err = setupHandlerTestFixture(context.Background(), pool)
+		if err != nil {
+			fmt.Printf("Failed to set up handler test fixture: %v\n", err)
+			return 1
+		}
+		dbfx = testutil.New(pool, testWorkspaceID, testUserID)
+
+		if iterationCode := m.Run(); iterationCode != 0 {
+			code = iterationCode
+		}
+
+		if err := cleanupHandlerTestFixture(context.Background(), pool); err != nil {
+			fmt.Printf("Failed to clean up handler test fixture: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+
+		if code != 0 && failFastRequested() {
+			break
+		}
+	}
+	return code
+}
+
+// takeOverRepeatCount reads -test.count and -test.timeout and resets the count
+// to 1, so m.Run() executes the test list exactly once per call and the caller
+// owns the repetition. It returns the number of iterations to run and the
+// package timeout budget (zero when timeouts are disabled).
+//
+// TestMain runs before m.Run() parses flags, so parse them here first; testing
+// explicitly supports that.
+func takeOverRepeatCount() (int, time.Duration) {
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+
+	budget := durationFlag("test.timeout")
+
+	count, ok := uintFlag("test.count")
+	// -count=0 means "run nothing"; leave that to m.Run() rather than
+	// reinterpreting it as a single pass.
+	if !ok || count <= 1 {
+		return 1, budget
+	}
+	if err := flag.Set("test.count", "1"); err != nil {
+		// Fall back to the old single-m.Run() behaviour rather than running
+		// the list count*count times.
+		return 1, budget
+	}
+	return int(count), budget
+}
+
+func failFastRequested() bool {
+	f := flag.Lookup("test.failfast")
+	if f == nil {
+		return false
+	}
+	getter, ok := f.Value.(flag.Getter)
+	if !ok {
+		return false
+	}
+	value, ok := getter.Get().(bool)
+	return ok && value
+}
+
+func uintFlag(name string) (uint, bool) {
+	f := flag.Lookup(name)
+	if f == nil {
+		return 0, false
+	}
+	getter, ok := f.Value.(flag.Getter)
+	if !ok {
+		return 0, false
+	}
+	value, ok := getter.Get().(uint)
+	return value, ok
+}
+
+func durationFlag(name string) time.Duration {
+	f := flag.Lookup(name)
+	if f == nil {
+		return 0
+	}
+	getter, ok := f.Value.(flag.Getter)
+	if !ok {
+		return 0
+	}
+	value, _ := getter.Get().(time.Duration)
+	return value
 }
 
 func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, string, error) {
