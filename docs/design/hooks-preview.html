@@ -705,7 +705,7 @@ const HOOKS = {
     { id: 'c11', event: 'Stop', matcher: '', scope: 'user', type: 'command',
       command: '~/.claude/hooks/context-cost.js', timeout: 20, async: false, shell: 'bash',
       owner: 'multica', parked: false, installedFrom: 'context-cost',
-      desc: 'Reports token cost at the end of a turn. decision:"block" here REJECTS the stop — the opposite of Codex.' },
+      desc: 'Reports token cost at the end of a turn and exits 0. A Stop hook can ask to keep the turn going with decision:"block" — which never rejects it — but this one only reports.' },
 
     { id: 'c12', event: 'Notification', matcher: '', scope: 'user', type: 'http',
       url: 'https://hooks.slack.com/services/T0…/B0…/xxxx', timeout: 10, async: true,
@@ -769,8 +769,8 @@ const HOOKS = {
 
     { id: 'x7', event: 'Stop', matcher: '', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/turn-gate.py', timeout: 20, async: false, trust: 'trusted',
-      owner: 'user', parked: false, codexStopBlock: true,
-      desc: 'Emits decision:"block". On Codex that CONTINUES the turn — the opposite of Claude. A continue:false from any Stop hook overrides that.' },
+      owner: 'user', parked: false, stopBlock: true,
+      desc: 'Emits decision:"block" on Stop. That continues the turn on BOTH providers — it never rejects it. What differs is the reason: Codex turns it into a new continuation prompt. A continue:false from any Stop hook overrides the continuation.' },
     { id: 'x7b', event: 'PostToolUse', matcher: 'Bash', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/log-shell.sh', timeout: 10, async: false, trust: 'trusted',
       owner: 'user', parked: false, disabledNative: true,
@@ -856,7 +856,7 @@ const FIRE_LOG = {
       { t: '15:50:55', event: 'PostToolUse', matcher: 'Bash', hook: 'log-shell.sh', ms: null, verdict: 'neverran', task: 'LOCO-82',
         note: 'Disabled in /hooks. Codex has a real per-hook disable, so this one is off on purpose and the entry is still in the file.' },
       { t: '15:50:40', event: 'Stop', matcher: '—', hook: 'turn-gate.py', ms: 143, verdict: 'continued', task: 'LOCO-82',
-        note: 'Returned decision:"block". On Codex that continued the turn.' },
+        note: 'Returned decision:"block", which continued the turn — block never rejects a Stop on either provider. Codex replayed the reason as a new continuation prompt.' },
       { t: '15:44:19', event: 'Interrupt', matcher: '—', hook: 'on-interrupt-cleanup.sh', ms: 61, verdict: 'success', task: 'LOCO-80',
         note: 'Interrupt has no Claude equivalent. It also has a 1 s default timeout, extendable to 3 s — not the usual 600 s.' },
     ],
@@ -1365,7 +1365,7 @@ function hookRow(h, r) {
       ${h.statusMessage ? `<div class="t-micro faint" style="margin-top:2px">statusMessage: “${esc(h.statusMessage)}”</div>` : ''}
       ${h.additionalContextLimit ? `<div class="t-micro faint" style="margin-top:2px">additionalContextLimit: ${h.additionalContextLimit}</div>` : ''}
       ${cmdIssue ? `<div class="t-micro" style="color:var(--${cmdIssue.level === 'error' ? 'destructive' : 'warning'});margin-top:3px">${ic('alert', 10)} ${esc(cmdIssue.text.split('.')[0])}.</div>` : ''}
-      ${h.codexStopBlock ? `<div class="t-micro" style="color:var(--warning);margin-top:3px">${ic('alert', 10)} Emits <span class="cmd">decision:"block"</span> on <span class="cmd">Stop</span> — on Codex that <strong>continues</strong> the turn.</div>` : ''}
+      ${h.stopBlock ? `<div class="t-micro" style="color:var(--warning);margin-top:3px">${ic('alert', 10)} Emits <span class="cmd">decision:"block"</span> on <span class="cmd">Stop</span> — that <strong>continues</strong> the turn, it does not reject it. ${r.provider === 'codex' ? 'Codex turns the <span class="cmd">reason</span> into a new continuation prompt.' : 'Claude takes the <span class="cmd">reason</span> as why it should continue.'}</div>` : ''}
       ${h.ifOnNonToolEvent ? `<div class="t-micro" style="color:var(--destructive);margin-top:3px">${ic('alert', 10)} <span class="cmd">if</span> is only evaluated on tool events. On <span class="cmd">${esc(h.event)}</span> this handler never runs.</div>` : ''}
       ${h.if && !h.ifOnNonToolEvent ? `<div class="t-micro faint" style="margin-top:2px">if: <span class="cmd">${esc(h.if)}</span> — pre-filter, so the process only spawns on a match</div>` : ''}
       ${h._dupOf ? `<div class="t-micro" style="margin-top:3px">${ic('copy', 10)} Identical to the ${esc(layerMeta(r.provider, h._dupOf.scope).label)} entry — Claude spawns it once.</div>` : ''}
@@ -1477,13 +1477,14 @@ function railCards(r, hooks) {
     </div>
     <div class="card-body tight">
       <div class="t-caption muted stack">
-        <div>This screen shows four things Multica cannot do today. They are sketched so Marty can react to them, not because they exist.</div>
+        <div>This screen shows five things Multica cannot do today. They are sketched so Marty can react to them, not because they exist.</div>
         <div>${ic('x', 11)} <strong class="semibold">Reading</strong> a hooks file — discovery only covers fixed skill and MCP paths.</div>
         <div>${ic('x', 11)} <strong class="semibold">Writing</strong> any file on a runtime host — no write path exists at all.</div>
         <div>${ic('x', 11)} <strong class="semibold">${r.provider === 'claude' ? 'Parking' : 'Disabling'}</strong> — ${r.provider === 'claude'
           ? 'Multica\u2019s own invention. Claude has no per-hook disable at all, so there is no feature to drive.'
           : 'Codex <em>does</em> have a per-hook disable, but Multica has no way to reach its hook-state store on the host.'}</div>
         <div>${ic('x', 11)} <strong class="semibold">Re-trusting</strong> a Codex hook — trust is granted by an interactive CLI on the host.</div>
+        <div>${ic('x', 11)} <strong class="semibold">Ownership-tagging</strong> a write — the <code class="cmd">_multica</code> block in the dry-run diff has no store behind it. No per-runtime settings table exists, and <code class="cmd">agent_runtime.metadata</code> is system-owned and on the hot claim path.</div>
       </div>
     </div>
   </div>`;
@@ -1793,7 +1794,8 @@ function precedenceRail(r) {
         <hr class="sep" />
         <div><strong class="semibold">Handler types</strong><div class="muted">Claude: command, http, mcp_tool, prompt, agent — all effective. Codex: command and mcp_tool only; <code class="cmd">prompt</code> and <code class="cmd">agent</code> are parsed and then skipped, and there is no <code class="cmd">http</code>.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Stop + block</strong><div class="muted">Claude: rejects the stop. Codex: <em>continues</em> the turn, using your <code class="cmd">reason</code> as a new prompt. Same JSON, opposite outcome.</div></div>
+        <div><span class="badge b-ok" style="margin-bottom:3px">${ic('check', 10)}same outcome</span>
+        <strong class="semibold">Stop + <code class="cmd">decision:"block"</code></strong><div class="muted">On <em>both</em> providers <code class="cmd">block</code> means <strong>keep going</strong> — neither rejects the turn. This row used to call them opposites; that was wrong. The real difference is how your <code class="cmd">reason</code> is delivered: Claude receives it as the explanation for why it should continue, under <code class="cmd">stop_hook_active</code> and an 8-consecutive-continuation cap; Codex turns it into a new continuation prompt that acts as a new user prompt.</div></div>
         <hr class="sep" />
         <div><strong class="semibold">Filtering fields</strong><div class="muted">Claude has <code class="cmd">if</code> (permission-rule pre-filter, tool events only — set it on any other event and the handler never runs). Codex has none.</div></div>
         <hr class="sep" />
@@ -1894,7 +1896,7 @@ function screenLog() {
             <div><span class="badge">${ic('copy', 11)}collapsed · ran once</span> <span class="muted">Claude only. Two identical settings-file entries, one process.</span></div>
             <div><span class="badge">${ic('filter', 11)}if did not match</span> <span class="muted">Claude only. Deliberate: the pre-filter kept the process from spawning.</span></div>
             <div><span class="badge b-bad">${ic('key', 11)}not trusted</span> <span class="muted">Codex only. Skipped on a hash mismatch.</span></div>
-            <div><span class="badge b-warn">${ic('info', 11)}continued turn</span> <span class="muted">Codex only. <code class="cmd">decision:"block"</code> on <code class="cmd">Stop</code> continues rather than rejects.</span></div>
+            <div><span class="badge b-warn">${ic('info', 11)}continued turn</span> <span class="muted">Either provider. <code class="cmd">decision:"block"</code> on <code class="cmd">Stop</code> continues the turn — it never rejects it. Claude reads the <code class="cmd">reason</code> as why to continue; Codex replays it as a new user prompt.</span></div>
           </div>
         </div>
       </div>
@@ -2227,8 +2229,11 @@ function editorProblems() {
   if (mi.kind === 'ignored') out.push({ level: 'warn', field: 'matcher', text: mi.text });
   if (ed.event === 'FileChanged' && mi.kind === 'regex') out.push({ level: 'error', field: 'matcher',
     text: 'FileChanged only accepts the narrow exact set (letters, digits, _ and |). A regex here never matches anything — and the matcher doubles as the watch list, so this would also watch a file literally named that.' });
-  if (ed.event === 'Stop' && ed.provider === 'codex') out.push({ level: 'warn', field: 'event',
-    text: 'On Codex, a Stop hook returning decision:"block" CONTINUES the turn and turns your reason into a new user prompt. On Claude the same JSON rejects the stop. Check which one your script means.' });
+  if (ed.event === 'Stop') out.push({ level: 'warn', field: 'event',
+    text: 'A Stop hook returning decision:"block" does not reject the turn on either provider — it CONTINUES it. Omit decision to let the turn end. '
+      + (ed.provider === 'codex'
+        ? 'Codex turns your reason into a new continuation prompt that acts as a new user prompt, so write it as an instruction.'
+        : 'Claude takes your reason as the explanation for why it should continue, capped at 8 consecutive continuations.') });
   if (ed.if && ed.if.trim() && ed.provider === 'claude' && !CLAUDE_IF_EVENTS.includes(ed.event) && ed.event) {
     out.push({ level: 'error', field: 'if',
       text: 'An if condition is only evaluated on tool events (' + CLAUDE_IF_EVENTS.join(', ') + '). Set it on ' + ed.event + ' and the handler never runs at all — silently.' });
@@ -2564,6 +2569,13 @@ function diffDialog() {
         re-serialised byte-for-byte. The <code class="cmd">_multica</code> block records what Multica added so an uninstall can remove exactly
         that and nothing else. The failure mode this guards against is real — a manager blanking <code class="cmd">.claude/settings.json</code> to
         <code class="cmd">{}</code> is a documented incident.</div>
+      </div>
+      <div class="notice warn t-caption">
+        ${ic('alert', 13, 'ico')}
+        <div><strong class="semibold">The ownership tag has nowhere to live.</strong> The <code class="cmd">_multica</code> block above assumes a durable record of what
+        Multica wrote, and there is no home for it: no per-runtime settings table exists, and <code class="cmd">agent_runtime.metadata</code> is
+        system-owned and sits on the hot claim path. Writing the tag into the provider's own settings file — as sketched here — puts an unknown key
+        in a file the CLI owns. Both options need a decision before a writer is built.</div>
       </div>
       ${ed.provider === 'codex' ? `
       <div class="notice warn t-caption">
