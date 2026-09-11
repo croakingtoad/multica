@@ -49,6 +49,13 @@ const (
 	// nothing extra, so the stub retires itself as daemons update.
 	DaemonCapabilityPlatformSkillV1 = "platform-skill-v1"
 
+	// DaemonCapabilityHooksV1 advertises that the daemon can serve hook
+	// reads. Hook state lives in its own table rather than in the
+	// agent_runtime.metadata blob (LOCO-114), so the read path gates on this
+	// capability and fails closed for older daemons: a header that lacks it
+	// is a daemon that cannot serve hooks, never one that can.
+	DaemonCapabilityHooksV1 = "hooks-v1"
+
 	// AppCapabilityChatDraftRestoreV1 is advertised (X-Client-Capabilities) by
 	// app clients that understand the durable draft-restore recovery path:
 	// chat:cancel_finalized as an invalidation hint plus the draft-restores
