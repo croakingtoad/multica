@@ -560,8 +560,8 @@ const RUNTIMES = [
    "common" ones are surfaced first in the picker; the rest are reachable
    only by typing, which is the whole reason the picker is a searchable
    combobox rather than a 33-item dropdown.
-   Codex: 12 events. Interrupt / PostCompact / SubagentStart are Codex-side
-   names with no Claude twin worth highlighting; Interrupt is Codex-only. */
+   Codex: 12 events. All but Interrupt share a name with a Claude event, so
+   Interrupt is the only genuinely Codex-only one (see CODEX_ONLY). */
 const CLAUDE_COMMON = ['PreToolUse','PostToolUse','UserPromptSubmit','Stop','SessionStart','SessionEnd','Notification','SubagentStop','PreCompact'];
 const CLAUDE_EVENTS = [
   'SessionStart','Setup','InstructionsLoaded','UserPromptSubmit','UserPromptExpansion','MessageDisplay',
@@ -719,7 +719,7 @@ const HOOKS = {
     { id: 'c14', event: 'PreCompact', matcher: 'manual', scope: 'user', type: 'command',
       command: 'C:\\Users\\Marty Kelly\\bin\\snapshot.sh', timeout: 30, async: false, shell: 'bash',
       owner: 'user', parked: false, broken: 'path',
-      desc: 'Windows separators and an unquoted space. Fails on every fire, silently.' },
+      desc: 'Windows separators and an unquoted space. Fails on every fire \u2014 non-blocking, so the compact proceeds and the transcript gets one hook-error notice. Nothing keeps a record of it.' },
 
     { id: 'c15', event: 'SessionEnd', matcher: '', scope: 'user', type: 'command',
       command: '~/.claude/hooks/flush-telemetry.py', timeout: 1, async: false, shell: 'bash',
@@ -791,7 +791,7 @@ const HOOKS = {
       desc: 'mcp_tool is effective on both providers. It reuses an existing MCP connection — it will not start a server.' },
 
     { id: 'x11', event: 'SessionEnd', matcher: '', scope: 'user-json', type: 'command',
-      command: '~/.codex/hooks/session-logger.js', timeout: 10, async: true, trust: 'trusted',
+      command: '~/.codex/hooks/session-logger.js', timeout: 10, async: false, trust: 'trusted',
       owner: 'multica', parked: false, disabledNative: true, installedFrom: 'session-logger',
       desc: 'Switched off through Codex\u2019s own per-hook disable. Multica does not park on Codex — there is a real feature to drive, and moving the entry would cost it its trust hash.' },
   ],
@@ -986,9 +986,10 @@ function handlerLabel(h) {
    to one spawn; a plugin's copy does not. Codex documents no equivalent.
 
    Neither provider documents a run SEQUENCE. Claude states matching hooks
-   "run in parallel"; Codex says only that all of them load. So nothing
-   here is numbered — an invented order would be the next thing to be
-   wrong about. */
+   "run in parallel"; Codex says matching command hooks "are launched
+   concurrently". Both describe concurrency, neither an order — so nothing
+   here is numbered; an invented order would be the next thing to be wrong
+   about. */
 function resolve(runtime) {
   const hooks = hooksOf(runtime.id);
   const byEvent = {};
@@ -1064,7 +1065,7 @@ function runState(h, runtime) {
   if (h._dupOf) return { runs: false, label: 'Runs once', cls: '', icon: 'copy',
     why: 'Byte-identical to the ' + layerMeta(prov, h._dupOf.scope).label + '-scope entry, so Claude collapses the pair and spawns it once. Both entries are loaded; only one process runs.' };
   if (h.broken === 'path') return { runs: true, label: 'Failing',  cls: 'b-bad',  icon: 'circleAlert',
-    why: 'Registered and fires, but the command cannot be found. Claude treats that as non-blocking, so nothing surfaces in the session.' };
+    why: 'Registered and fires, but the command cannot be found. Claude treats that as non-blocking \u2014 the action proceeds and Claude never sees the failure. The transcript does get a hook-error notice with the first line of stderr; what nothing keeps is a record of it.' };
   if (h.async)       return { runs: true,  label: 'Active · async', cls: 'b-ok', icon: 'zap',
     why: 'Runs detached. Its exit status is never checked, so a failure is invisible.' };
   return { runs: true, label: 'Active', cls: 'b-ok', icon: 'check', why: 'Registered and running.' };
@@ -1296,7 +1297,8 @@ function screenHooks() {
           <div>
             <strong class="semibold">1 hook is registered but cannot run.</strong>
             <code class="cmd">snapshot.sh</code> has failed on every <code class="cmd">PreCompact</code> fire since 2026-09-04 with status 127.
-            Claude treats a failing hook as non-blocking, so the session shows nothing.
+            Claude treats a failing hook as non-blocking — the compact proceeds and Claude never sees it. Each fire prints one
+            <code class="cmd">hook error</code> notice in the transcript and nothing more: no duration, no history, nothing to filter on.
             <div style="margin-top:6px"><button class="btn sm" data-screen="log">${ic('activity', 13)}Open fire log</button>
             <button class="btn sm" data-edit="c14">${ic('pencil', 13)}Fix the path</button></div>
           </div>
@@ -1627,8 +1629,8 @@ function accumulationTable(r, byEvent) {
         : 'Codex documents no deduplication, so two identical entries in two files are two processes.'}
       </div>
       <div class="t-caption muted" style="margin-top:6px">${ic('info', 11)} Neither provider documents a run <em>sequence</em>
-      — Claude states matching hooks run in parallel, and Codex says only that all of them load. Nothing on this screen is numbered,
-      because an invented order would be the next thing to be wrong about.</div>
+      — Claude states matching hooks run in parallel, and Codex says matching command hooks are launched concurrently. Both describe
+      concurrency, neither an order, so nothing on this screen is numbered — an invented order would be the next thing to be wrong about.</div>
     </div>
   </div>`;
 }
@@ -1834,9 +1836,15 @@ function precedenceRail(r) {
 /* ==================================================================== *
  * SCREEN 3 — FIRE LOG
  * The answer to LOCO-79's #1 complaint: a broken hook is a non-blocking
- * error, so the guard stops enforcing with nothing on screen. Shape
- * borrowed from the filterable event timelines (disler / agents-observe /
- * Agent-Monitor); the data is host-side and already exists for Claude.
+ * error, so the guard stops enforcing while the action proceeds and Claude
+ * never sees it. The transcript is not silent — Claude prints one
+ * "<hook name> hook error" notice per fire with the first line of stderr.
+ * What no one keeps is a RECORD: duration, verdict, matcher counts, history
+ * across fires. A one-line notice scrolling past in a transcript is not
+ * something you can filter, count or audit, and that is the gap this screen
+ * fills. Shape borrowed from the filterable event timelines (disler /
+ * agents-observe / Agent-Monitor); the data is host-side and already exists
+ * for Claude.
  * ==================================================================== */
 function screenLog() {
   const r = rt();
@@ -1858,9 +1866,9 @@ function screenLog() {
       ${nFail ? `
       <div class="notice bad t-label">
         ${ic('circleAlert', 15, 'ico')}
-        <div><strong class="semibold">${nFail} hook fire${nFail > 1 ? 's' : ''} failed in the last hour and none of them surfaced in the session.</strong>
-        A hook that exits non-zero on a non-blocking event is swallowed by the CLI — the guard simply stops guarding.
-        This feed is the only place that shows up.</div>
+        <div><strong class="semibold">${nFail} hook fire${nFail > 1 ? 's' : ''} failed in the last hour and nothing kept a record of them.</strong>
+        A hook that exits non-zero on a non-blocking event does not stop the action, and Claude never sees the failure — the guard simply stops guarding.
+        Each fire does print one <code class="cmd">hook error</code> notice in the transcript. This feed is the only place with the duration, the verdict and the history across fires.</div>
       </div>` : ''}
 
       <div class="card">
@@ -1894,7 +1902,7 @@ function screenLog() {
           <div class="stack t-caption">
             <div><span class="badge b-ok">${ic('check', 11)}success</span> <span class="muted">exit 0.</span></div>
             <div><span class="badge b-warn">${ic('ban', 11)}blocked</span> <span class="muted">exit 2 on a blockable event — the tool call was rejected.</span></div>
-            <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero, non-blocking. Invisible in the session.</span></div>
+            <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero, non-blocking — the action proceeded and Claude never saw it. The transcript got a one-line hook-error notice; this row is the only record.</span></div>
             <div><span class="badge b-bad">${ic('clock', 11)}timed out</span> <span class="muted">killed at its timeout.</span></div>
             <div><span class="badge">${ic('zap', 11)}async · unknown</span> <span class="muted">detached. Neither CLI records the outcome — a permanent blind spot, not a gap in this feed.</span></div>
             <div><span class="badge b-bad">${ic('ban', 11)}never invoked</span> <span class="muted">Loaded, but the provider never calls it. No error is raised, so this row is inferred from an absence rather than read from a log line.</span></div>
@@ -2035,7 +2043,7 @@ const DISCOVERY_STEPS = [
   { label: 'Queued for the next daemon heartbeat', detail: 'pending action · up to 5 s' },
   { label: 'Reading provider config on the host', detail: '~/.claude/settings.json · /etc/claude-code/managed-settings.json' },
   { label: 'Parsing and resolving precedence', detail: 'server-side' },
-  { label: 'Done', detail: '16 hooks across 4 files' },
+  { label: 'Done', detail: '19 hooks across 5 files' },
 ];
 
 function screenStates() {
@@ -2601,9 +2609,10 @@ function diffDialog() {
       ${ed.provider === 'codex' ? `
       <div class="notice warn t-caption">
         ${ic('key', 13, 'ico')}
-        <div><strong class="semibold">This write will un-trust 2 hooks.</strong> Codex records trust against a hook's hash. After this write,
-        <code class="cmd">secret-firewall.js</code> and the new entry will not run until they are trusted again with <code class="cmd">/hooks</code>
-        on ${esc(machineOf(rt()).title)}. Multica cannot grant trust remotely.</div>
+        <div><strong class="semibold">This write will leave 1 hook needing trust.</strong> Codex records trust against each hook's own hash, so only
+        the new entry is affected: it will not run until it is trusted with <code class="cmd">/hooks</code> on ${esc(machineOf(rt()).title)}.
+        Untouched entries in the same file keep their trust. (<code class="cmd">secret-firewall.js</code> is also untrusted, but it was already stale
+        before this write — it was edited at 15:47.) Multica cannot grant trust remotely.</div>
       </div>` : ''}
       <div class="notice warn t-caption">
         ${ic('alert', 13, 'ico')}
@@ -2662,7 +2671,9 @@ function deleteDialog() {
         goes unhandled — nothing else picks it up.</div></div>` : ''}
       ${r.provider === 'codex' ? `
       <div class="notice warn t-caption">${ic('key', 13, 'ico')}
-        <div>Rewriting this file invalidates the Codex trust hashes in <code class="cmd">[hooks.state]</code>. Remaining hooks in it will need re-trusting.</div></div>` : ''}
+        <div>This entry's trust in <code class="cmd">[hooks.state]</code> goes with it. Untouched entries keep theirs — Codex keys trust per hook,
+        not per file. The one exception is positional: an entry on the same event that sits after the removed group shifts up a slot, so its stored
+        state no longer matches and it needs re-trusting.</div></div>` : ''}
       <div class="t-caption muted">Prefer <strong class="semibold">Park</strong> if you only want it to stop running — parking keeps the configuration.</div>
     </div>
     <div class="dialog-foot">
@@ -2891,7 +2902,7 @@ document.addEventListener('click', (e) => {
       break;
     case 'stepDiscovery':
       state.discoveryStep = (state.discoveryStep + 1) % (DISCOVERY_STEPS.length + 1); render();
-      if (state.discoveryStep === DISCOVERY_STEPS.length) toast('Read 16 hooks across 4 files on cc-claudesp.');
+      if (state.discoveryStep === DISCOVERY_STEPS.length) toast('Read 19 hooks across 5 files on cc-claudesp.');
       break;
     case 'viewCached':
       toast('Would show the 2026-09-09 cached read, labelled stale and read-only.', 'warn');
