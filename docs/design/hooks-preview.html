@@ -273,8 +273,11 @@ table.tbl th {
 table.tbl td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 table.tbl tr:last-child td { border-bottom: 0; }
 table.tbl tbody tr:hover { background: color-mix(in oklab, var(--accent) 45%, transparent); }
-table.tbl tr.shadowed td { background: color-mix(in oklab, var(--destructive) 5%, transparent); }
-table.tbl tr.shadowed .cmd, table.tbl tr.shadowed .matcher { opacity: .5; text-decoration: line-through; }
+/* `inert` = configured and loaded, but not producing a process right now.
+   Deliberately NOT struck through: a struck-out row reads as "never
+   loaded", which was the false claim this file used to make. */
+table.tbl tr.inert td { background: color-mix(in oklab, var(--muted) 45%, transparent); }
+table.tbl tr.inert .cmd, table.tbl tr.inert .matcher { opacity: .62; }
 .cmd { font-family: "Geist Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .nowrap { white-space: nowrap; }
 .cellflex { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -400,8 +403,8 @@ table.tbl tr.shadowed .cmd, table.tbl tr.shadowed .matcher { opacity: .5; text-d
 .layer.writable .layer-head { background: color-mix(in oklab, var(--brand) 12%, transparent); }
 .layer-body { padding: 0; }
 .layer-entry { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
-.layer-entry.is-shadowed { background: color-mix(in oklab, var(--destructive) 5%, transparent); }
-.layer-entry.is-shadowed .cmd, .layer-entry.is-shadowed .matcher { opacity: .5; text-decoration: line-through; }
+.layer-entry.inert { background: color-mix(in oklab, var(--muted) 45%, transparent); }
+.layer-entry.inert .cmd, .layer-entry.inert .matcher { opacity: .62; }
 .layer-entry .spacer { flex: 1; }
 .runorder {
   width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; flex: none;
@@ -594,33 +597,39 @@ const HANDLER_TYPES = {
 };
 
 /* ---- Scope layers ----------------------------------------------------
-   Ordered highest precedence first. `writable` is the honest part: user
-   scope is the only layer on the daemon host, so it is the only one a
-   write path could ever reach. Project/local live in the task worktree. */
+   NOT a precedence ladder. Hook entries MERGE across every layer on both
+   providers — no layer outranks another, so this list is ordered by
+   where the file lives (org-wide first, yours last) and nothing here
+   implies authority. `writable` is the honest part: user scope is the
+   only layer on the daemon host, so it is the only one a write path
+   could ever reach. Project/local live in the task worktree.
+   `managedOnly` marks the layer that survives allowManagedHooksOnly. */
 const LAYERS = {
   claude: [
-    { id: 'session', label: 'Session',  file: '--settings <file>',                      writable: false, reach: 'not-discoverable',
-      why: 'Passed per-invocation on the CLI. Never present on disk, so discovery cannot see it.' },
-    { id: 'managed', label: 'Managed',  file: '/etc/claude-code/managed-settings.json', writable: false, reach: 'host',
-      why: 'Org policy. Managed hooks win outright and only a managed disableAllHooks can turn them off.' },
-    { id: 'local',   label: 'Local',    file: '<worktree>/.claude/settings.local.json', writable: false, reach: 'worktree',
-      why: 'Gitignored, per-checkout. Lives in the task worktree, not on the daemon host — read-only here.' },
+    { id: 'managed', label: 'Managed',  file: '/etc/claude-code/managed-settings.json', writable: false, reach: 'host', managedOnly: true,
+      why: 'Org policy. Merges in like every other layer — it does not outrank them. Its privilege is that only a managed disableAllHooks can switch it off.' },
+    { id: 'plugin',  label: 'Plugin',   file: '<plugin>/hooks/hooks.json',              writable: false, reach: 'host',
+      why: 'Bundled with an enabled plugin. Its copy of a handler stays separate from an identical one in a settings file — both run.' },
     { id: 'project', label: 'Project',  file: '<worktree>/.claude/settings.json',       writable: false, reach: 'worktree',
       why: 'Committed with the repo. Lives in the task worktree, not on the daemon host — read-only here.' },
+    { id: 'local',   label: 'Local',    file: '<worktree>/.claude/settings.local.json', writable: false, reach: 'worktree',
+      why: 'Gitignored, per-checkout. Lives in the task worktree, not on the daemon host — read-only here.' },
     { id: 'user',    label: 'User',     file: '~/.claude/settings.json',                writable: true,  reach: 'host',
       why: 'On the daemon host. The only layer Multica could write.' },
   ],
   codex: [
+    { id: 'managed',     label: 'Managed', file: 'requirements.toml [hooks]',  writable: false, reach: 'host', managedOnly: true,
+      why: 'Enterprise requirements or MDM. Trusted by policy, exempt from the review flow, and cannot be disabled from /hooks.' },
     { id: 'plugin',      label: 'Plugin',  file: '<plugin>/hooks/hooks.json',  writable: false, reach: 'host',
-      why: 'Bundled with an installed Codex plugin. Trusted by the plugin, not editable here.' },
+      why: 'Bundled with an enabled Codex plugin. Enabling the plugin does NOT trust its hooks — they stay skipped until reviewed.' },
     { id: 'repo-json',   label: 'Project', file: '<repo>/.codex/hooks.json',   writable: false, reach: 'worktree',
-      why: 'Lives in the task worktree, not on the daemon host — read-only here.' },
+      why: 'Lives in the task worktree, not on the daemon host — read-only here. Loads only when the .codex/ layer is trusted.' },
     { id: 'repo-toml',   label: 'Project', file: '<repo>/.codex/config.toml',  writable: false, reach: 'worktree',
-      why: 'Inline [[hooks.Event]] tables in the repo config. Read-only here.' },
+      why: 'Inline [[hooks.Event]] tables in the repo config. Read-only here, and also gated on project trust.' },
     { id: 'user-json',   label: 'User',    file: '~/.codex/hooks.json',        writable: true,  reach: 'host',
       why: 'On the daemon host. The primary layer Multica could write.' },
     { id: 'user-toml',   label: 'User',    file: '~/.codex/config.toml',       writable: true,  reach: 'host',
-      why: 'Inline [[hooks.Event]] tables. Writable, but editing TOML in place is riskier than the JSON file.' },
+      why: 'Inline [hooks] tables. Codex merges these with hooks.json in the same layer and warns at startup — one representation per layer is better.' },
   ],
 };
 
@@ -632,56 +641,76 @@ const LAYERS = {
    `hooks`, so it is configured but not registered. See PARK_COPY.
    `trust` — Codex only: 'trusted' | 'stale' | 'n/a'. */
 const HOOKS = {
-  /* ---------------- Claude (cc-claudesp) ---------------- */
+  /* ---------------- Claude (cc-claudesp) ----------------
+     Shaped to teach ACCUMULATION. PreToolUse below carries five entries
+     from four different files; every one of them loads and fires, which
+     is the real trap — you end up running handlers you forgot about,
+     from files you never open. Nothing here is shadowed by anything. */
   'b9322c50-ad96-489e-8aab-9e49f11c913a': [
     { id: 'c1', event: 'PreToolUse', matcher: 'Bash', scope: 'local', type: 'command',
       command: '.claude/hooks/repo-bash-policy.sh', timeout: 15, async: false, shell: 'bash',
-      owner: 'user', parked: false, desc: 'Repo-local Bash policy. Wins because Local defines PreToolUse.' },
+      owner: 'user', parked: false, desc: 'Repo-local Bash policy. Adding it did not switch anything else off.' },
     { id: 'c2', event: 'PreToolUse', matcher: 'Bash', scope: 'project', type: 'command',
       command: '.claude/hooks/block-force-push.py', timeout: 10, async: false, shell: 'bash',
-      owner: 'user', parked: false, desc: 'Shadowed: Local already defines PreToolUse.' },
+      if: 'Bash(git push *)', owner: 'user', parked: false,
+      desc: 'Also fires on every Bash call, but its if condition means the process only spawns for git push.' },
     { id: 'c3', event: 'PreToolUse', matcher: 'Write|Edit|MultiEdit', scope: 'user', type: 'command',
       command: '~/.claude/hooks/secret-firewall.js', timeout: 20, async: false, shell: 'bash',
+      statusMessage: 'Scanning the diff for secrets…',
       owner: 'multica', parked: false, installedFrom: 'secret-firewall',
-      desc: 'Shadowed: Local defines PreToolUse, so nothing in User runs for this event.' },
+      desc: 'Still enforcing. The repo-local Bash rule above does not touch it — different matcher, and layers merge anyway.' },
     { id: 'c4', event: 'PreToolUse', matcher: 'Bash', scope: 'user', type: 'command',
       command: '~/.claude/hooks/rm-rf-guard.py', timeout: 10, async: false, shell: 'bash',
       owner: 'multica', parked: false, installedFrom: 'dangerous-command-guard',
-      desc: 'Shadowed: same event, lower layer.' },
+      desc: 'Third handler on Bash. Three separate processes now spawn on every shell call.' },
+    { id: 'c4b', event: 'PreToolUse', matcher: 'Bash', scope: 'project', type: 'command',
+      command: '~/.claude/hooks/rm-rf-guard.py', timeout: 10, async: false, shell: 'bash',
+      owner: 'user', parked: false,
+      desc: 'Byte-identical to the User entry above, so Claude collapses the pair and spawns it once. This is the only cross-layer interaction that exists.' },
 
     { id: 'c5', event: 'PostToolUse', matcher: 'Write|Edit', scope: 'user', type: 'command',
       command: '~/.claude/hooks/format-changed.sh', timeout: 30, async: true, shell: 'bash',
       owner: 'multica', parked: false, installedFrom: 'auto-format',
-      desc: 'Only layer defining PostToolUse, so it runs.' },
+      desc: 'Formats whatever the turn touched. async, so its exit status is never read.' },
     { id: 'c6', event: 'PostToolUse', matcher: 'Edit.*', scope: 'user', type: 'command',
       command: '~/.claude/hooks/no-mock-code.py', timeout: 15, async: false, shell: 'bash',
       owner: 'user', parked: false, overmatch: true,
       desc: 'Matcher is an unanchored regex — also fires on NotebookEdit and MultiEdit.' },
+    { id: 'c6b', event: 'PostToolUse', matcher: 'Write|Edit', scope: 'plugin', type: 'command',
+      command: '~/.claude/hooks/format-changed.sh', timeout: 30, async: true, shell: 'bash',
+      owner: 'plugin', parked: false,
+      desc: 'The same formatter again, bundled in an enabled plugin. A plugin copy is NOT deduped against a settings-file copy — so this one really does run twice.' },
 
     { id: 'c7', event: 'UserPromptSubmit', matcher: '', scope: 'project', type: 'command',
       command: '.claude/hooks/inject-repo-context.sh', timeout: 30, async: false, shell: 'bash',
-      owner: 'user', parked: false, desc: 'Project defines UserPromptSubmit and Local does not, so Project wins.' },
+      owner: 'user', parked: false, desc: 'Injects repo context ahead of the prompt.' },
     { id: 'c8', event: 'UserPromptSubmit', matcher: '', scope: 'user', type: 'command',
       command: '~/.claude/hooks/prompt-audit.py', timeout: 30, async: true, shell: 'bash',
-      owner: 'multica', parked: false, desc: 'Shadowed by Project.' },
+      owner: 'multica', parked: false,
+      desc: 'Runs alongside the project hook, not instead of it. Both fire on every prompt.' },
+    { id: 'c8b', event: 'UserPromptSubmit', matcher: '', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/branch-guard.sh', timeout: 10, async: false, shell: 'bash',
+      if: 'Bash(git *)', owner: 'user', parked: false, ifOnNonToolEvent: true,
+      desc: 'An if condition on a non-tool event. Claude only evaluates if on tool events, so this handler never runs at all — and says nothing about it.' },
 
     { id: 'c9', event: 'SessionStart', matcher: 'startup|resume', scope: 'managed', type: 'command',
       command: '/opt/loco/policy/session-attest.sh', timeout: 20, async: false, shell: 'bash',
-      owner: 'managed', parked: false, desc: 'Managed policy. Cannot be overridden or parked from here.' },
+      owner: 'managed', parked: false,
+      desc: 'Managed policy. Merges in like anything else; its privilege is that only a managed disableAllHooks can stop it.' },
     { id: 'c10', event: 'SessionStart', matcher: '', scope: 'user', type: 'command',
       command: '~/.claude/hooks/session-logger.js', timeout: 10, async: true, shell: 'bash',
       owner: 'multica', parked: false, installedFrom: 'session-logger',
-      desc: 'Shadowed by the managed layer.' },
+      desc: 'Runs on every session start, next to the managed attestation hook.' },
 
     { id: 'c11', event: 'Stop', matcher: '', scope: 'user', type: 'command',
       command: '~/.claude/hooks/context-cost.js', timeout: 20, async: false, shell: 'bash',
       owner: 'multica', parked: false, installedFrom: 'context-cost',
-      desc: 'Reports token cost at the end of a turn.' },
+      desc: 'Reports token cost at the end of a turn. decision:"block" here REJECTS the stop — the opposite of Codex.' },
 
     { id: 'c12', event: 'Notification', matcher: '', scope: 'user', type: 'http',
       url: 'https://hooks.slack.com/services/T0…/B0…/xxxx', timeout: 10, async: true,
       owner: 'multica', parked: false, installedFrom: 'slack-notify',
-      desc: 'http handler — Claude only. Codex has no http type.' },
+      desc: 'http handler — Claude only, and gated by the merged allowedHttpHookUrls allowlist if one is set anywhere.' },
 
     { id: 'c13', event: 'SubagentStop', matcher: '', scope: 'user', type: 'command',
       command: '~/.claude/hooks/subagent-summary.py', timeout: 25, async: false, shell: 'bash',
@@ -698,22 +727,29 @@ const HOOKS = {
 
     { id: 'c16', event: 'FileChanged', matcher: 'ts|tsx', scope: 'user', type: 'command',
       command: '~/.claude/hooks/typecheck-touched.sh', timeout: 45, async: true, shell: 'bash',
-      owner: 'user', parked: false, desc: 'FileChanged uses the narrow exact matcher set (no regex).' },
+      owner: 'user', parked: false,
+      desc: 'FileChanged uses a narrower exact-match set — letters, digits, _ and | only — and the matcher doubles as the watch list.' },
   ],
 
   /* ---------------- Codex (cc-claudesp) ---------------- */
   '3327c002-1f3d-4c64-9eb7-e7cb1c77fd1f': [
-    { id: 'x1', event: 'PreToolUse', matcher: 'shell', scope: 'user-json', type: 'command',
+    { id: 'x1', event: 'PreToolUse', matcher: 'Bash', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/shell-policy.sh', timeout: 15, async: false, trust: 'trusted',
       statusMessage: 'Checking shell policy…', owner: 'user', parked: false,
-      desc: 'Runs. On Codex this does not shadow anything below it.' },
-    { id: 'x2', event: 'PreToolUse', matcher: 'shell', scope: 'repo-json', type: 'command',
-      command: '.codex/hooks/repo-shell-allowlist.py', timeout: 10, async: false, trust: 'trusted',
+      desc: 'Shell commands match as Bash. Here that is a regex, not an exact string — Codex has no exact-match path.' },
+    { id: 'x2', event: 'PreToolUse', matcher: '^apply_patch$', scope: 'repo-json', type: 'command',
+      command: '.codex/hooks/repo-patch-allowlist.py', timeout: 10, async: false, trust: 'trusted',
       owner: 'user', parked: false,
-      desc: 'Also runs — Codex merges. Both handlers fire on every shell call.' },
+      desc: 'Anchored on purpose. apply_patch also answers to the Edit and Write matcher aliases.' },
     { id: 'x3', event: 'PreToolUse', matcher: '*', scope: 'user-toml', type: 'command',
       command: '~/.codex/hooks/tool-audit.sh', timeout: 10, async: true, trust: 'trusted',
-      owner: 'multica', parked: false, desc: 'Third handler on the same event. Also runs.' },
+      owner: 'multica', parked: false,
+      desc: 'Fires on every tool call — but not on hosted tools like WebSearch, which never take the local hook path.' },
+    { id: 'x3b', event: 'PreToolUse', matcher: 'Bash', scope: 'managed', type: 'command',
+      command: '/enterprise/hooks/pre_tool_use_policy.py', commandWindows: 'py -3 C:\\enterprise\\hooks\\pre_tool_use_policy.py',
+      timeout: 30, trust: 'managed', statusMessage: 'Checking managed Bash command',
+      owner: 'managed', parked: false,
+      desc: 'From requirements.toml. Trusted by policy, exempt from review, and cannot be disabled from /hooks.' },
 
     { id: 'x4', event: 'PostToolUse', matcher: 'apply_patch', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/format-patch.sh', commandWindows: 'powershell -File %USERPROFILE%\\.codex\\hooks\\format-patch.ps1',
@@ -726,33 +762,38 @@ const HOOKS = {
       owner: 'multica', parked: false, installedFrom: 'secret-firewall',
       desc: 'Edited since it was trusted. Codex skips it entirely until it is re-trusted.' },
 
-    { id: 'x6', event: 'UserPromptSubmit', matcher: '', scope: 'user-json', type: 'prompt',
+    { id: 'x6', event: 'UserPromptSubmit', matcher: 'Bash', scope: 'user-json', type: 'prompt',
       prompt: 'Rewrite the user prompt to include the current sprint goal.', timeout: 30,
-      trust: 'trusted', owner: 'user', parked: false, ineffective: true,
-      desc: 'type: prompt is parsed by Codex and then silently skipped. It never runs.' },
+      trust: 'trusted', owner: 'user', parked: false, ineffective: true, matcherIgnored: true,
+      desc: 'Two silent failures in one entry: type: prompt is parsed and skipped, and a matcher on UserPromptSubmit is parsed and discarded.' },
 
     { id: 'x7', event: 'Stop', matcher: '', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/turn-gate.py', timeout: 20, async: false, trust: 'trusted',
       owner: 'user', parked: false, codexStopBlock: true,
-      desc: 'Emits decision:"block". On Codex that CONTINUES the turn — the opposite of Claude.' },
+      desc: 'Emits decision:"block". On Codex that CONTINUES the turn — the opposite of Claude. A continue:false from any Stop hook overrides that.' },
+    { id: 'x7b', event: 'PostToolUse', matcher: 'Bash', scope: 'user-json', type: 'command',
+      command: '~/.codex/hooks/log-shell.sh', timeout: 10, async: false, trust: 'trusted',
+      owner: 'user', parked: false, disabledNative: true,
+      desc: 'Switched off in the Codex /hooks browser. Codex has a real per-hook disable — Claude does not — so nothing needed inventing here.' },
 
     { id: 'x8', event: 'Interrupt', matcher: '', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/on-interrupt-cleanup.sh', timeout: 10, async: false, trust: 'trusted',
       owner: 'multica', parked: false, desc: 'Interrupt has no Claude equivalent.' },
 
-    { id: 'x9', event: 'SessionStart', matcher: '', scope: 'plugin', type: 'command',
-      command: '${CODEX_PLUGIN_ROOT}/hooks/bootstrap.js', timeout: 15, async: false, trust: 'managed',
-      owner: 'plugin', parked: false, desc: 'Plugin-bundled. Trusted by policy, not editable here.' },
+    { id: 'x9', event: 'SessionStart', matcher: 'startup|resume|clear|compact', scope: 'plugin', type: 'command',
+      command: '$PLUGIN_ROOT/hooks/bootstrap.js', timeout: 15, async: false, trust: 'review',
+      owner: 'plugin', parked: false,
+      desc: 'Plugin-bundled and never reviewed. Enabling the plugin did not trust its hooks — Codex skips it until someone opens /hooks.' },
 
-    { id: 'x10', event: 'PermissionRequest', matcher: 'shell', scope: 'user-json', type: 'mcp_tool',
+    { id: 'x10', event: 'PermissionRequest', matcher: 'Bash', scope: 'user-json', type: 'mcp_tool',
       mcpTool: 'loco-policy__review_command', timeout: 20, trust: 'trusted',
       additionalContextLimit: 4096, owner: 'multica', parked: false,
-      desc: 'mcp_tool is effective on both providers.' },
+      desc: 'mcp_tool is effective on both providers. It reuses an existing MCP connection — it will not start a server.' },
 
     { id: 'x11', event: 'SessionEnd', matcher: '', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/session-logger.js', timeout: 10, async: true, trust: 'trusted',
-      owner: 'multica', parked: true, installedFrom: 'session-logger',
-      desc: 'Parked by Multica — removed from hooks.json, kept in the Multica-owned sidecar.' },
+      owner: 'multica', parked: false, disabledNative: true, installedFrom: 'session-logger',
+      desc: 'Switched off through Codex\u2019s own per-hook disable. Multica does not park on Codex — there is a real feature to drive, and moving the entry would cost it its trust hash.' },
   ],
 
   '7a41e9d2-6c30-4f18-9ab2-1d5e77c4b809': [],
@@ -775,11 +816,20 @@ const FIRE_LOG = {
       { t: '15:51:20', event: 'PreToolUse', matcher: 'Bash', hook: 'repo-bash-policy.sh', ms: 64, verdict: 'blocked', task: 'LOCO-82',
         note: 'Exit 2 — tool call rejected. Reason: "git push --force is not allowed on this branch".' },
       { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'inject-repo-context.sh', ms: 233, verdict: 'success', task: 'LOCO-82' },
-      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'prompt-audit.py', ms: 0, verdict: 'shadowed', task: 'LOCO-82',
-        note: 'Never invoked: Project defines UserPromptSubmit, so the User entry is shadowed.' },
+      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'prompt-audit.py', ms: 88, verdict: 'success', task: 'LOCO-82',
+        note: 'Ran alongside the project hook above, not instead of it. Both fire on every prompt.' },
+      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'branch-guard.sh', ms: null, verdict: 'neverran', task: 'LOCO-82',
+        note: 'Has an if condition, and if is only evaluated on tool events. On UserPromptSubmit the handler is loaded and never invoked — no error, no log line of its own. This row is inferred from its absence.' },
       { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
         note: 'async:true — spawned and detached. Claude records the spawn, never the outcome.' },
-      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'rm-rf-guard.py', ms: 0, verdict: 'shadowed', task: 'LOCO-81' },
+      { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
+        note: 'The same formatter again, from the plugin layer. A plugin copy is not deduped against the settings-file copy, so the repo formatter really did run twice on one edit.' },
+      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'rm-rf-guard.py', ms: 51, verdict: 'deduped', task: 'LOCO-81',
+        note: 'Defined identically in User and Project. Claude collapsed the pair and spawned it once — one process, two entries.' },
+      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'repo-bash-policy.sh', ms: 39, verdict: 'success', task: 'LOCO-81',
+        note: '3 handlers fired on this one Bash call, from 3 different files.' },
+      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'block-force-push.py', ms: null, verdict: 'skippedif', task: 'LOCO-81',
+        note: 'if: Bash(git push *) did not match "ls -la", so the process never spawned. This is the cheap kind of not-running — intended, and the reason to prefer if over a broader matcher.' },
       { t: '15:48:03', event: 'SessionStart', matcher: 'startup|resume', hook: 'session-attest.sh', ms: 891, verdict: 'success', task: 'LOCO-81' },
       { t: '15:47:55', event: 'SessionEnd', matcher: '—', hook: 'flush-telemetry.py', ms: 1500, verdict: 'timeout', task: 'LOCO-78',
         stderr: 'hook exceeded its share of the 1.5s SessionEnd budget and was killed' },
@@ -792,17 +842,23 @@ const FIRE_LOG = {
     rows: [
       { t: '15:52:11', event: 'PreToolUse', matcher: 'shell', hook: 'shell-policy.sh', ms: 58, verdict: 'success', task: 'LOCO-82' },
       { t: '15:52:11', event: 'PreToolUse', matcher: 'shell', hook: 'repo-shell-allowlist.py', ms: 96, verdict: 'success', task: 'LOCO-82',
-        note: 'Ran in the same fire as shell-policy.sh — Codex merges, so both handlers execute.' },
+        note: 'Ran in the same fire as shell-policy.sh — Codex merges, so both handlers execute. Same as Claude in this respect.' },
       { t: '15:52:11', event: 'PreToolUse', matcher: '*', hook: 'tool-audit.sh', ms: null, verdict: 'async', task: 'LOCO-82' },
+      { t: '15:52:11', event: 'PreToolUse', matcher: 'Bash', hook: 'pre_tool_use_policy.py (managed)', ms: 197, verdict: 'success', task: 'LOCO-82',
+        note: '4 handlers fired on this one shell call, from 4 different files. The managed one would survive both kill switches.' },
+      { t: '15:52:05', event: 'SessionStart', matcher: 'startup|resume|clear|compact', hook: 'bootstrap.js (plugin)', ms: 0, verdict: 'untrusted', task: 'LOCO-82',
+        stderr: 'hook skipped: definition has never been trusted\nenabling the plugin does not trust its hooks — run `/hooks` to review' },
       { t: '15:51:58', event: 'PostToolUse', matcher: 'apply_patch', hook: 'secret-firewall.js', ms: 0, verdict: 'untrusted', task: 'LOCO-82',
         stderr: 'hook skipped: trusted_hash b41c9f0e… does not match current hash 1f7ad30c…\nrun `/hooks` in Codex to review and trust it' },
       { t: '15:51:58', event: 'PostToolUse', matcher: 'apply_patch', hook: 'format-patch.sh', ms: null, verdict: 'async', task: 'LOCO-82' },
       { t: '15:51:12', event: 'UserPromptSubmit', matcher: '—', hook: 'prompt-rewrite (type: prompt)', ms: 0, verdict: 'ineffective', task: 'LOCO-82',
-        note: 'Codex parsed the entry and skipped it. type: prompt is never executed on Codex.' },
+        note: 'Codex parsed the entry and skipped it. type: prompt is never executed on Codex — and its matcher ("Bash") was discarded too, since UserPromptSubmit ignores matchers.' },
+      { t: '15:50:55', event: 'PostToolUse', matcher: 'Bash', hook: 'log-shell.sh', ms: null, verdict: 'neverran', task: 'LOCO-82',
+        note: 'Disabled in /hooks. Codex has a real per-hook disable, so this one is off on purpose and the entry is still in the file.' },
       { t: '15:50:40', event: 'Stop', matcher: '—', hook: 'turn-gate.py', ms: 143, verdict: 'continued', task: 'LOCO-82',
         note: 'Returned decision:"block". On Codex that continued the turn.' },
-      { t: '15:44:19', event: 'Interrupt', matcher: '—', hook: 'on-interrupt-cleanup.sh', ms: 61, verdict: 'success', task: 'LOCO-80' },
-      { t: '15:40:02', event: 'SessionStart', matcher: '—', hook: 'bootstrap.js (plugin)', ms: 302, verdict: 'success', task: 'LOCO-80' },
+      { t: '15:44:19', event: 'Interrupt', matcher: '—', hook: 'on-interrupt-cleanup.sh', ms: 61, verdict: 'success', task: 'LOCO-80',
+        note: 'Interrupt has no Claude equivalent. It also has a 1 s default timeout, extendable to 3 s — not the usual 600 s.' },
     ],
   },
   '7a41e9d2-6c30-4f18-9ab2-1d5e77c4b809': { source: 'No hooks configured, so nothing has fired.', sourceOk: true, rows: [] },
@@ -815,7 +871,9 @@ const VERDICTS = {
   failed:      { label: 'failed',      cls: 'b-bad',  icon: 'circleAlert' },
   timeout:     { label: 'timed out',   cls: 'b-bad',  icon: 'clock' },
   async:       { label: 'async · unknown', cls: '',   icon: 'zap' },
-  shadowed:    { label: 'never ran · shadowed', cls: '', icon: 'layers' },
+  deduped:     { label: 'collapsed · ran once', cls: '', icon: 'copy' },
+  neverran:    { label: 'never invoked', cls: 'b-bad', icon: 'ban' },
+  skippedif:   { label: 'if did not match', cls: '', icon: 'filter' },
   untrusted:   { label: 'skipped · not trusted', cls: 'b-bad', icon: 'key' },
   ineffective: { label: 'skipped · type not supported', cls: 'b-bad', icon: 'ban' },
   continued:   { label: 'continued turn', cls: 'b-warn', icon: 'info' },
@@ -869,10 +927,10 @@ const PARK_COPY = {
     caveat: 'There is no native per-hook disable in Claude Code — <code class="cmd">/hooks</code> is read-only and only a global <code class="cmd">disableAllHooks</code> exists. Parking is Multica\'s own mechanism, not a Claude feature.',
   },
   codex: {
-    verb: 'Park',
-    what: 'Removes the entry from <code class="cmd">~/.codex/hooks.json</code> and keeps it in a Multica-owned sidecar.',
-    why: 'Codex has no disable flag either. Keeping the entry outside hooks.json is the only way to stop it running without losing it.',
-    caveat: 'Any write to a Codex hooks file invalidates the trust hashes recorded in <code class="cmd">[hooks.state]</code>. Parking or unparking will leave hooks needing re-trust.',
+    verb: 'Disable',
+    what: 'Sets the hook disabled in the Codex hook browser — the same state <code class="cmd">/hooks</code> writes. The entry stays exactly where it is in the file.',
+    why: 'Nothing is moved and nothing is rewritten, so this is a real provider feature rather than a Multica invention.',
+    caveat: 'Because the entry is untouched, the trust hash stays valid and the hook resumes cleanly when re-enabled. Managed hooks from <code class="cmd">requirements.toml</code> cannot be disabled this way — the switch is off for those rows.',
   },
 };
 </script>
@@ -889,6 +947,8 @@ const state = {
   logFilter: 'all',
   stateDemo: 'discovery', // discovery | empty | offline
   discoveryStep: 3,
+  killAll: false,          // what-if: disableAllHooks / [features].hooks = false
+  killManagedOnly: false,  // what-if: allowManagedHooksOnly / allow_managed_hooks_only
 };
 
 const rt = () => RUNTIMES.find((r) => r.id === state.runtimeId);
@@ -898,52 +958,109 @@ const layerMeta = (prov, id) => layersOf(prov).find((l) => l.id === id) || { lab
 const hooksOf = (id) => HOOKS[id] || [];
 const providerLabel = (p) => (p === 'claude' ? 'Claude Code' : 'Codex');
 
-/* Claude overrides per event: the highest-priority layer that defines the
-   event wins outright and every entry below it is shadowed. Codex merges:
-   every entry runs. This function is the only place that difference lives,
-   which is why the two screens can render genuinely different pictures
-   instead of one screen with a flag. */
+/* Short label for a handler in a dense list. Splitting on "/" is only
+   right for a command path — a URL's last segment is usually a token. */
+function handlerLabel(h) {
+  if (h.type === 'http')     return 'POST ' + (h.url || '').replace(/^https?:\/\//, '').split('/')[0];
+  if (h.type === 'mcp_tool') return h.mcpTool || 'mcp_tool';
+  if (h.type === 'prompt')   return 'prompt hook';
+  if (h.type === 'agent')    return 'agent hook';
+  return (h.command || '').split(/[\\/]/).pop() || h.type;
+}
+
+/* Both providers MERGE. Neither has per-entry precedence: every matching
+   handler from every layer runs, so this function does not pick winners.
+   What it computes instead is what merging actually costs you — how many
+   handlers pile onto one event — plus the four real reasons an entry
+   does not run. Docs, verbatim: "Hook entries merge across settings levels
+   rather than replacing each other: user, project, and local settings add
+   their own hooks without removing managed ones."
+   — https://code.claude.com/docs/en/hooks
+
+   The one genuine cross-layer interaction on Claude is DEDUPLICATION, not
+   override: "If you define the same handler in more than one settings
+   file, it runs once. A plugin's or skill's copy of the same handler stays
+   separate." So a byte-identical handler in two settings files collapses
+   to one spawn; a plugin's copy does not. Codex documents no equivalent.
+
+   Neither provider documents a run SEQUENCE. Claude states matching hooks
+   "run in parallel"; Codex says only that all of them load. So nothing
+   here is numbered — an invented order would be the next thing to be
+   wrong about. */
 function resolve(runtime) {
   const hooks = hooksOf(runtime.id);
-  const order = layersOf(runtime.provider).map((l) => l.id);
   const byEvent = {};
   hooks.forEach((h) => { (byEvent[h.event] = byEvent[h.event] || []).push(h); });
 
+  /* Claude-only dedup pass. Two settings-file entries with the same
+     handler shape collapse; a plugin or skill copy is kept separate. */
+  const SETTINGS_LAYERS = ['managed', 'project', 'local', 'user'];
+  const sig = (h) => [h.event, h.matcher || '*', h.type, h.command || h.url || h.mcpTool || h.prompt || '',
+    (h.args || []).join('\u0000'), h.if || ''].join('\u0001');
+
+  hooks.forEach((h) => { h._dupOf = null; h._dupWith = null; });
+  if (runtime.provider === 'claude') {
+    const seen = {};
+    hooks.filter((h) => !h.parked && SETTINGS_LAYERS.includes(h.scope)).forEach((h) => {
+      const k = sig(h);
+      if (seen[k]) {
+        h._dupOf = seen[k];
+        seen[k]._dupWith = h;
+      } else {
+        seen[k] = h;
+      }
+    });
+  }
+
+  /* Kill switches. These are the only thing on either provider that
+     resembles precedence, and they are global, not per-entry. */
+  hooks.forEach((h) => {
+    h._killed = null;
+    const managed = h.scope === 'managed';
+    if (state.killAll && !managed) h._killed = 'all';
+    if (state.killAll && managed) h._killed = null;      // cannot be reached from outside managed settings
+    if (state.killManagedOnly && !managed) {
+      const exempt = runtime.provider === 'claude' && h.scope === 'plugin' && h.forceEnabled;
+      if (!exempt) h._killed = 'managedOnly';
+    }
+  });
+
+  /* Accumulation, the thing merging actually produces. */
   Object.keys(byEvent).forEach((ev) => {
     const group = byEvent[ev];
-    if (runtime.provider === 'claude') {
-      const live = group.filter((h) => !h.parked);
-      const winningScope = live
-        .map((h) => h.scope)
-        .sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
-      group.forEach((h) => {
-        h._shadowed = !h.parked && h.scope !== winningScope;
-        h._winningScope = winningScope;
-      });
-      let n = 0;
-      group.forEach((h) => { h._runOrder = (!h.parked && !h._shadowed) ? ++n : null; });
-    } else {
-      group.forEach((h) => { h._shadowed = false; });
-      let n = 0;
-      group
-        .slice()
-        .sort((a, b) => order.indexOf(a.scope) - order.indexOf(b.scope))
-        .forEach((h) => { h._runOrder = runState(h, runtime).runs ? ++n : null; });
-    }
+    const firing = group.filter((h) => runState(h, runtime).runs);
+    group.forEach((h) => { h._fires = firing.length; h._configured = group.length; });
   });
   return byEvent;
 }
 
-/* One honest answer to "is this running right now?", with the reason. */
+/* One honest answer to "is this running right now?", with the reason.
+   Ordered most-decisive first. Nothing here says "shadowed" — no entry
+   on either provider is ever displaced by another layer. */
 function runState(h, runtime) {
+  const prov = runtime.provider;
+  if (h._killed === 'all') return { runs: false, label: 'Off · kill switch', cls: 'b-warn', icon: 'ban',
+    why: prov === 'claude'
+      ? 'disableAllHooks is on. Every non-managed hook stops, whatever layer it lives in.'
+      : '[features].hooks = false. Hooks are off session-wide.' };
+  if (h._killed === 'managedOnly') return { runs: false, label: 'Off · managed only', cls: 'b-warn', icon: 'shield',
+    why: prov === 'claude'
+      ? 'allowManagedHooksOnly blocks user, project, local and plugin hooks. Only plugins force-enabled in managed enabledPlugins are exempt.'
+      : 'allow_managed_hooks_only = true skips user, project, session and plugin hooks.' };
+  if (h.disabledNative) return { runs: false, label: 'Disabled in /hooks', cls: '', icon: 'ban',
+    why: 'Switched off per-hook in the Codex /hooks browser. This is a real Codex feature — the entry stays in the file and stops running.' };
   if (h.parked)      return { runs: false, label: 'Parked',       cls: '',       icon: 'archive',
-    why: 'Configured but not registered. Multica moved the entry out of the hooks key.' };
-  if (h._shadowed)   return { runs: false, label: 'Shadowed',     cls: '',       icon: 'layers',
-    why: 'A higher-precedence file defines ' + h.event + ', so this entry is never loaded.' };
+    why: 'Configured but not registered. Multica moved the entry into a _disabledHooks sidecar, because Claude has no per-hook disable of its own.' };
   if (h.ineffective) return { runs: false, label: 'Never runs',   cls: 'b-bad',  icon: 'ban',
     why: 'Codex parses type: ' + h.type + ' and then skips it. It has never executed.' };
   if (h.trust === 'stale') return { runs: false, label: 'Not trusted', cls: 'b-bad', icon: 'key',
     why: 'Edited since it was trusted. Codex skips it until the new hash is trusted on the host.' };
+  if (h.trust === 'review') return { runs: false, label: 'Needs review', cls: 'b-bad', icon: 'key',
+    why: 'Never trusted. Codex requires you to review the exact definition in /hooks before it can run — installing the plugin was not enough.' };
+  if (h.ifOnNonToolEvent) return { runs: false, label: 'Never runs', cls: 'b-bad', icon: 'ban',
+    why: 'An if condition is only evaluated on tool events. On ' + h.event + ', a handler with if set never runs at all.' };
+  if (h._dupOf) return { runs: false, label: 'Runs once', cls: '', icon: 'copy',
+    why: 'Byte-identical to the ' + layerMeta(prov, h._dupOf.scope).label + '-scope entry, so Claude collapses the pair and spawns it once. Both entries are loaded; only one process runs.' };
   if (h.broken === 'path') return { runs: true, label: 'Failing',  cls: 'b-bad',  icon: 'circleAlert',
     why: 'Registered and fires, but the command cannot be found. Claude treats that as non-blocking, so nothing surfaces in the session.' };
   if (h.async)       return { runs: true,  label: 'Active · async', cls: 'b-ok', icon: 'zap',
@@ -951,16 +1068,39 @@ function runState(h, runtime) {
   return { runs: true, label: 'Active', cls: 'b-ok', icon: 'check', why: 'Registered and running.' };
 }
 
-/* The matcher rule is the single most surprising thing in the schema, so
-   it gets a live interpretation rather than a tooltip. */
-function interpretMatcher(v) {
+/* Matcher semantics are the single most surprising part of the schema AND
+   they differ per provider, so the hint is live and provider-aware rather
+   than one tooltip that is half-wrong wherever you read it.
+   Claude: exact-string unless the value contains a character outside
+   [A-Za-z0-9_-,| ], in which case it is an unanchored JS regex.
+   Codex: always a regex. There is no exact-match path at all, and on
+   three events the matcher is parsed and then ignored. */
+const CODEX_MATCHERLESS = ['UserPromptSubmit', 'Stop', 'Interrupt'];
+
+function interpretMatcher(v, prov, event) {
   const s = (v || '').trim();
-  if (s === '' || s === '*') return { kind: 'all', text: 'every tool fires this hook. Empty and * are the same thing.' };
+  if (prov === 'codex' && event && CODEX_MATCHERLESS.includes(event)) {
+    return { kind: 'ignored', text: 'ignored. Codex does not honour a matcher on ' + event + ' — whatever you type here is parsed and discarded, and the hook fires on every occurrence.' };
+  }
+  if (s === '' || s === '*') return { kind: 'all', text: 'every occurrence fires this hook. Empty and * are the same thing.' };
+
+  if (prov === 'codex') {
+    const extra = [];
+    if (!s.startsWith('^') || !s.endsWith('$')) {
+      extra.push('Unanchored, so it matches anywhere in the name — ^' + s.replace(/[^A-Za-z0-9_]/g, '') + '$ pins it.');
+    }
+    if (/^[A-Za-z0-9_]+$/.test(s)) {
+      extra.push('On Claude this same value would be an exact match; on Codex it is not.');
+    }
+    return { kind: 'regex', text: 'a regular expression. Codex has no exact-string path — every matcher is a regex, however plain it looks. ' + extra.join(' ') };
+  }
+
   if (/^[A-Za-z0-9_\-,| ]+$/.test(s)) {
     const parts = s.split(/[|,]/).map((x) => x.trim()).filter(Boolean);
-    return { kind: 'exact', text: parts.length > 1
+    return { kind: 'exact', text: (parts.length > 1
       ? 'matches only ' + parts.join(', ') + ' — nothing else.'
-      : 'matches only ' + parts[0] + ' — nothing else.' };
+      : 'matches only ' + parts[0] + ' — nothing else.')
+      + ' Only letters, digits, _, -, spaces, , and | keep it on the exact-string path.' };
   }
   const extra = [];
   if (/^[A-Za-z0-9_]+\.\*$/.test(s)) {
@@ -991,7 +1131,7 @@ function validateCommand(cmd) {
  * ==================================================================== */
 const SCREENS = [
   { id: 'hooks',      label: 'Hooks',            icon: 'webhook' },
-  { id: 'precedence', label: 'Scope & precedence', icon: 'layers' },
+  { id: 'precedence', label: 'What actually runs', icon: 'layers' },
   { id: 'log',        label: 'Fire log',         icon: 'activity' },
   { id: 'gallery',    label: 'Starter hooks',    icon: 'pkg' },
   { id: 'states',     label: 'Discovery & edge states', icon: 'refresh' },
@@ -1070,28 +1210,27 @@ function behaviorStrip(prov) {
     <div class="behavior-strip claude">
       ${ic('layers', 15, 'ico')}
       <div>
-        <div class="t-label"><strong class="semibold">Claude overrides.</strong>
-        For each event, the highest-precedence file that defines it wins and every entry below is
-        <span class="strike">shadowed</span> — not merged. 33 events. <code class="cmd">http</code>,
-        <code class="cmd">prompt</code> and <code class="cmd">agent</code> handlers all work.</div>
-        <div class="t-caption muted" style="margin-top:2px">Precedence: <code class="cmd">--settings</code> › managed › local › project › user.</div>
+        <div class="t-label"><strong class="semibold">Hooks accumulate.</strong>
+        Every layer's entries merge and all of them run — nothing is ever displaced. Adding a hook
+        only ever adds work. 33 events; all five handler types work.</div>
+        <div class="t-caption muted" style="margin-top:2px">Claude has <strong class="semibold">no per-hook disable</strong>, so the pile only grows. A byte-identical handler in two settings files is the single exception — it collapses and runs once.</div>
       </div>
       <span class="spacer"></span>
-      <button class="btn sm" data-screen="precedence">See what wins</button>
+      <button class="btn sm" data-screen="precedence">See everything that runs</button>
     </div>`;
   }
   return `
   <div class="behavior-strip codex">
     ${ic('gitBranch', 15, 'ico')}
     <div>
-      <div class="t-label"><strong class="semibold">Codex merges.</strong>
-      Every matching hook in every file runs. Nothing is ever shadowed, so three entries on one event
-      means three processes per fire. 12 events. Only <code class="cmd">command</code> and
+      <div class="t-label"><strong class="semibold">Hooks accumulate — but each one has to earn its place.</strong>
+      Layers merge exactly as they do on Claude. What differs is the gate: a hook runs only while
+      its hash is trusted, and 12 events, and only <code class="cmd">command</code> and
       <code class="cmd">mcp_tool</code> do anything.</div>
-      <div class="t-caption muted" style="margin-top:2px">Hooks also run only while their hash is trusted — any edit stops them until re-trusted.</div>
+      <div class="t-caption muted" style="margin-top:2px">Codex <strong class="semibold">does</strong> have a per-hook disable in <code class="cmd">/hooks</code>. Every matcher here is a regex, and three events ignore it entirely.</div>
     </div>
     <span class="spacer"></span>
-    <button class="btn sm" data-screen="precedence">See run order</button>
+    <button class="btn sm" data-screen="precedence">See everything that runs</button>
   </div>`;
 }
 
@@ -1123,7 +1262,7 @@ function screenHooks() {
     }
     const open = !state.collapsed[ev];
     const running = group.filter((h) => runState(h, r).runs).length;
-    const trouble = group.filter((h) => { const s = runState(h, r); return !s.runs && (h.ineffective || h.trust === 'stale'); }).length;
+    const trouble = group.filter((h) => { const st = runState(h, r); return !st.runs && (h.ineffective || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review'); }).length;
 
     return `
     <div class="event-group">
@@ -1134,13 +1273,10 @@ function screenHooks() {
         <span class="badge">${group.length} ${group.length === 1 ? 'hook' : 'hooks'}</span>
         <span class="badge ${running ? 'b-ok' : 'b-dim'}">${running} running</span>
         ${trouble ? `<span class="badge b-bad">${ic('alert', 11)}${trouble} not running</span>` : ''}
-        ${r.provider === 'codex' && running > 1 ? `<span class="badge b-codex">${ic('gitBranch', 11)}all ${running} fire</span>` : ''}
-        ${r.provider === 'claude' && group.filter((h) => h._shadowed).length ? `<span class="badge">${ic('layers', 11)}${group.filter((h) => h._shadowed).length} shadowed</span>` : ''}
+        ${running > 1 ? `<span class="badge ${running > 2 ? 'b-warn' : ''}">${ic('zap', 11)}all ${running} fire</span>` : ''}
+        ${group.filter((h) => h._dupOf).length ? `<span class="badge">${ic('copy', 11)}${group.filter((h) => h._dupOf).length} collapsed</span>` : ''}
         <span class="spacer"></span>
-        <span class="t-caption faint">${r.provider === 'claude'
-          ? (!group[0]._winningScope ? 'nothing loads — all parked'
-            : group.filter((h) => h._shadowed).length ? 'wins: ' + esc(layerMeta(r.provider, group[0]._winningScope).file) : 'single layer')
-          : 'merged across ' + new Set(group.map((h) => h.scope)).size + ' file(s)'}</span>
+        <span class="t-caption faint">merged across ${new Set(group.map((h) => h.scope)).size} file${new Set(group.map((h) => h.scope)).size === 1 ? '' : 's'}${running > 1 ? ' · ' + running + ' processes per fire' : ''}</span>
       </button>
       ${open ? hookTable(group, r) : ''}
     </div>`;
@@ -1151,7 +1287,7 @@ function screenHooks() {
     <div class="col-main">
       ${runtimePicker()}
       ${behaviorStrip(r.provider)}
-      ${r.provider === 'codex' && hooks.some((h) => h.trust === 'stale') ? trustBanner(hooks.filter((h) => h.trust === 'stale')) : ''}
+      ${r.provider === 'codex' && hooks.some((h) => h.trust === 'stale' || h.trust === 'review') ? trustBanner(hooks.filter((h) => h.trust === 'stale' || h.trust === 'review')) : ''}
       ${hooks.some((h) => h.broken === 'path') ? `
         <div class="notice bad t-label">
           ${ic('circleAlert', 15, 'ico')}
@@ -1206,17 +1342,17 @@ function hookRow(h, r) {
   const lm = layerMeta(r.provider, h.scope);
   const types = HANDLER_TYPES[r.provider].find((t) => t.v === h.type);
   const target = h.command || h.url || h.mcpTool || h.prompt || '—';
-  const mi = interpretMatcher(h.matcher);
+  const mi = interpretMatcher(h.matcher, r.provider, h.event);
   const cmdIssue = h.type === 'command' ? validateCommand(h.command) : null;
 
   return `
-  <tr class="${h._shadowed ? 'shadowed' : ''}">
-    <td>${r.provider === 'codex'
-      ? `<span class="runorder ${h._runOrder ? '' : 'off'}" title="${h._runOrder ? 'Runs ' + ordinal(h._runOrder) + ' on this event' : 'Does not run'}">${h._runOrder || '–'}</span>`
-      : `<span class="runorder ${st.runs ? '' : 'off'}" title="${esc(st.why)}">${st.runs ? ic('check', 12) : ic('ban', 12)}</span>`}</td>
+  <tr class="${st.runs ? '' : 'inert'}">
+    <td><span class="runorder ${st.runs ? '' : 'off'}" title="${esc(st.why)}">${st.runs ? ic('check', 12) : ic('ban', 12)}</span></td>
     <td>
       <span class="cmd matcher">${h.matcher ? esc(h.matcher) : '<span class="faint">* (all)</span>'}</span>
-      ${mi.kind === 'regex' ? `<div class="t-micro" style="color:var(--warning);margin-top:2px">${ic('alert', 10)} regex, unanchored</div>` : ''}
+      ${mi.kind === 'ignored' ? `<div class="t-micro" style="color:var(--destructive);margin-top:2px">${ic('alert', 10)} ignored on ${esc(h.event)}</div>`
+        : mi.kind === 'regex' ? `<div class="t-micro" style="color:var(--warning);margin-top:2px">${ic('alert', 10)} regex${(h.matcher || '').startsWith('^') && (h.matcher || '').endsWith('$') ? ', anchored' : ', unanchored'}</div>`
+        : ''}
     </td>
     <td>
       <span class="badge ${types && !types.effective ? 'b-bad' : ''}">${esc(h.type)}</span>
@@ -1230,6 +1366,10 @@ function hookRow(h, r) {
       ${h.additionalContextLimit ? `<div class="t-micro faint" style="margin-top:2px">additionalContextLimit: ${h.additionalContextLimit}</div>` : ''}
       ${cmdIssue ? `<div class="t-micro" style="color:var(--${cmdIssue.level === 'error' ? 'destructive' : 'warning'});margin-top:3px">${ic('alert', 10)} ${esc(cmdIssue.text.split('.')[0])}.</div>` : ''}
       ${h.codexStopBlock ? `<div class="t-micro" style="color:var(--warning);margin-top:3px">${ic('alert', 10)} Emits <span class="cmd">decision:"block"</span> on <span class="cmd">Stop</span> — on Codex that <strong>continues</strong> the turn.</div>` : ''}
+      ${h.ifOnNonToolEvent ? `<div class="t-micro" style="color:var(--destructive);margin-top:3px">${ic('alert', 10)} <span class="cmd">if</span> is only evaluated on tool events. On <span class="cmd">${esc(h.event)}</span> this handler never runs.</div>` : ''}
+      ${h.if && !h.ifOnNonToolEvent ? `<div class="t-micro faint" style="margin-top:2px">if: <span class="cmd">${esc(h.if)}</span> — pre-filter, so the process only spawns on a match</div>` : ''}
+      ${h._dupOf ? `<div class="t-micro" style="margin-top:3px">${ic('copy', 10)} Identical to the ${esc(layerMeta(r.provider, h._dupOf.scope).label)} entry — Claude spawns it once.</div>` : ''}
+      ${h._dupWith ? `<div class="t-micro faint" style="margin-top:2px">${ic('copy', 10)} Also defined in ${esc(layerMeta(r.provider, h._dupWith.scope).label)}; the pair runs once.</div>` : ''}
       <div class="t-micro faint" style="margin-top:3px">timeout ${h.timeout != null ? h.timeout + 's' : 'default'}${h.shell ? ' · ' + esc(h.shell) : ''}</div>
     </td>
     <td>
@@ -1245,15 +1385,26 @@ function hookRow(h, r) {
     <td>
       <div class="inline">
         <span class="badge ${st.cls}">${ic(st.icon, 11)}${esc(st.label)}</span>
-        ${h.trust === 'stale' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}Re-trust</button>` : ''}
+        ${h.trust === 'stale' || h.trust === 'review' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}${h.trust === 'review' ? 'Review' : 'Re-trust'}</button>` : ''}
       </div>
       <div class="t-micro faint" style="margin-top:3px">${esc(st.why)}</div>
     </td>
     <td class="nowrap">
       <div class="inline" style="gap:2px">
-        <label class="sr" for="park-${h.id}">${h.parked ? 'Unpark' : 'Park'} this hook</label>
-        <input class="switch" type="checkbox" id="park-${h.id}" ${h.parked ? '' : 'checked'} ${lm.writable && h.owner !== 'managed' && h.owner !== 'plugin' ? '' : 'disabled'} data-park="${h.id}"
-          title="${lm.writable && h.owner !== 'managed' && h.owner !== 'plugin' ? 'Registered — click to park' : 'Read-only source: Multica cannot change this file'}" />
+        ${(() => {
+          /* The switch means "is this registered to run", and the word for
+             turning it off is provider-specific on purpose: Codex has a
+             real per-hook disable, Claude has none. `disabledNative` is
+             Codex's own off-state; `parked` is Multica's Claude-only one. */
+          const off = !!(h.parked || h.disabledNative);
+          const verb = r.provider === 'codex' ? 'Disable' : 'Park';
+          const onVerb = r.provider === 'codex' ? 'Re-enable' : 'Unpark';
+          const mine = lm.writable && h.owner !== 'managed' && h.owner !== 'plugin';
+          return `
+        <label class="sr" for="park-${h.id}">${off ? onVerb : verb} this hook</label>
+        <input class="switch" type="checkbox" id="park-${h.id}" ${off ? '' : 'checked'} ${mine ? '' : 'disabled'} data-park="${h.id}"
+          title="${mine ? (off ? onVerb + ' this hook' : 'Registered — click to ' + verb.toLowerCase()) : 'Read-only source: Multica cannot change this file'}" />`;
+        })()}
         <button class="btn ghost icon" data-edit="${h.id}" title="Edit" ${lm.writable ? '' : 'disabled'}>${ic('pencil', 14)}</button>
         <button class="btn ghost icon" data-del="${h.id}" title="Delete" ${lm.writable ? '' : 'disabled'}>${ic('trash', 14)}</button>
       </div>
@@ -1280,9 +1431,10 @@ function railCards(r, hooks) {
   const counts = {};
   hooks.forEach((h) => { counts[h.scope] = (counts[h.scope] || 0) + 1; });
   const running = hooks.filter((h) => runState(h, r).runs).length;
-  const parked = hooks.filter((h) => h.parked).length;
-  const shadowed = hooks.filter((h) => h._shadowed).length;
-  const broken = hooks.filter((h) => h.broken || h.ineffective || h.trust === 'stale').length;
+  const parked = hooks.filter((h) => h.parked || h.disabledNative).length;
+  const deduped = hooks.filter((h) => h._dupOf).length;
+  const broken = hooks.filter((h) => h.broken || h.ineffective || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review').length;
+  const busiest = hooks.reduce((a, h) => (h._fires > (a._fires || 0) ? h : a), {});
 
   return `
   <div class="card">
@@ -1290,12 +1442,15 @@ function railCards(r, hooks) {
     <div class="card-body tight">
       <dl class="kv">
         <dt>Running</dt><dd><span class="badge b-ok">${running}</span></dd>
-        <dt>Parked</dt><dd><span class="badge">${parked}</span></dd>
-        ${r.provider === 'claude' ? `<dt>Shadowed</dt><dd><span class="badge">${shadowed}</span></dd>` : `<dt>Shadowed</dt><dd><span class="badge b-dim">n/a on Codex</span></dd>`}
+        <dt>${r.provider === 'claude' ? 'Parked' : 'Switched off'}</dt><dd><span class="badge">${parked}</span></dd>
+        ${r.provider === 'claude'
+          ? `<dt>Collapsed</dt><dd><span class="badge">${deduped}</span></dd>`
+          : `<dt>Collapsed</dt><dd><span class="badge b-dim">n/a on Codex</span></dd>`}
         <dt>Not working</dt><dd><span class="badge ${broken ? 'b-bad' : ''}">${broken}</span></dd>
       </dl>
       <hr class="sep" style="margin:10px 0" />
       <div class="t-caption muted">Configured ${hooks.length} · across ${new Set(hooks.map((h) => h.scope)).size} files · ${new Set(hooks.map((h) => h.event)).size} events</div>
+      ${busiest.event ? `<div class="t-caption" style="margin-top:6px;color:var(--warning)">${ic('alert', 11)} Busiest event: <code class="cmd">${esc(busiest.event)}</code> fires <strong class="semibold">${busiest._fires} handlers</strong> every time it occurs.</div>` : ''}
     </div>
   </div>
 
@@ -1325,7 +1480,9 @@ function railCards(r, hooks) {
         <div>This screen shows four things Multica cannot do today. They are sketched so Marty can react to them, not because they exist.</div>
         <div>${ic('x', 11)} <strong class="semibold">Reading</strong> a hooks file — discovery only covers fixed skill and MCP paths.</div>
         <div>${ic('x', 11)} <strong class="semibold">Writing</strong> any file on a runtime host — no write path exists at all.</div>
-        <div>${ic('x', 11)} <strong class="semibold">Parking</strong> — Multica's own mechanism; neither provider has a per-hook disable.</div>
+        <div>${ic('x', 11)} <strong class="semibold">${r.provider === 'claude' ? 'Parking' : 'Disabling'}</strong> — ${r.provider === 'claude'
+          ? 'Multica\u2019s own invention. Claude has no per-hook disable at all, so there is no feature to drive.'
+          : 'Codex <em>does</em> have a per-hook disable, but Multica has no way to reach its hook-state store on the host.'}</div>
         <div>${ic('x', 11)} <strong class="semibold">Re-trusting</strong> a Codex hook — trust is granted by an interactive CLI on the host.</div>
       </div>
     </div>
@@ -1335,11 +1492,22 @@ function railCards(r, hooks) {
 
 <script>
 /* ==================================================================== *
- * SCREEN 2 — SCOPE & PRECEDENCE
- * The two providers get two different layouts on purpose. Claude's
- * question is "which one wins"; Codex's question is "how many run and in
- * what order". Rendering Codex with the Claude treatment would imply
- * shadowing exists there, which is the exact lie this screen must avoid.
+ * SCREEN 2 — WHAT ACTUALLY RUNS
+ *
+ * Rebuilt after the override model turned out to be wrong. Hook entries
+ * MERGE on BOTH providers — no entry is ever displaced by a higher layer,
+ * so there is no "wins" column and nothing is struck through. Previous
+ * revisions of this file rendered Claude as an override model; that was a
+ * factual error and it is gone.
+ *
+ * With precedence identical, the two-screen split lost its reason to
+ * exist, so it is collapsed: ONE layout, one merge model, and
+ * provider-specific columns only where the facts genuinely diverge
+ * (Claude dedup vs Codex trust + native per-hook disable).
+ *
+ * The valuable thing merging leaves behind is ACCUMULATION: handlers pile
+ * up across files nobody routinely opens, and neither CLI shows you the
+ * total. That is what this screen is for.
  * ==================================================================== */
 function screenPrecedence() {
   const r = rt();
@@ -1353,179 +1521,192 @@ function screenPrecedence() {
     <div class="col-main">
       ${runtimePicker()}
       ${behaviorStrip(r.provider)}
-      ${r.provider === 'claude' ? claudePrecedence(r, byEvent) : codexPrecedence(r, byEvent)}
+      ${mergeNotice(r)}
+      ${accumulationTable(r, byEvent)}
+      ${killSwitchCard(r, hooks)}
+      ${layerStack(r)}
       ${scopeLegend(r)}
     </div>
     <div class="col-rail">${precedenceRail(r)}</div>
   </div>`;
 }
 
-/* ---------- Claude: override model ---------- */
-function claudePrecedence(r, byEvent) {
-  const order = layersOf('claude').map((l) => l.id);
-  const events = Object.keys(byEvent).sort((a, b) => CLAUDE_EVENTS.indexOf(a) - CLAUDE_EVENTS.indexOf(b));
-  const contested = events.filter((ev) => byEvent[ev].some((h) => h._shadowed));
-
+/* The correction, stated on the screen rather than assumed. It quotes the
+   source because this is exactly the claim a previous revision got wrong,
+   and a reader deserves to check it. */
+function mergeNotice(r) {
   return `
-  <div class="card">
-    <div class="card-head">
-      <span class="t-label medium">${ic('shield', 14)} What actually runs</span>
-      <span class="badge b-claude">override model</span>
-      <span class="spacer"></span>
-      <span class="t-caption muted">${contested.length} of ${events.length} events are contested</span>
-    </div>
-    <table class="tbl">
-      <thead><tr>
-        <th style="width:20%">Event</th>
-        <th style="width:28%">Defined in</th>
-        <th>Wins</th>
-        <th style="width:26%">Shadowed</th>
-      </tr></thead>
-      <tbody>
-      ${events.map((ev) => {
-        const g = byEvent[ev];
-        const scopes = order.filter((s) => g.some((h) => h.scope === s && !h.parked));
-        const win = g[0]._winningScope;
-        const shadow = g.filter((h) => h._shadowed);
-        return `<tr>
-          <td><span class="mono t-label">${esc(ev)}</span></td>
-          <td><div class="cellflex">${scopes.map((s) => `<span class="badge ${s === win ? 'b-ok' : 'b-dim'}">${esc(layerMeta('claude', s).label)}</span>`).join('')}</div></td>
-          <td>
-            ${win
-              ? `<div class="cmd">${esc(layerMeta('claude', win).file)}</div>
-                 <div class="t-micro faint" style="margin-top:2px">${g.filter((h) => !h._shadowed && !h.parked).length} handler(s) load from here</div>`
-              : `<div class="t-caption" style="color:var(--warning)">${ic('archive', 11)} Nothing loads — every entry for this event is parked</div>`}
-          </td>
-          <td>${shadow.length
-            ? `<div class="t-caption" style="color:var(--destructive)">${ic('layers', 11)} ${shadow.length} entr${shadow.length === 1 ? 'y' : 'ies'} never load</div>
-               ${shadow.map((h) => `<div class="cmd t-micro strike" style="opacity:.6;margin-top:2px">${esc((h.command || h.url || '').split('/').pop())}</div>`).join('')}`
-            : '<span class="t-caption faint">—</span>'}</td>
-        </tr>`;
-      }).join('')}
-      </tbody>
-    </table>
-    <div class="card-body tight" style="border-top:1px solid var(--border)">
-      <div class="t-caption muted">Override is per event, not per matcher. The moment a higher layer names
-      <code class="cmd">PreToolUse</code>, <em>every</em> <code class="cmd">PreToolUse</code> entry below it stops loading — even a matcher the
-      winning layer never mentions. That is the trap: adding one repo-local Bash rule silently turned off the user-scope secret firewall below.</div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-head"><span class="t-label medium">${ic('layers', 14)} Layers, highest precedence first</span></div>
-    <div class="card-body">
-      <div class="layers">
-      ${layersOf('claude').map((l) => {
-        const entries = hooksOf(r.id).filter((h) => h.scope === l.id);
-        return `
-        <div class="layer ${l.writable ? 'writable' : ''}">
-          <div class="layer-head">
-            <span class="badge ${l.writable ? 'b-brand' : ''}">${l.writable ? ic('pencil', 10) : ic('lock', 10)}${esc(l.label)}</span>
-            <span class="cmd t-caption">${esc(l.file)}</span>
-            <span class="spacer"></span>
-            ${l.reach === 'not-discoverable' ? '<span class="badge b-warn">not discoverable</span>' : ''}
-            ${l.reach === 'worktree' ? '<span class="badge">in the task worktree</span>' : ''}
-            <span class="badge b-dim">${entries.length}</span>
-          </div>
-          <div class="layer-body">
-            ${entries.length ? entries.map((h) => `
-              <div class="layer-entry ${h._shadowed ? 'is-shadowed' : ''}">
-                <span class="runorder ${runState(h, r).runs ? '' : 'off'}">${runState(h, r).runs ? ic('check', 12) : ic('ban', 12)}</span>
-                <div style="min-width:0">
-                  <div class="inline">
-                    <span class="mono t-label">${esc(h.event)}</span>
-                    <span class="cmd matcher t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
-                    <span class="badge">${esc(h.type)}</span>
-                  </div>
-                  <div class="cmd t-caption" style="margin-top:2px">${esc(h.command || h.url || h.mcpTool || '')}</div>
-                  <div class="t-micro ${h._shadowed ? '' : 'faint'}" style="margin-top:2px;${h._shadowed ? 'color:var(--destructive)' : ''}">${esc(runState(h, r).why)}</div>
-                </div>
-                <span class="spacer"></span>
-                ${h.parked ? '<span class="badge">parked</span>' : ''}
-              </div>`).join('')
-              : `<div class="layer-entry"><span class="t-caption faint">${l.reach === 'not-discoverable' ? 'Cannot be read — a --settings file only exists for the life of one invocation.' : 'No hooks in this layer.'}</span></div>`}
-          </div>
-        </div>`;
-      }).join('')}
+  <div class="notice info t-label">
+    ${ic('info', 15, 'ico')}
+    <div>
+      <strong class="semibold">There is no “wins” column on this screen, because nothing wins — on either provider.</strong>
+      Every layer contributes and every contribution runs. Nothing here is shadowed, overridden or displaced by a
+      higher-precedence file. The generic settings rule — “the highest level that sets a key wins” — is real for
+      scalar keys like <code class="cmd">model</code>, and <code class="cmd">hooks</code> is an explicit exception to it.
+      <div class="t-caption muted" style="margin-top:6px">
+        ${r.provider === 'claude'
+          ? 'Claude Code docs, verbatim: “Hook entries merge across settings levels rather than replacing each other: user, project, and local settings add their own hooks without removing managed ones.”'
+          : 'Codex docs, verbatim: “If more than one hook source exists, Codex loads all matching hooks. Higher-precedence config layers don’t replace lower-precedence hooks.”'}
       </div>
     </div>
   </div>`;
 }
 
-/* ---------- Codex: merge model ---------- */
-function codexPrecedence(r, byEvent) {
-  const order = layersOf('codex').map((l) => l.id);
-  const events = Object.keys(byEvent).sort((a, b) => CODEX_EVENTS.indexOf(a) - CODEX_EVENTS.indexOf(b));
+/* The accumulation view. One row per event, ordered by how many handlers
+   pile onto it, because that is the number that hurts. */
+function accumulationTable(r, byEvent) {
+  const events = Object.keys(byEvent).sort((a, b) => {
+    const d = (byEvent[b].filter((h) => runState(h, r).runs).length) - (byEvent[a].filter((h) => runState(h, r).runs).length);
+    if (d) return d;
+    const order = r.provider === 'claude' ? CLAUDE_EVENTS : CODEX_EVENTS;
+    return order.indexOf(a) - order.indexOf(b);
+  });
+  const totalFiring = hooksOf(r.id).filter((h) => runState(h, r).runs).length;
+  const piled = events.filter((ev) => byEvent[ev].filter((h) => runState(h, r).runs).length > 1);
+  const layerOrder = layersOf(r.provider).map((l) => l.id);
 
   return `
-  <div class="notice info t-label">
-    ${ic('info', 15, 'ico')}
-    <div><strong class="semibold">There is no “wins” column on this screen, because on Codex nothing wins.</strong>
-    Every file contributes and every contribution runs. A hook here is only ever skipped for two reasons —
-    its hash is not trusted, or its handler type does nothing on Codex — never because another file outranked it.</div>
-  </div>
-
   <div class="card">
     <div class="card-head">
-      <span class="t-label medium">${ic('gitBranch', 14)} Run order per event</span>
-      <span class="badge b-codex">merge model</span>
+      <span class="t-label medium">${ic('shield', 14)} Everything that runs, from everywhere</span>
+      <span class="badge ${r.provider === 'claude' ? 'b-claude' : 'b-codex'}">merge model</span>
       <span class="spacer"></span>
-      <span class="t-caption muted">${hooksOf(r.id).filter((h) => runState(h, r).runs).length} handlers will execute across ${events.length} events</span>
+      <span class="t-caption muted">${totalFiring} handler${totalFiring === 1 ? '' : 's'} live · ${piled.length} of ${events.length} events fire more than one</span>
+    </div>
+    <table class="tbl">
+      <thead><tr>
+        <th style="width:19%">Event</th>
+        <th style="width:13%">Per fire</th>
+        <th style="width:27%">Contributed by</th>
+        <th>What actually executes</th>
+      </tr></thead>
+      <tbody>
+      ${events.map((ev) => {
+        const g = byEvent[ev];
+        const firing = g.filter((h) => runState(h, r).runs);
+        const idle = g.filter((h) => !runState(h, r).runs);
+        const scopes = layerOrder.filter((sc) => g.some((h) => h.scope === sc));
+        return `<tr>
+          <td>
+            <span class="mono t-label">${esc(ev)}</span>
+            ${CODEX_ONLY.includes(ev) ? '<div style="margin-top:3px"><span class="badge b-codex">Codex-only</span></div>' : ''}
+          </td>
+          <td>
+            <span class="badge ${firing.length > 2 ? 'b-warn' : firing.length ? 'b-ok' : 'b-dim'}">${firing.length} handler${firing.length === 1 ? '' : 's'}</span>
+            <div class="t-micro faint" style="margin-top:3px">${firing.length > 1 ? (r.provider === 'claude' ? 'in parallel' : 'all of them') : firing.length ? 'one process' : 'nothing fires'}</div>
+          </td>
+          <td><div class="cellflex">${scopes.map((sc) => {
+            const n = g.filter((h) => h.scope === sc).length;
+            return `<span class="badge ${sc === 'managed' ? 'b-warn' : 'b-dim'}">${esc(layerMeta(r.provider, sc).label)}${n > 1 ? ' ×' + n : ''}</span>`;
+          }).join('')}</div>
+          <div class="t-micro faint" style="margin-top:3px">${scopes.length} file${scopes.length === 1 ? '' : 's'}</div></td>
+          <td>
+            ${firing.map((h) => `<div class="cmd t-micro" style="margin-top:2px">${ic('check', 10)} ${esc(handlerLabel(h))}<span class="faint"> · ${esc(layerMeta(r.provider, h.scope).label)}</span></div>`).join('')}
+            ${idle.map((h) => `<div class="t-micro" style="margin-top:2px;opacity:.7"><span class="badge ${runState(h, r).cls}" style="padding:0 4px">${esc(runState(h, r).label)}</span> <span class="cmd faint">${esc(handlerLabel(h))}</span><span class="faint"> · ${esc(layerMeta(r.provider, h.scope).label)}</span></div>`).join('')}
+          </td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+    <div class="card-body tight" style="border-top:1px solid var(--border)">
+      <div class="t-caption muted"><strong class="semibold">The trap is accumulation, not shadowing.</strong>
+      Because every layer merges and ${r.provider === 'claude'
+        ? 'Claude has no way to switch off one hook'
+        : 'a hook only stops when someone remembers to disable it'},
+      the pile only grows. <code class="cmd">${esc(events[0] || 'PreToolUse')}</code> here spawns
+      <strong class="semibold">${byEvent[events[0]] ? byEvent[events[0]].filter((h) => runState(h, r).runs).length : 0} processes</strong>
+      on every occurrence, from ${byEvent[events[0]] ? new Set(byEvent[events[0]].map((h) => h.scope)).size : 0} different files — and nothing in the CLI
+      adds that up for you. ${r.provider === 'claude'
+        ? 'The one thing that does <em>not</em> accumulate is a byte-identical handler in two settings files: Claude collapses the pair and runs it once. A plugin’s or skill’s copy of the same handler stays separate and really does run twice.'
+        : 'Codex documents no deduplication, so two identical entries in two files are two processes.'}
+      </div>
+      <div class="t-caption muted" style="margin-top:6px">${ic('info', 11)} Neither provider documents a run <em>sequence</em>
+      — Claude states matching hooks run in parallel, and Codex says only that all of them load. Nothing on this screen is numbered,
+      because an invented order would be the next thing to be wrong about.</div>
+    </div>
+  </div>`;
+}
+
+/* Kill switches — the only mechanism on either provider that resembles
+   precedence, and it is global rather than per-entry. Rendered as live
+   what-if toggles so the blast radius is visible instead of described. */
+function killSwitchCard(r, hooks) {
+  const prov = r.provider;
+  const names = prov === 'claude'
+    ? { all: 'disableAllHooks', only: 'allowManagedHooksOnly',
+        allWhere: 'any settings file · read after settings precedence resolves',
+        onlyWhere: 'managed settings only',
+        allNote: 'Claude reads the value left after precedence, so a <code class="cmd">false</code> in a project’s <code class="cmd">.claude/settings.json</code> beats a <code class="cmd">true</code> in your user settings. It cannot disable managed hooks unless it is set at the managed level. <code class="cmd">--settings ’{"disableAllHooks": true}’</code> turns them off for one run.',
+        onlyNote: 'Enterprise switch. Blocks your user, project, local and plugin hooks outright; plugins force-enabled via managed <code class="cmd">enabledPlugins</code> are exempt. It also narrows <code class="cmd">statusLine</code> and <code class="cmd">fileSuggestion</code> to managed settings.' }
+    : { all: '[features].hooks = false', only: 'allow_managed_hooks_only = true',
+        allWhere: 'config.toml · or forced in requirements.toml',
+        onlyWhere: 'requirements.toml',
+        allNote: 'Turns hooks off session-wide. An admin can force them back on by pinning <code class="cmd">[features].hooks = true</code> in <code class="cmd">requirements.toml</code>. <code class="cmd">codex_hooks</code> is a deprecated alias for the same key.',
+        onlyNote: 'Skips user, project, session and plugin hooks while still loading managed hooks from <code class="cmd">requirements.toml</code> and other managed layers.' };
+
+  const killedAll = hooks.filter((h) => h._killed === 'all').length;
+  const killedOnly = hooks.filter((h) => h._killed === 'managedOnly').length;
+  const survivors = hooks.filter((h) => runState(h, r).runs).length;
+
+  return `
+  <div class="card">
+    <div class="card-head">
+      <span class="t-label medium">${ic('ban', 14)} Kill switches</span>
+      <span class="spacer"></span>
+      <span class="t-caption muted">Global, never per-entry. This is the closest thing to precedence that actually exists.</span>
     </div>
     <div class="card-body">
-      <div class="stack" style="gap:14px">
-      ${events.map((ev) => {
-        const g = byEvent[ev].slice().sort((a, b) => order.indexOf(a.scope) - order.indexOf(b.scope));
-        const runs = g.filter((h) => runState(h, r).runs);
-        const files = new Set(g.map((h) => h.scope)).size;
-        return `
-        <div>
-          <div class="inline" style="margin-bottom:6px">
-            <span class="mono t-label medium">${esc(ev)}</span>
-            ${CODEX_ONLY.includes(ev) ? '<span class="badge b-codex">Codex-only</span>' : ''}
-            <span class="badge ${runs.length > 1 ? 'b-codex' : ''}">${runs.length} of ${g.length} run${runs.length === 1 ? '' : 's'}</span>
-            <span class="badge b-dim">${files} file${files > 1 ? 's' : ''}</span>
-            ${runs.length > 1 ? `<span class="t-caption muted">${runs.length} processes per fire, in this order</span>` : ''}
+      <div class="stack" style="gap:12px">
+        <div class="inline" style="align-items:flex-start;gap:10px">
+          <button class="switch ${state.killAll ? 'on' : ''}" role="switch" aria-checked="${state.killAll}" data-act="toggleKillAll" aria-label="Preview ${esc(names.all)}"><span></span></button>
+          <div style="min-width:0">
+            <div class="inline"><code class="cmd">${esc(names.all)}</code>
+              ${state.killAll ? `<span class="badge b-warn">${killedAll} hooks off</span>` : ''}</div>
+            <div class="t-caption faint" style="margin-top:2px">${esc(names.allWhere)}</div>
+            <div class="t-caption muted" style="margin-top:4px">${names.allNote}</div>
           </div>
-          <div class="layer">
-            ${g.map((h) => {
-              const st = runState(h, r);
-              const lm = layerMeta('codex', h.scope);
-              return `
-              <div class="layer-entry">
-                <span class="runorder ${h._runOrder ? '' : 'off'}">${h._runOrder || ic('ban', 12)}</span>
-                <div style="min-width:0">
-                  <div class="inline">
-                    <span class="cmd">${esc((h.command || h.mcpTool || h.prompt || '').slice(0, 64))}</span>
-                    <span class="badge ${st.cls}">${ic(st.icon, 11)}${esc(st.label)}</span>
-                    <span class="badge ${lm.writable ? 'b-brand' : ''}">${lm.writable ? '' : ic('lock', 10)}${esc(lm.label)}</span>
-                  </div>
-                  <div class="t-micro faint" style="margin-top:2px">
-                    <span class="cmd">${esc(lm.file)}</span> · matcher <span class="cmd">${h.matcher ? esc(h.matcher) : '*'}</span> · ${esc(h.type)}${h.async ? ' · async' : ''}
-                  </div>
-                  ${!st.runs ? `<div class="t-micro" style="margin-top:2px;color:var(--destructive)">${esc(st.why)}</div>` : ''}
-                </div>
-                <span class="spacer"></span>
-                ${h.trust === 'stale' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}Re-trust</button>` : ''}
-              </div>`;
-            }).join('')}
+        </div>
+        <hr class="sep" />
+        <div class="inline" style="align-items:flex-start;gap:10px">
+          <button class="switch ${state.killManagedOnly ? 'on' : ''}" role="switch" aria-checked="${state.killManagedOnly}" data-act="toggleKillManaged" aria-label="Preview ${esc(names.only)}"><span></span></button>
+          <div style="min-width:0">
+            <div class="inline"><code class="cmd">${esc(names.only)}</code>
+              ${state.killManagedOnly ? `<span class="badge b-warn">${killedOnly} hooks off</span>` : ''}</div>
+            <div class="t-caption faint" style="margin-top:2px">${esc(names.onlyWhere)}</div>
+            <div class="t-caption muted" style="margin-top:4px">${names.onlyNote}</div>
           </div>
-        </div>`;
-      }).join('')}
+        </div>
+        ${prov === 'codex' ? `
+        <hr class="sep" />
+        <div class="t-caption muted">${ic('key', 11)} Codex has a third lever with no Claude equivalent: <code class="cmd">--dangerously-bypass-hook-trust</code> runs enabled hooks for one invocation without persisted trust.</div>` : `
+        <hr class="sep" />
+        <div class="t-caption muted">${ic('info', 11)} Claude also gates <code class="cmd">http</code> handlers through <code class="cmd">allowedHttpHookUrls</code> and <code class="cmd">httpHookAllowedEnvVars</code>. Those allowlists <em>merge</em> across levels too, and apply to hooks from every source including managed policy.</div>`}
       </div>
     </div>
-    <div class="card-body tight" style="border-top:1px solid var(--border)">
-      <div class="t-caption muted">Merge order decides sequence, not authority. <code class="cmd">PreToolUse</code> here runs three handlers on every
-      shell call — a repo allowlist, a user policy script and an async audit — and any one of them can block. Adding a hook on Codex always adds
-      work; it never replaces work, which is the opposite of the Claude screen.</div>
-    </div>
-  </div>
+    ${(state.killAll || state.killManagedOnly) ? `
+    <div class="card-body tight" style="border-top:1px solid var(--border);background:color-mix(in oklab, var(--warning) 7%, transparent)">
+      <div class="t-caption"><strong class="semibold">${survivors} hook${survivors === 1 ? '' : 's'} still running.</strong>
+      ${hooks.some((h) => h.scope === 'managed' && runState(h, r).runs)
+        ? 'The managed-layer hooks survive — that is the whole point of the switch, and it is why a kill switch is not an override.'
+        : 'Nothing managed is configured here, so the switch reaches everything.'}
+      The rows above and on the Hooks screen are greyed rather than removed, because the entries are still in the files.</div>
+    </div>` : ''}
+  </div>`;
+}
 
+/* One layer stack for both providers. Ordered by where the file lives,
+   not by authority — there is no authority. */
+function layerStack(r) {
+  return `
   <div class="card">
-    <div class="card-head"><span class="t-label medium">${ic('layers', 14)} Layers, merge order</span></div>
+    <div class="card-head">
+      <span class="t-label medium">${ic('layers', 14)} Layers</span>
+      <span class="spacer"></span>
+      <span class="t-caption muted">Ordered org-wide first, yours last. Not a precedence ladder — every layer's entries load.</span>
+    </div>
     <div class="card-body">
       <div class="layers">
-      ${layersOf('codex').map((l) => {
+      ${layersOf(r.provider).map((l) => {
         const entries = hooksOf(r.id).filter((h) => h.scope === l.id);
         return `
         <div class="layer ${l.writable ? 'writable' : ''}">
@@ -1533,28 +1714,41 @@ function codexPrecedence(r, byEvent) {
             <span class="badge ${l.writable ? 'b-brand' : ''}">${l.writable ? ic('pencil', 10) : ic('lock', 10)}${esc(l.label)}</span>
             <span class="cmd t-caption">${esc(l.file)}</span>
             <span class="spacer"></span>
+            ${l.managedOnly ? '<span class="badge b-warn">survives both kill switches</span>' : ''}
             ${l.reach === 'worktree' ? '<span class="badge">in the task worktree</span>' : ''}
-            ${l.id === 'user-toml' ? '<span class="badge b-warn">TOML</span>' : ''}
+            ${l.id === 'user-toml' || l.id === 'repo-toml' ? '<span class="badge b-warn">TOML</span>' : ''}
             <span class="badge b-dim">${entries.length}</span>
           </div>
           <div class="layer-body">
-            ${entries.length ? entries.map((h) => `
-              <div class="layer-entry">
-                <span class="runorder ${runState(h, r).runs ? '' : 'off'}">${runState(h, r).runs ? ic('check', 12) : ic('ban', 12)}</span>
+            ${entries.length ? entries.map((h) => {
+              const st = runState(h, r);
+              return `
+              <div class="layer-entry ${st.runs ? '' : 'inert'}">
+                <span class="runorder ${st.runs ? '' : 'off'}">${st.runs ? ic('check', 12) : ic('ban', 12)}</span>
                 <div style="min-width:0">
-                  <div class="inline"><span class="mono t-label">${esc(h.event)}</span>
-                  <span class="cmd matcher t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
-                  <span class="badge">${esc(h.type)}</span></div>
-                  <div class="cmd t-caption" style="margin-top:2px">${esc(h.command || h.mcpTool || h.prompt || '')}</div>
+                  <div class="inline">
+                    <span class="mono t-label">${esc(h.event)}</span>
+                    <span class="cmd matcher t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
+                    <span class="badge">${esc(h.type)}</span>
+                    ${st.runs ? '' : `<span class="badge ${st.cls}">${ic(st.icon, 11)}${esc(st.label)}</span>`}
+                  </div>
+                  <div class="cmd t-caption" style="margin-top:2px">${esc(h.command || h.url || h.mcpTool || h.prompt || '')}</div>
+                  <div class="t-micro ${st.runs ? 'faint' : ''}" style="margin-top:2px;${st.runs ? '' : 'color:var(--warning)'}">${esc(st.why)}</div>
                 </div>
                 <span class="spacer"></span>
-                ${h.parked ? '<span class="badge">parked</span>' : ''}
-              </div>`).join('')
+                ${h.trust === 'stale' || h.trust === 'review' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}${h.trust === 'review' ? 'Review' : 'Re-trust'}</button>` : ''}
+              </div>`;
+            }).join('')
               : '<div class="layer-entry"><span class="t-caption faint">No hooks in this layer.</span></div>'}
           </div>
         </div>`;
       }).join('')}
       </div>
+    </div>
+    <div class="card-body tight" style="border-top:1px solid var(--border)">
+      <div class="t-caption muted">${r.provider === 'claude'
+        ? 'A managed layer is drawn first because it is org-wide, not because it outranks anything. Its only real privilege: a <code class="cmd">disableAllHooks</code> set anywhere else cannot switch it off.'
+        : 'Project layers load only when the <code class="cmd">.codex/</code> layer is trusted. In an untrusted project Codex still loads user and managed hooks from their own layers.'}</div>
     </div>
   </div>`;
 }
@@ -1584,17 +1778,26 @@ function precedenceRail(r) {
     <div class="card-head"><span class="t-label medium">${ic('cpu', 14)} Claude vs Codex</span></div>
     <div class="card-body tight">
       <div class="stack t-caption">
-        <div><strong class="semibold">Precedence</strong><div class="muted">Claude: highest layer overrides, the rest are shadowed. Codex: all layers merge, everything runs.</div></div>
+        <div><span class="badge b-ok" style="margin-bottom:3px">${ic('check', 10)}same on both</span>
+        <strong class="semibold">Merge behaviour</strong><div class="muted">Both providers merge every layer and run everything. Neither shadows the other's entries. This row used to say the opposite and was wrong — it is the reason the two precedence screens collapsed into one.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Events</strong><div class="muted">Claude 33 · Codex 12. <code class="cmd">Interrupt</code> exists only on Codex; <code class="cmd">FileChanged</code>, <code class="cmd">TeammateIdle</code>, <code class="cmd">ConfigChange</code> and 20 more only on Claude.</div></div>
+        <div><strong class="semibold">Per-hook disable</strong><div class="muted"><strong>Codex has one</strong> — <code class="cmd">/hooks</code> disables an individual non-managed hook and the entry stays in the file. <strong>Claude has none</strong>: the docs say so outright, so Multica has to invent the mechanism there and only there.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Handler types</strong><div class="muted">Claude: command, http, mcp_tool, prompt, agent. Codex: command and mcp_tool only — <code class="cmd">prompt</code> and <code class="cmd">agent</code> are parsed and then skipped.</div></div>
+        <div><strong class="semibold">Trust</strong><div class="muted">Codex records trust against a hook's current hash; a new or edited hook is skipped until reviewed in <code class="cmd">/hooks</code>. Enabling a plugin does not trust its hooks. Claude has no equivalent — its gate is workspace trust on the folder, not the hook.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Trust</strong><div class="muted">Codex runs a hook only while its hash matches <code class="cmd">[hooks.state].trusted_hash</code>. Claude has no equivalent.</div></div>
+        <div><strong class="semibold">Matcher semantics</strong><div class="muted">Claude: exact string unless it contains a character outside <code class="cmd">[A-Za-z0-9_-,| ]</code>, then an unanchored regex. Codex: <em>always</em> a regex — no exact path at all — and ignored outright on <code class="cmd">UserPromptSubmit</code>, <code class="cmd">Stop</code> and <code class="cmd">Interrupt</code>.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Stop + block</strong><div class="muted">Claude: rejects the stop. Codex: <em>continues</em> the turn. Same JSON, opposite outcome.</div></div>
+        <div><strong class="semibold">Deduplication</strong><div class="muted">Claude collapses a byte-identical handler defined in two settings files to one spawn; a plugin or skill copy stays separate. Codex documents none.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Windows</strong><div class="muted">Codex has <code class="cmd">commandWindows</code>; Claude has <code class="cmd">shell: "powershell"</code>.</div></div>
+        <div><strong class="semibold">Events</strong><div class="muted">Claude 33 · Codex 12. <code class="cmd">Interrupt</code> is Codex-only; <code class="cmd">FileChanged</code>, <code class="cmd">TeammateIdle</code>, <code class="cmd">ConfigChange</code> and 19 more are Claude-only.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Handler types</strong><div class="muted">Claude: command, http, mcp_tool, prompt, agent — all effective. Codex: command and mcp_tool only; <code class="cmd">prompt</code> and <code class="cmd">agent</code> are parsed and then skipped, and there is no <code class="cmd">http</code>.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Stop + block</strong><div class="muted">Claude: rejects the stop. Codex: <em>continues</em> the turn, using your <code class="cmd">reason</code> as a new prompt. Same JSON, opposite outcome.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Filtering fields</strong><div class="muted">Claude has <code class="cmd">if</code> (permission-rule pre-filter, tool events only — set it on any other event and the handler never runs). Codex has none.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Windows</strong><div class="muted">Codex has <code class="cmd">commandWindows</code> / <code class="cmd">command_windows</code>; Claude has <code class="cmd">shell: "powershell"</code> and exec-form <code class="cmd">args</code>.</div></div>
       </div>
     </div>
   </div>
@@ -1605,13 +1808,15 @@ function precedenceRail(r) {
       <div class="t-caption muted stack">
         <div>Both providers load hooks from places no discovery pass can enumerate. They are listed so the count above is not mistaken for the whole truth.</div>
         ${r.provider === 'claude' ? `
-        <div>· <code class="cmd">--settings &lt;file&gt;</code> passed per invocation</div>
-        <div>· plugin <code class="cmd">hooks/hooks.json</code>, per enabled plugin</div>
-        <div>· skill frontmatter, for the rest of a session</div>
-        <div>· subagent frontmatter, while a subagent runs</div>` : `
-        <div>· plugin-bundled hooks, per enabled Codex plugin</div>
-        <div>· <code class="cmd">requirements.toml</code> / MDM managed hooks, trusted by policy</div>
-        <div>· anything added inside a live session via <code class="cmd">/hooks</code></div>`}
+        <div>· skill frontmatter — registered once the skill is invoked, for the rest of the session. Supports <code class="cmd">once: true</code>, which nothing in a settings file does.</div>
+        <div>· subagent frontmatter — only while that subagent runs, and only after the workspace-trust dialog is accepted for the folder the agent file came from</div>
+        <div>· session hooks — registered in memory for the current session</div>
+        <div>· server-managed settings, which a cloud session reads instead of your <code class="cmd">~/.claude/settings.json</code></div>
+        <div class="t-micro faint">A <code class="cmd">--settings &lt;file&gt;</code> flag is <em>not</em> a hook layer — it is listed in the docs as a way to force <code class="cmd">disableAllHooks</code> for one run, so it lives in the kill-switch card above.</div>` : `
+        <div>· MDM / cloud managed layers beyond <code class="cmd">requirements.toml</code></div>
+        <div>· session hooks added inside a live session</div>
+        <div>· plugin manifest overrides — <code class="cmd">.codex-plugin/plugin.json</code> can point <code class="cmd">hooks</code> anywhere in the plugin root, or inline the object, instead of the default <code class="cmd">hooks/hooks.json</code></div>
+        <div class="t-micro faint">If one layer carries both a <code class="cmd">hooks.json</code> and inline <code class="cmd">[hooks]</code> tables, Codex merges them and warns at startup rather than picking one.</div>`}
       </div>
     </div>
   </div>`;
@@ -1632,12 +1837,12 @@ function screenLog() {
   const failish = ['failed', 'timeout', 'untrusted', 'ineffective'];
   const rows = feed.rows.filter((row) => {
     if (state.logFilter === 'failures') return failish.includes(row.verdict);
-    if (state.logFilter === 'never') return ['shadowed', 'ineffective', 'untrusted'].includes(row.verdict);
+    if (state.logFilter === 'never') return ['neverran', 'ineffective', 'untrusted'].includes(row.verdict);
     if (state.logFilter === 'blocked') return ['blocked', 'continued'].includes(row.verdict);
     return true;
   });
   const nFail = feed.rows.filter((x) => failish.includes(x.verdict)).length;
-  const nNever = feed.rows.filter((x) => ['shadowed', 'ineffective', 'untrusted'].includes(x.verdict)).length;
+  const nNever = feed.rows.filter((x) => ['neverran', 'ineffective', 'untrusted'].includes(x.verdict)).length;
 
   return `
   <div class="two-col">
@@ -1685,7 +1890,9 @@ function screenLog() {
             <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero, non-blocking. Invisible in the session.</span></div>
             <div><span class="badge b-bad">${ic('clock', 11)}timed out</span> <span class="muted">killed at its timeout.</span></div>
             <div><span class="badge">${ic('zap', 11)}async · unknown</span> <span class="muted">detached. Neither CLI records the outcome — a permanent blind spot, not a gap in this feed.</span></div>
-            <div><span class="badge">${ic('layers', 11)}shadowed</span> <span class="muted">Claude only. Never invoked at all.</span></div>
+            <div><span class="badge b-bad">${ic('ban', 11)}never invoked</span> <span class="muted">Loaded, but the provider never calls it. No error is raised, so this row is inferred from an absence rather than read from a log line.</span></div>
+            <div><span class="badge">${ic('copy', 11)}collapsed · ran once</span> <span class="muted">Claude only. Two identical settings-file entries, one process.</span></div>
+            <div><span class="badge">${ic('filter', 11)}if did not match</span> <span class="muted">Claude only. Deliberate: the pre-filter kept the process from spawning.</span></div>
             <div><span class="badge b-bad">${ic('key', 11)}not trusted</span> <span class="muted">Codex only. Skipped on a hash mismatch.</span></div>
             <div><span class="badge b-warn">${ic('info', 11)}continued turn</span> <span class="muted">Codex only. <code class="cmd">decision:"block"</code> on <code class="cmd">Stop</code> continues rather than rejects.</span></div>
           </div>
@@ -1993,6 +2200,7 @@ function openEditor(hookId) {
     additionalContextLimit: h && h.additionalContextLimit ? String(h.additionalContextLimit) : '',
     url: h ? (h.url || '') : '',
     mcpTool: h ? (h.mcpTool || '') : '',
+    if: h ? (h.if || '') : '',
     comboOpen: false,
     comboQuery: '',
     dirty: false,
@@ -2014,18 +2222,32 @@ function editorProblems() {
   }
   if (ed.type === 'http' && !/^https?:\/\//.test(ed.url)) out.push({ level: 'error', field: 'url', text: 'An http handler needs an absolute URL.' });
   if (ed.type === 'mcp_tool' && !ed.mcpTool.trim()) out.push({ level: 'error', field: 'mcpTool', text: 'Name the MCP tool to invoke.' });
-  const mi = interpretMatcher(ed.matcher);
+  const mi = interpretMatcher(ed.matcher, ed.provider, ed.event);
   if (mi.kind === 'regex') out.push({ level: 'warn', field: 'matcher', text: mi.text });
+  if (mi.kind === 'ignored') out.push({ level: 'warn', field: 'matcher', text: mi.text });
   if (ed.event === 'FileChanged' && mi.kind === 'regex') out.push({ level: 'error', field: 'matcher',
-    text: 'FileChanged only accepts the narrow exact set (letters, digits, _ and |). A regex here never matches anything.' });
+    text: 'FileChanged only accepts the narrow exact set (letters, digits, _ and |). A regex here never matches anything — and the matcher doubles as the watch list, so this would also watch a file literally named that.' });
   if (ed.event === 'Stop' && ed.provider === 'codex') out.push({ level: 'warn', field: 'event',
-    text: 'On Codex, a Stop hook returning decision:"block" CONTINUES the turn. On Claude the same JSON rejects it. Check which one your script means.' });
+    text: 'On Codex, a Stop hook returning decision:"block" CONTINUES the turn and turns your reason into a new user prompt. On Claude the same JSON rejects the stop. Check which one your script means.' });
+  if (ed.if && ed.if.trim() && ed.provider === 'claude' && !CLAUDE_IF_EVENTS.includes(ed.event) && ed.event) {
+    out.push({ level: 'error', field: 'if',
+      text: 'An if condition is only evaluated on tool events (' + CLAUDE_IF_EVENTS.join(', ') + '). Set it on ' + ed.event + ' and the handler never runs at all — silently.' });
+  }
+  if (ed.if && /&&|\|\||,/.test(ed.if)) out.push({ level: 'error', field: 'if',
+    text: 'if holds exactly one permission rule. There is no &&, || or list syntax — define a separate handler per condition.' });
+  if (ed.if && ed.if.trim() && ed.provider === 'codex') out.push({ level: 'error', field: 'if',
+    text: 'Codex has no if field. It would be stored and ignored.' });
   if (ed.async) out.push({ level: 'warn', field: 'async',
-    text: 'async detaches the process. Neither CLI checks its exit status, so a failure will never appear anywhere — including in the fire log.' });
+    text: 'async detaches the process. Neither CLI checks its exit status, so a failure will never appear anywhere — including in the fire log. On Claude, timeout is not enforced on an async command hook either.' });
   if (ed.provider === 'codex') out.push({ level: 'warn', field: 'trust',
-    text: 'Saving rewrites a Codex hooks file, which invalidates the trust hashes in [hooks.state]. Affected hooks stop running until they are re-trusted on the host.' });
+    text: 'Codex records trust against each hook\u2019s own hash, so saving a new or edited entry leaves that entry needing review in /hooks before it can run. Untouched entries in the same file keep their trust — the hash is per hook, not per file.' });
   return out;
 }
+
+/* The five tool events where Claude evaluates an `if` condition. On every
+   other event a handler with `if` set never runs — which is a silent
+   failure, so the editor treats it as blocking. */
+const CLAUDE_IF_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied'];
 
 function eventOptions() {
   const all = ed.provider === 'claude' ? CLAUDE_EVENTS : CODEX_EVENTS;
@@ -2045,7 +2267,7 @@ function editorDialog() {
   const blocking = problems.filter((p) => p.level === 'error');
   const types = HANDLER_TYPES[ed.provider];
   const opts = eventOptions();
-  const mi = interpretMatcher(ed.matcher);
+  const mi = interpretMatcher(ed.matcher, ed.provider, ed.event);
   const allLayers = layersOf(ed.provider);
 
   return `
@@ -2093,19 +2315,43 @@ function editorDialog() {
       <!-- Matcher: live interpretation of the non-obvious rule. -->
       <div class="field">
         <label for="edMatcher">Matcher</label>
-        <input class="input mono" id="edMatcher" data-f="matcher" value="${esc(ed.matcher)}" placeholder="* — every tool"
+        <input class="input mono" id="edMatcher" data-f="matcher" value="${esc(ed.matcher)}" placeholder="* — every occurrence"
           aria-invalid="${perField('matcher').some((p) => p.level === 'error')}" />
         <div class="hint">
+          ${ed.provider === 'claude' ? `
           <code class="cmd">*</code> or empty matches everything. Only <code class="cmd">[A-Za-z0-9_-,| ]</code> means an exact string or a
           <code class="cmd">|</code>/<code class="cmd">,</code>-separated exact list. <strong class="semibold">Any other character makes it an
-          unanchored JavaScript regex.</strong>
+          unanchored JavaScript regex</strong> — <code class="cmd">Edit.*</code> also matches <code class="cmd">NotebookEdit</code>.` : `
+          <code class="cmd">*</code> or empty matches everything. Everything else is <strong class="semibold">always a regular expression</strong> —
+          Codex has no exact-string path, so <code class="cmd">Bash</code> here behaves differently from <code class="cmd">Bash</code> on Claude.
+          Three events (<code class="cmd">UserPromptSubmit</code>, <code class="cmd">Stop</code>, <code class="cmd">Interrupt</code>) ignore this field entirely.`}
         </div>
-        <div class="notice ${mi.kind === 'regex' ? 'warn' : 'ok'} t-caption" style="padding:7px 10px">
-          ${ic(mi.kind === 'regex' ? 'alert' : 'check', 13, 'ico')}
-          <div><strong class="semibold">${mi.kind === 'regex' ? 'Regex' : mi.kind === 'all' ? 'Matches all' : 'Exact'}</strong> — ${esc(mi.text)}</div>
+        <div class="notice ${mi.kind === 'regex' || mi.kind === 'ignored' ? 'warn' : 'ok'} t-caption" style="padding:7px 10px">
+          ${ic(mi.kind === 'regex' || mi.kind === 'ignored' ? 'alert' : 'check', 13, 'ico')}
+          <div><strong class="semibold">${mi.kind === 'regex' ? 'Regex' : mi.kind === 'ignored' ? 'Not used on this event' : mi.kind === 'all' ? 'Matches all' : 'Exact'}</strong> — ${esc(mi.text)}</div>
         </div>
         ${perField('matcher').filter((p) => p.level === 'error').map((p) => `<div class="err">${ic('alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
       </div>
+
+      <!-- if: Claude-only pre-filter. Cheaper than a broad matcher, and a
+           silent no-op on any non-tool event, so it is gated hard. -->
+      ${ed.provider === 'claude' ? `
+      <div class="field">
+        <label for="edIf">Condition <span class="t-micro faint">(optional · <code class="cmd">if</code>)</span></label>
+        <input class="input mono" id="edIf" data-f="if" value="${esc(ed.if)}" placeholder="Bash(git push *)"
+          ${CLAUDE_IF_EVENTS.includes(ed.event) || !ed.event ? '' : 'disabled'}
+          aria-invalid="${perField('if').some((p) => p.level === 'error')}" />
+        <div class="hint">
+          ${CLAUDE_IF_EVENTS.includes(ed.event) || !ed.event
+            ? `Permission-rule syntax — one rule, no <code class="cmd">&amp;&amp;</code> or lists. The process only spawns when the tool call matches,
+               so <code class="cmd">matcher: "Bash"</code> plus <code class="cmd">if: "Bash(git *)"</code> costs nothing on an <code class="cmd">npm test</code>.
+               Leading <code class="cmd">VAR=value</code> assignments are stripped, and subcommands inside <code class="cmd">&amp;&amp;</code>,
+               <code class="cmd">$()</code> and backticks are each checked.`
+            : `Disabled: <code class="cmd">if</code> is only evaluated on the five tool events. On <code class="cmd">${esc(ed.event)}</code> a handler
+               with <code class="cmd">if</code> set never runs at all — so the field is off rather than available and quietly fatal.`}
+        </div>
+        ${perField('if').map((p) => `<div class="${p.level === 'error' ? 'err' : 'warn'}">${ic('alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
+      </div>` : ''}
 
       <!-- Handler type: gated per provider. -->
       <div class="field">
@@ -2368,13 +2614,19 @@ function deleteDialog() {
       ${h.owner !== 'multica' ? `
       <div class="notice warn t-caption">${ic('alert', 13, 'ico')}
         <div>Multica did not write this entry. Deleting it removes something you or another tool put there.</div></div>` : ''}
-      ${r.provider === 'claude' && h._shadowed ? `
-      <div class="notice info t-caption">${ic('layers', 13, 'ico')}
-        <div>This entry is currently shadowed, so deleting it changes nothing at runtime — until the higher layer that shadows it goes away.</div></div>` : ''}
-      ${r.provider === 'claude' && !h._shadowed && hooksOf(r.id).some((x) => x.event === h.event && x._shadowed) ? `
+      ${h._dupOf || h._dupWith ? `
+      <div class="notice info t-caption">${ic('copy', 13, 'ico')}
+        <div>An identical handler is defined in <strong class="semibold">${esc(layerMeta(r.provider, (h._dupOf || h._dupWith).scope).label)}</strong> scope too, and Claude
+        collapses the pair into one spawn. Deleting this entry changes nothing at runtime — the other copy keeps running.</div></div>` : ''}
+      ${h._fires > 1 ? `
+      <div class="notice info t-caption">${ic('info', 13, 'ico')}
+        <div><code class="cmd">${esc(h.event)}</code> currently fires <strong class="semibold">${h._fires} handlers</strong> from
+        ${new Set(hooksOf(r.id).filter((x) => x.event === h.event).map((x) => x.scope)).size} files. Deleting this one removes work; it does not
+        hand the event over to a lower layer, because no layer was ever waiting behind it. The other ${h._fires - 1} keep firing.</div></div>`
+      : h._fires === 1 && runState(h, r).runs ? `
       <div class="notice warn t-caption">${ic('alert', 13, 'ico')}
-        <div><strong class="semibold">Deleting this will un-shadow other hooks.</strong> It is the last live <code class="cmd">${esc(h.event)}</code>
-        entry in ${esc(l.label)} scope, so the next layer down starts loading — and its hooks begin firing.</div></div>` : ''}
+        <div><strong class="semibold">This is the only thing handling <code class="cmd">${esc(h.event)}</code>.</strong> Delete it and the event
+        goes unhandled — nothing else picks it up.</div></div>` : ''}
       ${r.provider === 'codex' ? `
       <div class="notice warn t-caption">${ic('key', 13, 'ico')}
         <div>Rewriting this file invalidates the Codex trust hashes in <code class="cmd">[hooks.state]</code>. Remaining hooks in it will need re-trusting.</div></div>` : ''}
@@ -2399,8 +2651,8 @@ function trustDialog() {
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="trTitle">
     <div class="dialog-head">
       <div>
-        <div class="t-title-lg" id="trTitle">Re-trust this Codex hook</div>
-        <div class="t-caption muted" style="margin-top:2px">It has not run since it was edited.</div>
+        <div class="t-title-lg" id="trTitle">${h.trust === 'review' ? 'Review and trust this Codex hook' : 'Re-trust this Codex hook'}</div>
+        <div class="t-caption muted" style="margin-top:2px">${h.trust === 'review' ? 'It has never run. Codex is waiting for someone to review the definition.' : 'It has not run since it was edited.'}</div>
       </div>
       <span class="spacer"></span>
       <button class="btn ghost icon" data-close="1" aria-label="Close">${ic('x', 16)}</button>
@@ -2409,14 +2661,15 @@ function trustDialog() {
       <div class="card"><div class="card-body tight">
         <div class="inline"><span class="mono t-label medium">${esc(h.event)}</span>
           <span class="cmd t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
-          <span class="badge b-bad">${ic('key', 11)}not trusted</span></div>
+          <span class="badge b-bad">${ic('key', 11)}${h.trust === 'review' ? 'needs review' : 'not trusted'}</span></div>
         <div class="cmd t-caption" style="margin-top:6px">${esc(h.command || '')}</div>
         <dl class="kv" style="margin-top:10px">
-          <dt>Trusted hash</dt><dd class="cmd">${esc(h.trustedHash || '')}</dd>
-          <dt>Current hash</dt><dd class="cmd" style="color:var(--destructive)">${esc(h.currentHash || '')}</dd>
-          <dt>Edited</dt><dd>${esc(h.editedAt || '')}</dd>
-          <dt>Fires missed</dt><dd>7 since the edit</dd>
+          <dt>Trusted hash</dt><dd class="cmd ${h.trustedHash ? '' : 'faint'}">${esc(h.trustedHash || 'never trusted')}</dd>
+          <dt>Current hash</dt><dd class="cmd" style="color:var(--destructive)">${esc(h.currentHash || 'c0d3a71f4e9b2856')}</dd>
+          <dt>${h.trust === 'review' ? 'First seen' : 'Edited'}</dt><dd>${esc(h.editedAt || '2026-09-08 11:02 EDT')}</dd>
+          <dt>Fires missed</dt><dd>${h.trust === 'review' ? '14 session starts' : '7 since the edit'}</dd>
         </dl>
+        ${h.scope === 'plugin' ? `<div class="t-caption muted" style="margin-top:8px">${ic('pkg', 11)} This one arrived with a plugin. Installing or enabling a plugin does <strong class="semibold">not</strong> trust its hooks — they stay skipped until reviewed, which is easy to miss because the plugin itself looks fine.</div>` : ''}
       </div></div>
       <div class="notice bad t-caption">
         ${ic('circleAlert', 13, 'ico')}
@@ -2452,13 +2705,17 @@ function parkDialog() {
   const h = hooksOf(r.id).find((x) => x.id === pending);
   if (!h) return '';
   const c = PARK_COPY[r.provider];
-  const parking = !h.parked;
+  const isOff = !!(h.parked || h.disabledNative);
+  const parking = !isOff;
+  const onVerb = r.provider === 'codex' ? 'Re-enable' : 'Unpark';
   return `
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pkTitle">
     <div class="dialog-head">
       <div>
-        <div class="t-title-lg" id="pkTitle">${parking ? 'Park' : 'Unpark'} this hook</div>
-        <div class="t-caption muted" style="margin-top:2px">Neither provider has a per-hook disable, so this is worth reading once.</div>
+        <div class="t-title-lg" id="pkTitle">${parking ? c.verb : onVerb} this hook</div>
+        <div class="t-caption muted" style="margin-top:2px">${r.provider === 'claude'
+          ? 'Claude has no per-hook disable, so this control is Multica\u2019s own. Worth reading once.'
+          : 'Codex has a real per-hook disable. This control drives it rather than inventing one.'}</div>
       </div>
       <span class="spacer"></span>
       <button class="btn ghost icon" data-close="1" aria-label="Close">${ic('x', 16)}</button>
@@ -2477,17 +2734,26 @@ function parkDialog() {
         ${ic('alert', 13, 'ico')}
         <div><strong class="semibold">What it is not.</strong> ${c.caveat}</div>
       </div>
+      ${r.provider === 'claude' ? `
       <div class="t-caption muted">
-        The alternative approaches both leak: renaming the script and leaving a stub still spawns a process on every matching event, and a
-        plain on/off switch that silently deletes the entry loses the configuration. Parking is the only option that stops the process
-        <em>and</em> keeps the hook — so that is what the switch does, and the label says <strong class="semibold">parked</strong> rather than
-        <strong class="semibold">disabled</strong> because "disabled" would imply a provider feature that does not exist.
-      </div>
+        The Claude docs are explicit: <em>“There is no way to disable an individual hook while keeping it in the configuration.”</em>
+        So a manager has to invent something, and the two mechanisms in the wild both leak — renaming the script and leaving a stub
+        still spawns a process on every matching event, and a plain on/off switch that deletes the entry loses the configuration.
+        Parking is the only option that stops the process <em>and</em> keeps the hook, so that is what the switch does. The label reads
+        <strong class="semibold">parked</strong>, never <strong class="semibold">disabled</strong>, because “disabled” would imply a Claude
+        feature that does not exist. The global <code class="cmd">disableAllHooks</code> is the only real off switch, and it is all-or-nothing.
+      </div>` : `
+      <div class="t-caption muted">
+        This is where the two providers stop rhyming. The Codex <code class="cmd">/hooks</code> browser disables an individual non-managed
+        hook outright, so there is nothing for Multica to invent — and inventing a sidecar here would be strictly worse, because moving the
+        entry would change its hash and cost it its trust. The control is therefore named <strong class="semibold">Disable</strong> on Codex
+        and <strong class="semibold">Park</strong> on Claude. Two honest labels beat one shared label that is a lie on one side.
+      </div>`}
     </div>
     <div class="dialog-foot">
       <span class="spacer"></span>
       <button class="btn" data-close="1">Cancel</button>
-      <button class="btn primary" data-act="confirmPark">${ic('archive', 13)}${parking ? 'Park hook' : 'Unpark hook'}</button>
+      <button class="btn primary" data-act="confirmPark">${ic('archive', 13)}${parking ? c.verb : onVerb} hook</button>
     </div>
   </div>`;
 }
@@ -2574,6 +2840,18 @@ document.addEventListener('click', (e) => {
   }
 
   switch (d.act) {
+    case 'toggleKillAll':
+      state.killAll = !state.killAll; render();
+      toast(state.killAll
+        ? '<strong class="semibold">Preview only.</strong> Showing the runtime as it would look with the global kill switch on. Nothing was written.'
+        : 'Kill-switch preview off.', state.killAll ? 'warn' : null);
+      break;
+    case 'toggleKillManaged':
+      state.killManagedOnly = !state.killManagedOnly; render();
+      toast(state.killManagedOnly
+        ? '<strong class="semibold">Preview only.</strong> Showing the runtime as an enterprise managed-hooks-only policy would leave it. Nothing was written.'
+        : 'Managed-only preview off.', state.killManagedOnly ? 'warn' : null);
+      break;
     case 'rescan':
       state.screen = 'states'; state.stateDemo = 'discovery'; state.discoveryStep = 0; render();
       toast('Discovery queued for the next daemon heartbeat.');
@@ -2603,10 +2881,13 @@ document.addEventListener('click', (e) => {
       modal = 'park'; renderModal(); break;
     case 'confirmPark': {
       const h = hooksOf(rt().id).find((x) => x.id === pending);
-      const parking = !h.parked;
+      const parking = !(h.parked || h.disabledNative);
       closeModal();
-      wouldWrite('Would ' + (parking ? 'move' : 'restore') + ' the entry ' + (parking ? 'into' : 'out of') +
-        ' <span class="mono">_disabledHooks</span> in <span class="mono">' + esc(layerMeta(rt().provider, h.scope).file) + '</span>.');
+      wouldWrite(rt().provider === 'codex'
+        ? 'Would ' + (parking ? 'disable' : 're-enable') + ' the entry through the Codex hook-state store, leaving <span class="mono">' +
+          esc(layerMeta(rt().provider, h.scope).file) + '</span> and its trust hash untouched.'
+        : 'Would ' + (parking ? 'move' : 'restore') + ' the entry ' + (parking ? 'into' : 'out of') +
+          ' <span class="mono">_disabledHooks</span> in <span class="mono">' + esc(layerMeta(rt().provider, h.scope).file) + '</span>.');
       break;
     }
     case 'requestTrust':
