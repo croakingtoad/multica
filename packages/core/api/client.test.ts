@@ -2967,3 +2967,116 @@ describe("ApiClient session expiry", () => {
     expect(storage.getItem("multica_token")).toBeNull();
   });
 });
+
+// Daemon path checks (LOCO-171). The picker turns this response into "you may
+// attach this folder" and into whether `worktree` mode is offered, so a drifted
+// body must degrade to a named failure — never to a fabricated success.
+describe("ApiClient daemon path-check response schema", () => {
+  function stubJSON(body: unknown, status = 200) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+  }
+
+  it("sends the path and returns the request id", async () => {
+    stubJSON({ request_id: "req-1" }, 202);
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).initiateDaemonPathCheck("ws-1", "daemon-a", "/srv/app");
+
+    expect(result.request_id).toBe("req-1");
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/workspaces/ws-1/daemons/daemon-a/path-checks",
+    );
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ path: "/srv/app" }),
+    });
+  });
+
+  it("parses a completed check, keeping every flag the picker branches on", async () => {
+    stubJSON({
+      status: "completed",
+      result: {
+        exists: true,
+        is_directory: true,
+        readable: true,
+        writable: true,
+        is_git_repo: true,
+        reason: "",
+      },
+    });
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result.status).toBe("completed");
+    expect(result.result).toMatchObject({
+      exists: true,
+      is_directory: true,
+      readable: true,
+      writable: true,
+      is_git_repo: true,
+    });
+  });
+
+  // An empty request id is safe to hand back because the client module refuses
+  // to poll on one; a fabricated id would 404 and read as "not your daemon".
+  it("degrades a malformed initiate response to an empty request id", async () => {
+    stubJSON({ request_id: 7 }, 202);
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).initiateDaemonPathCheck("ws-1", "daemon-a", "/srv/app");
+
+    expect(result.request_id).toBe("");
+  });
+
+  it("degrades a malformed poll response to an explicit failure", async () => {
+    stubJSON("not-an-object");
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("invalid path check response");
+  });
+
+  // A daemon that omits a flag has not vouched for it. Reading a missing
+  // `readable` as readable would let the create succeed and the first task fail.
+  it("defaults every omitted flag to the pessimistic value", async () => {
+    stubJSON({ status: "completed", result: {} });
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result.result).toEqual({
+      exists: false,
+      is_directory: false,
+      readable: false,
+      writable: false,
+      is_git_repo: false,
+      reason: "",
+    });
+  });
+
+  it("keeps an unknown status verbatim so the caller's default branch sees it", async () => {
+    stubJSON({ status: "queued_on_daemon" });
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result.status).toBe("queued_on_daemon");
+  });
+});

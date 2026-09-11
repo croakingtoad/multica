@@ -84,6 +84,12 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
   MikaBootstrapResponse,
+  DaemonPathCheckStatus,
+  DaemonPathCheckReason,
+  DaemonPathCheckOutcome,
+  CreateDaemonPathCheckRequest,
+  CreateDaemonPathCheckResponse,
+  DaemonPathCheckResponse,
 } from "./agent";
 export { RUNTIME_PROFILE_PROTOCOL_FAMILIES } from "./agent";
 export type { Workspace, WorkspaceRepo, WorkspaceMcpServer, Member, MemberRole, User, MemberWithUser, Invitation, ShareLink, ShareLinkInfo } from "./workspace";

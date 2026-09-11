@@ -86,6 +86,8 @@ import type {
   User,
   WebhookDelivery,
   WorkspaceMcpServer,
+  CreateDaemonPathCheckResponse,
+  DaemonPathCheckResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { CreateFeedbackResponse } from "../feedback/types";
@@ -3112,6 +3114,45 @@ export const MALFORMED_RUNTIME_MODEL_LIST_REQUEST: RuntimeModelListRequest = {
   error: "invalid model discovery response",
   created_at: "",
   updated_at: "",
+};
+
+// Daemon path checks (LOCO-171). Both halves of the contract are parsed rather
+// than cast: the picker turns these booleans into "you may attach this folder"
+// and into whether `worktree` mode is offered, so a drifted response must
+// degrade to a named failure, never to a fabricated success.
+export const CreateDaemonPathCheckResponseSchema = z.object({
+  request_id: z.string(),
+}).loose();
+
+export const MALFORMED_CREATE_DAEMON_PATH_CHECK_RESPONSE: CreateDaemonPathCheckResponse = {
+  request_id: "",
+};
+
+export const DaemonPathCheckOutcomeSchema = z.object({
+  // Every flag defaults to the pessimistic value. A daemon that omits one has
+  // not vouched for it, and the picker must not read a missing `readable` as
+  // readable — the create would then succeed and the first task would fail.
+  exists: z.boolean().default(false),
+  is_directory: z.boolean().default(false),
+  readable: z.boolean().default(false),
+  writable: z.boolean().default(false),
+  is_git_repo: z.boolean().default(false),
+  reason: z.string().default(""),
+}).loose();
+
+export const DaemonPathCheckResponseSchema = z.object({
+  status: z.string(),
+  result: DaemonPathCheckOutcomeSchema.nullish(),
+  error: z.string().nullish(),
+}).loose();
+
+// `failed` rather than `pending`: an unparseable poll response would otherwise
+// spin the confirm button until the client timeout and then report the wrong
+// reason. `failed` surfaces the problem on the next tick with the message
+// attached.
+export const MALFORMED_DAEMON_PATH_CHECK_RESPONSE: DaemonPathCheckResponse = {
+  status: "failed",
+  error: "invalid path check response",
 };
 
 export const DingTalkInstallationSchema = z.object({

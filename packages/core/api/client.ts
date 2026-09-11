@@ -78,6 +78,9 @@ import type {
   RuntimeUpdate,
   RuntimeModelListRequest,
   RuntimeLocalSkillListRequest,
+  CreateDaemonPathCheckRequest,
+  CreateDaemonPathCheckResponse,
+  DaemonPathCheckResponse,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
   TimelineEntry,
@@ -460,6 +463,10 @@ import {
   type IssueView,
   type IssueViewPreference,
   type CreateIssueViewRequest,
+  CreateDaemonPathCheckResponseSchema,
+  MALFORMED_CREATE_DAEMON_PATH_CHECK_RESPONSE,
+  DaemonPathCheckResponseSchema,
+  MALFORMED_DAEMON_PATH_CHECK_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2369,6 +2376,50 @@ export class ApiClient {
     requestId: string,
   ): Promise<RuntimeLocalSkillListRequest> {
     return this.fetch(`/api/runtimes/${runtimeId}/local-skills/${requestId}`);
+  }
+
+  // Daemon path checks (LOCO-171). Workspace-scoped rather than runtime-scoped
+  // because the question is about a MACHINE ("is /srv/app a usable directory on
+  // that box?"), and a daemon can carry several runtimes. The server authorises
+  // on daemon ownership: 403/404 for a daemon the caller does not own, 503 when
+  // it has no online runtime to ask.
+  async initiateDaemonPathCheck(
+    workspaceId: string,
+    daemonId: string,
+    path: string,
+  ): Promise<CreateDaemonPathCheckResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/daemons/${daemonId}/path-checks`,
+      {
+        method: "POST",
+        body: JSON.stringify({ path } satisfies CreateDaemonPathCheckRequest),
+      },
+    );
+    return parseWithFallback<CreateDaemonPathCheckResponse>(
+      raw,
+      CreateDaemonPathCheckResponseSchema,
+      MALFORMED_CREATE_DAEMON_PATH_CHECK_RESPONSE,
+      { endpoint: "POST /api/workspaces/{id}/daemons/{id}/path-checks" },
+    );
+  }
+
+  async getDaemonPathCheck(
+    workspaceId: string,
+    daemonId: string,
+    requestId: string,
+  ): Promise<DaemonPathCheckResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/daemons/${daemonId}/path-checks/${requestId}`,
+    );
+    return parseWithFallback<DaemonPathCheckResponse>(
+      raw,
+      DaemonPathCheckResponseSchema,
+      MALFORMED_DAEMON_PATH_CHECK_RESPONSE,
+      {
+        endpoint:
+          "GET /api/workspaces/{id}/daemons/{id}/path-checks/{requestId}",
+      },
+    );
   }
 
   async initiateImportLocalSkill(

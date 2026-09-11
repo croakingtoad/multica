@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronRight,
@@ -32,6 +32,7 @@ import {
   runtimeListOptions,
 } from "@multica/core/runtimes";
 import { useConfigStore } from "@multica/core/config";
+import { useAuthStore } from "@multica/core/auth";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -44,17 +45,15 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
-import {
-  isDesktopShell,
-  pickDirectory,
-  useLocalDaemonStatus,
-  validateLocalDirectory,
-  type ValidateLocalDirectoryResult,
-} from "../../platform";
+import { isDesktopShell, useLocalDaemonStatus } from "../../platform";
 import {
   LocalDirectoryModeDialog,
   type WorktreeUnavailableReason,
 } from "./local-directory-mode-dialog";
+import {
+  LocalDirectoryPickerDialog,
+  eligibleLocalDirectoryMachines,
+} from "./local-directory-picker-dialog";
 import { localDirectoryLabel } from "./local-directory-label";
 import { useT } from "../../i18n";
 import { githubShortLabel } from "../../common/github-url";
@@ -110,7 +109,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
-  const [picking, setPicking] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [modeDialog, setModeDialog] = useState<ModeDialogState | null>(null);
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -122,10 +121,10 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const updateResource = useUpdateProjectResource(wsId, projectId);
   const deleteResource = useDeleteProjectResource(wsId, projectId);
 
-  // Desktop-only entry points. We hide (not just disable) on web so users
-  // there don't see an action they can never complete — the spec calls for
-  // read-only on web because the daemon-id check can't be performed in the
-  // browser.
+  // Renaming a local_directory row stays desktop-only: the label belongs to the
+  // machine that registered it. ATTACHING no longer does — the path check is
+  // server-side now, so a browser can complete the flow for any machine the
+  // user owns (LOCO-171).
   const desktopMode = isDesktopShell();
   const localDaemonId = daemonStatus.daemonId;
 
@@ -153,21 +152,41 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const attachedUrls = new Set(
     resources.filter(isGithubRef).map((r) => r.resource_ref.url),
   );
-  const attachedLocalPaths = new Set(
-    resources
-      .filter(isLocalDirectoryRef)
-      .filter((r) => r.resource_ref.daemon_id === localDaemonId)
-      .map((r) => r.resource_ref.local_path),
-  );
   // Per (project, daemon) we allow at most one local_directory — the
   // daemon-side resolver picks the first match by daemon_id, so two rows
   // on the same daemon would silently route the agent into one of them.
-  // The server enforces this at the API boundary; the UI mirrors the
-  // restriction by hiding the "Add" affordance once a row exists for the
-  // current daemon, otherwise users would only discover the limit on a
-  // 409 toast.
-  const hasLocalDirectoryForCurrentDaemon =
-    localDaemonId !== null && attachedLocalPaths.size > 0;
+  // The server enforces this at the API boundary; the UI mirrors it per
+  // MACHINE now that several are offered, otherwise users would only discover
+  // the limit on a 409 toast for the one machine that was already taken.
+  const attachedDaemonIds = useMemo(
+    () =>
+      new Set(
+        resources
+          .filter(isLocalDirectoryRef)
+          .map((r) => r.resource_ref.daemon_id),
+      ),
+    [resources],
+  );
+
+  // Every machine this user could attach a directory on, "this machine" first.
+  // Sourced from the runtime list already loaded above rather than from the
+  // Electron bridge: the server knows about every daemon the user owns, and
+  // which one happens to sit next to the browser is not what decides whether a
+  // directory can be attached (LOCO-171).
+  const currentUserId = useAuthStore((state) => state.user?.id ?? null);
+  const machines = useMemo(
+    () =>
+      eligibleLocalDirectoryMachines(runtimes, {
+        now: Date.now(),
+        currentUserId,
+        localDaemonId,
+        localMachineName: daemonStatus.deviceName,
+      }),
+    [runtimes, currentUserId, localDaemonId, daemonStatus.deviceName],
+  );
+  const availableMachines = machines.filter(
+    (machine) => !attachedDaemonIds.has(machine.daemonId),
+  );
 
   const repoQuery = repoSearch.trim().toLowerCase();
   const filteredRepos =
@@ -186,81 +205,35 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
     }
   };
 
-  const handleAttachLocalDirectory = async () => {
-    if (picking) return;
-    setPicking(true);
-    try {
-      if (!localDaemonId || !daemonStatus.running) {
-        toast.error(t(($) => $.resources.toast_local_daemon_not_running));
-        return;
-      }
-      // Race guard: the button gates on this already, but if the picker
-      // is opened while a concurrent resource-create lands the user
-      // would otherwise see a 409. Surface a clearer message instead.
-      if (attachedLocalPaths.size > 0) {
-        toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
-        return;
-      }
-      const picked = await pickDirectory();
-      if (!picked.ok) {
-        if (picked.reason && picked.reason !== "cancelled") {
-          toast.error(
-            picked.error ?? t(($) => $.resources.toast_local_pick_failed),
-          );
-        }
-        return;
-      }
-      const path = picked.path ?? "";
-      const fallbackLabel = picked.basename ?? path;
-      if (attachedLocalPaths.has(path)) {
-        toast.error(t(($) => $.resources.toast_local_already_attached));
-        return;
-      }
-      const validation = await validateLocalDirectory(path);
-      if (!validation.ok) {
-        toast.error(
-          localValidationMessage(validation, {
-            not_absolute: t(($) => $.resources.local_validate_not_absolute),
-            not_found: t(($) => $.resources.local_validate_not_found),
-            not_a_directory: t(($) => $.resources.local_validate_not_a_directory),
-            not_readable: t(($) => $.resources.local_validate_not_readable),
-            not_writable: t(($) => $.resources.local_validate_not_writable),
-            unsupported: t(($) => $.resources.local_validate_unsupported),
-            fallback: t(($) => $.resources.toast_local_pick_failed),
-          }),
-        );
-        return;
-      }
-      // Ask for the execution mode before creating. It is part of what the
-      // user is choosing — whether tasks edit this folder or hand back a
-      // branch — not a setting to discover afterwards.
-      setModeError(null);
-      setModeDialog({
-        path,
-        daemonId: localDaemonId,
-        // Same preselection rule as the create-project flow: a git repo this
-        // daemon can actually run worktree mode on starts on parallel, anything
-        // else starts on direct. Only the PRESELECTION differs by folder — the
-        // user still confirms, and existing resources keep whatever they have.
-        mode:
-          validation.is_git_repo === true &&
-          serverValidatesWorktree &&
-          advertisesWorktree(localDaemonId)
-            ? "worktree"
-            : "in_place",
-        isGitRepo: validation.is_git_repo,
-        label: fallbackLabel,
-      });
-      setAddOpen(false);
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : t(($) => $.resources.toast_local_pick_failed);
-      toast.error(msg);
-    } finally {
-      setPicking(false);
-    }
+  // The picker hands back a (machine, path) pair the daemon has already
+  // vouched for. All that is left is the execution mode, which is part of what
+  // the user is choosing — whether tasks edit this folder or hand back a
+  // branch — not a setting to discover afterwards.
+  const handleDirectoryPicked = (selection: {
+    daemonId: string;
+    path: string;
+    label: string;
+    isGitRepo: boolean | undefined;
+  }) => {
+    setPickerOpen(false);
+    setModeError(null);
+    setModeDialog({
+      path: selection.path,
+      daemonId: selection.daemonId,
+      // Same preselection rule as the create-project flow: a git repo that
+      // daemon can actually run worktree mode on starts on parallel, anything
+      // else starts on direct. Only the PRESELECTION differs by folder — the
+      // user still confirms, and existing resources keep whatever they have.
+      mode:
+        selection.isGitRepo === true &&
+        serverValidatesWorktree &&
+        advertisesWorktree(selection.daemonId)
+          ? "worktree"
+          : "in_place",
+      isGitRepo: selection.isGitRepo,
+      label: selection.label,
+    });
+    setAddOpen(false);
   };
 
   const handleConfirmMode = async (mode: LocalDirectoryExecutionMode) => {
@@ -284,12 +257,15 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
         });
         toast.success(t(($) => $.resources.toast_local_mode_updated));
       } else {
-        if (!localDaemonId) return;
+        // The daemon the PICKER selected, never the browser-local one — the
+        // whole point of the machine selector is that they differ.
+        const daemonId = modeDialog.daemonId;
+        if (!daemonId) return;
         await createResource.mutateAsync({
           resource_type: "local_directory",
           resource_ref: {
             local_path: modeDialog.path,
-            daemon_id: localDaemonId,
+            daemon_id: daemonId,
             label: modeDialog.label ?? modeDialog.path,
             execution_mode: mode,
           },
@@ -490,38 +466,47 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
               />
             </PopoverContent>
           </Popover>
-          {desktopMode && (
-            <div className="flex flex-col">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 justify-start px-2 text-caption text-muted-foreground hover:text-foreground"
-                disabled={
-                  picking ||
-                  createResource.isPending ||
-                  !daemonStatus.running ||
-                  hasLocalDirectoryForCurrentDaemon
-                }
-                onClick={() => {
-                  void handleAttachLocalDirectory();
-                }}
-              >
-                <FolderOpen className="size-3" />
-                {t(($) => $.resources.add_local_directory_button)}
-              </Button>
-              {!daemonStatus.running && (
-                <p className="px-2 pt-0.5 text-micro text-muted-foreground">
-                  {t(($) => $.resources.local_daemon_offline_hint)}
-                </p>
-              )}
-              {daemonStatus.running && hasLocalDirectoryForCurrentDaemon && (
-                <p className="px-2 pt-0.5 text-micro text-muted-foreground">
-                  {t(($) => $.resources.local_daemon_already_attached_hint)}
-                </p>
-              )}
-            </div>
-          )}
+          {/* Rendered on web as well as desktop. The flow used to be hidden in
+              the browser because the daemon-id check could only run in the
+              Electron shell; that check is server-side now, so the browser can
+              complete it for any machine the user owns (LOCO-171). */}
+          <div className="flex flex-col">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 justify-start px-2 text-caption text-muted-foreground hover:text-foreground"
+              disabled={
+                createResource.isPending || availableMachines.length === 0
+              }
+              onClick={() => setPickerOpen(true)}
+            >
+              <FolderOpen className="size-3" />
+              {t(($) => $.resources.add_local_directory_button)}
+            </Button>
+            {machines.length === 0 && (
+              <p className="px-2 pt-0.5 text-micro text-muted-foreground">
+                {t(($) => $.resources.local_daemon_offline_hint)}
+              </p>
+            )}
+            {machines.length > 0 && availableMachines.length === 0 && (
+              <p className="px-2 pt-0.5 text-micro text-muted-foreground">
+                {machines.length === 1
+                  ? t(($) => $.resources.local_daemon_already_attached_hint)
+                  : t(($) => $.resources.local_all_machines_attached_hint)}
+              </p>
+            )}
+          </div>
         </div>
+      )}
+      {pickerOpen && (
+        <LocalDirectoryPickerDialog
+          open
+          onOpenChange={setPickerOpen}
+          workspaceId={wsId}
+          machines={machines}
+          attachedDaemonIds={attachedDaemonIds}
+          onSelected={handleDirectoryPicked}
+        />
       )}
       {modeDialog && (
         <LocalDirectoryModeDialog
@@ -853,35 +838,4 @@ function CustomRepoForm({
       </Button>
     </form>
   );
-}
-
-function localValidationMessage(
-  result: ValidateLocalDirectoryResult,
-  strings: {
-    not_absolute: string;
-    not_found: string;
-    not_a_directory: string;
-    not_readable: string;
-    not_writable: string;
-    unsupported: string;
-    fallback: string;
-  },
-): string {
-  switch (result.reason) {
-    case "not_absolute":
-      return strings.not_absolute;
-    case "not_found":
-      return strings.not_found;
-    case "not_a_directory":
-      return strings.not_a_directory;
-    case "not_readable":
-      return strings.not_readable;
-    case "not_writable":
-      return strings.not_writable;
-    case "unsupported":
-      return strings.unsupported;
-    case "error":
-    default:
-      return result.error ?? strings.fallback;
-  }
 }
