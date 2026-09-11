@@ -1,0 +1,2697 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Multica — Lifecycle Hooks (design preview)</title>
+<!--
+  Multica · Runtime Lifecycle Hooks — static design preview (LOCO-82)
+  ------------------------------------------------------------------
+  A clickable sketch, NOT production code. No build step, no network, no CDN.
+  Sample data only; nothing here talks to a runtime.
+
+  Design provenance:
+  - Tokens copied from packages/ui/styles/tokens.css (.dark block, OKLCH/zinc).
+  - Type scale limited to the ten sanctioned steps (micro…display).
+  - Shell mirrors runtime-detail.tsx: BreadcrumbHeader -> single scroll
+    container -> grid-cols-[minmax(0,1fr)_320px].
+  - Card = rounded-lg border bg-card. Editor = Dialog. Delete = AlertDialog.
+  - Runtime picker grouped by machine = runtime-local-skill-import-panel.tsx.
+  - Icons are hand-inlined lucide geometry (ISC) so the file stays offline.
+
+  Feature is labelled "Lifecycle Hooks" throughout to avoid colliding with
+  Multica's existing, unrelated "plugin hooks" (PluginHookTool).
+-->
+<style>
+/* ------------------------------------------------------------------ *
+ * 1. Tokens — lifted from packages/ui/styles/tokens.css
+ * ------------------------------------------------------------------ */
+:root {
+  color-scheme: light;
+  --app-shell: oklch(0.964435 0.001327 286.375);
+  --page-canvas: oklch(0.988087 0 0);
+  --surface: oklch(1 0 0);
+  --surface-raised: oklch(1 0 0);
+  --surface-hover: oklch(0.967 0.001 286.375);
+  --surface-selected: oklch(0.94 0.002 286.375);
+  --background: var(--page-canvas);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: var(--surface);
+  --popover: var(--surface-raised);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --faint-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0 0 0 / 8%);
+  --input: oklch(0 0 0 / 14%);
+  --ring: oklch(0.705 0.015 286.067);
+  --brand: oklch(0.55 0.18 255);
+  --brand-foreground: oklch(0.985 0 0);
+  --success: oklch(0.55 0.15 145);
+  --warning: oklch(0.62 0.16 70);
+  --info: oklch(0.55 0.18 250);
+  --menu-shadow: 0 10px 28px rgb(0 0 0 / 0.10), 0 2px 8px rgb(0 0 0 / 0.06);
+  --floating-shadow: 0 20px 48px rgb(0 0 0 / 0.18), 0 4px 12px rgb(0 0 0 / 0.10);
+  --radius: 0.625rem;
+}
+html.dark {
+  color-scheme: dark;
+  --app-shell: oklch(0.155 0.005 285.823);
+  --page-canvas: oklch(0.18 0.005 285.823);
+  --surface: oklch(0.21 0.006 285.885);
+  --surface-raised: oklch(0.235 0.007 285.885);
+  --surface-hover: oklch(0.274 0.006 286.033);
+  --surface-selected: oklch(0.3 0.006 286.033);
+  --background: var(--page-canvas);
+  --foreground: oklch(0.985 0 0);
+  --card: var(--surface);
+  --popover: var(--surface-raised);
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --faint-foreground: oklch(0.60 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 6%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+  --brand: oklch(0.65 0.16 255);
+  --brand-foreground: oklch(0.985 0 0);
+  --success: oklch(0.65 0.15 145);
+  --warning: oklch(0.70 0.16 85);
+  --info: oklch(0.65 0.18 250);
+  --menu-shadow: 0 10px 28px rgb(0 0 0 / 0.3), 0 2px 8px rgb(0 0 0 / 0.18);
+  --floating-shadow: 0 20px 48px rgb(0 0 0 / 0.46), 0 4px 12px rgb(0 0 0 / 0.28);
+}
+
+/* ------------------------------------------------------------------ *
+ * 2. Base + the ten sanctioned type steps
+ * ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px; line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+.t-micro    { font-size: 11px; line-height: 15px; }
+.t-caption  { font-size: 12px; line-height: 16px; }
+.t-label    { font-size: 13px; line-height: 18px; }
+.t-body     { font-size: 14px; line-height: 20px; }
+.t-body-lg  { font-size: 15px; line-height: 22px; }
+.t-title-sm { font-size: 16px; line-height: 24px; }
+.t-title    { font-size: 18px; line-height: 28px; }
+.t-title-lg { font-size: 20px; line-height: 28px; }
+.t-display-sm { font-size: 24px; line-height: 32px; }
+.muted { color: var(--muted-foreground); }
+.faint { color: var(--faint-foreground); }
+.medium { font-weight: 500; }
+.semibold { font-weight: 600; }
+.strike { text-decoration: line-through; }
+svg { flex: none; }
+
+/* ------------------------------------------------------------------ *
+ * 3. Layout shell
+ * ------------------------------------------------------------------ */
+#app { display: flex; flex-direction: column; height: 100%; }
+
+.preview-strip {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 16px;
+  background: color-mix(in oklab, var(--warning) 18%, var(--app-shell));
+  border-bottom: 1px solid color-mix(in oklab, var(--warning) 40%, transparent);
+  color: var(--foreground);
+}
+.preview-strip .dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warning) 25%, transparent);
+}
+.preview-strip .spacer { flex: 1; }
+
+.page-header {
+  display: flex; align-items: center; gap: 6px;
+  height: 44px; padding: 0 16px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.crumb { color: var(--muted-foreground); text-decoration: none; }
+.crumb:hover { color: var(--foreground); }
+
+.tabbar {
+  display: flex; gap: 2px; padding: 0 16px;
+  border-bottom: 1px solid var(--border); background: var(--background); flex: none;
+  overflow-x: auto;
+}
+.tab {
+  appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--muted-foreground); padding: 9px 10px; font: inherit; font-size: 13px;
+  cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px;
+}
+.tab:hover { color: var(--foreground); }
+.tab[aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--primary); font-weight: 500; }
+.tab:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: 4px; }
+
+.scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.rail { margin: 0 auto; width: 100%; max-width: 1440px; }
+.two-col { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; padding: 24px 16px; }
+@media (max-width: 1100px) { .two-col { grid-template-columns: 1fr; } }
+.col-main { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.col-rail { display: flex; flex-direction: column; gap: 16px; }
+
+/* ------------------------------------------------------------------ *
+ * 4. Primitives — Card / Badge / Button / Input / Select / Switch
+ * ------------------------------------------------------------------ */
+.card { border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); }
+.card-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+}
+.card-head .spacer { flex: 1; }
+.card-body { padding: 16px; }
+.card-body.tight { padding: 12px 16px; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 6px; border: 1px solid var(--border);
+  padding: 1px 6px; font-size: 11px; line-height: 15px; font-weight: 500;
+  background: color-mix(in oklab, var(--muted) 60%, transparent);
+  color: var(--muted-foreground); white-space: nowrap;
+}
+.badge.solid { border-color: transparent; }
+.badge.b-claude { background: color-mix(in oklab, var(--warning) 20%, transparent); color: var(--warning); border-color: color-mix(in oklab, var(--warning) 35%, transparent); }
+.badge.b-codex  { background: color-mix(in oklab, var(--info) 20%, transparent);    color: var(--info);    border-color: color-mix(in oklab, var(--info) 35%, transparent); }
+.badge.b-ok     { background: color-mix(in oklab, var(--success) 18%, transparent); color: var(--success); border-color: color-mix(in oklab, var(--success) 32%, transparent); }
+.badge.b-warn   { background: color-mix(in oklab, var(--warning) 18%, transparent); color: var(--warning); border-color: color-mix(in oklab, var(--warning) 32%, transparent); }
+.badge.b-bad    { background: color-mix(in oklab, var(--destructive) 16%, transparent); color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 32%, transparent); }
+.badge.b-brand  { background: color-mix(in oklab, var(--brand) 20%, transparent); color: var(--brand); border-color: color-mix(in oklab, var(--brand) 35%, transparent); }
+.badge.b-dim    { opacity: .72; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: calc(var(--radius) * 0.8);
+  border: 1px solid var(--border); background: transparent; color: var(--foreground);
+  font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  white-space: nowrap; text-decoration: none;
+}
+.btn:hover { background: var(--accent); }
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.btn[disabled]:hover { background: transparent; }
+.btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.btn.primary:hover { background: color-mix(in oklab, var(--primary) 88%, var(--foreground)); }
+.btn.danger { background: var(--destructive); color: oklch(0.985 0 0); border-color: transparent; }
+.btn.ghost { border-color: transparent; }
+.btn.sm { height: 26px; padding: 0 8px; font-size: 12px; }
+.btn.xs { height: 22px; padding: 0 6px; font-size: 11px; border-radius: 6px; }
+.btn.icon { width: 28px; height: 28px; padding: 0; }
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field > label { font-size: 13px; line-height: 18px; font-weight: 500; }
+.field .hint { font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+.field .err  { font-size: 12px; line-height: 16px; color: var(--destructive); display: flex; gap: 5px; align-items: flex-start; }
+.field .warn { font-size: 12px; line-height: 16px; color: var(--warning); display: flex; gap: 5px; align-items: flex-start; }
+.input, .select, .textarea {
+  width: 100%; height: 32px; padding: 0 10px;
+  border-radius: calc(var(--radius) * 0.8); border: 1px solid var(--input);
+  background: color-mix(in oklab, var(--surface) 70%, transparent);
+  color: var(--foreground); font: inherit; font-size: 13px;
+}
+.textarea { height: auto; padding: 7px 10px; min-height: 60px; resize: vertical; }
+.input:focus, .select:focus, .textarea:focus { outline: 2px solid var(--ring); outline-offset: -1px; border-color: var(--ring); }
+.input[aria-invalid="true"] { border-color: var(--destructive); }
+.input[disabled], .select[disabled], .textarea[disabled] { opacity: .55; cursor: not-allowed; }
+.select { appearance: none; padding-right: 28px; background-image: none; }
+.select-wrap { position: relative; }
+.select-wrap > svg { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--faint-foreground); }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+.switch {
+  appearance: none; width: 32px; height: 18px; border-radius: 999px;
+  background: var(--input); border: 1px solid var(--border); position: relative;
+  cursor: pointer; flex: none; transition: background .12s;
+}
+.switch::after {
+  content: ""; position: absolute; top: 1px; left: 1px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--foreground); transition: transform .12s;
+}
+.switch:checked { background: var(--brand); }
+.switch:checked::after { transform: translateX(14px); background: oklch(0.99 0 0); }
+.switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.switch[disabled] { opacity: .45; cursor: not-allowed; }
+
+.kbd {
+  display: inline-flex; align-items: center; height: 17px; padding: 0 4px;
+  border-radius: 4px; border: 1px solid var(--border); background: var(--muted);
+  font-size: 10px; font-family: inherit; color: var(--muted-foreground);
+}
+
+/* ------------------------------------------------------------------ *
+ * 5. Tables / rows
+ * ------------------------------------------------------------------ */
+table.tbl { width: 100%; border-collapse: collapse; }
+table.tbl th {
+  text-align: left; font-size: 11px; line-height: 15px; font-weight: 500;
+  color: var(--faint-foreground); text-transform: uppercase; letter-spacing: .04em;
+  padding: 7px 12px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+table.tbl td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.tbl tr:last-child td { border-bottom: 0; }
+table.tbl tbody tr:hover { background: color-mix(in oklab, var(--accent) 45%, transparent); }
+table.tbl tr.shadowed td { background: color-mix(in oklab, var(--destructive) 5%, transparent); }
+table.tbl tr.shadowed .cmd, table.tbl tr.shadowed .matcher { opacity: .5; text-decoration: line-through; }
+.cmd { font-family: "Geist Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.nowrap { white-space: nowrap; }
+.cellflex { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+.event-group { border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); overflow: hidden; }
+.event-group + .event-group { margin-top: 10px; }
+.event-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 12px; background: color-mix(in oklab, var(--muted) 35%, transparent);
+  border: 0; border-bottom: 1px solid var(--border); color: inherit; font: inherit;
+  cursor: pointer; text-align: left;
+}
+.event-head:hover { background: color-mix(in oklab, var(--muted) 60%, transparent); }
+.event-head:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.event-head .spacer { flex: 1; }
+.event-head .chev { transition: transform .12s; color: var(--faint-foreground); }
+.event-head[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+
+/* ------------------------------------------------------------------ *
+ * 6. Notices / strips
+ * ------------------------------------------------------------------ */
+.behavior-strip {
+  display: flex; align-items: flex-start; gap: 10px;
+  border-radius: var(--radius); padding: 10px 14px;
+  border: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 40%, transparent);
+}
+.behavior-strip.claude { border-color: color-mix(in oklab, var(--warning) 30%, transparent); background: color-mix(in oklab, var(--warning) 9%, transparent); }
+.behavior-strip.codex  { border-color: color-mix(in oklab, var(--info) 30%, transparent);    background: color-mix(in oklab, var(--info) 9%, transparent); }
+.behavior-strip .ico { margin-top: 1px; }
+.behavior-strip .spacer { flex: 1; }
+
+.notice { display: flex; gap: 9px; border-radius: calc(var(--radius) * 0.8); padding: 9px 12px; border: 1px solid var(--border); }
+.notice .ico { margin-top: 1px; }
+.notice.warn { border-color: color-mix(in oklab, var(--warning) 35%, transparent); background: color-mix(in oklab, var(--warning) 10%, transparent); }
+.notice.bad  { border-color: color-mix(in oklab, var(--destructive) 35%, transparent); background: color-mix(in oklab, var(--destructive) 9%, transparent); }
+.notice.info { border-color: color-mix(in oklab, var(--info) 30%, transparent); background: color-mix(in oklab, var(--info) 9%, transparent); }
+.notice.ok   { border-color: color-mix(in oklab, var(--success) 30%, transparent); background: color-mix(in oklab, var(--success) 9%, transparent); }
+
+/* Empty (shadcn Empty) */
+.empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 56px 24px; }
+.empty .media {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  background: var(--muted); color: var(--muted-foreground);
+}
+.empty .actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* Skeleton */
+@keyframes sk { 0%,100% { opacity: .45 } 50% { opacity: .85 } }
+.sk { background: var(--muted); border-radius: 6px; animation: sk 1.5s ease-in-out infinite; }
+
+/* ------------------------------------------------------------------ *
+ * 7. Dialog / AlertDialog
+ * ------------------------------------------------------------------ */
+.overlay {
+  position: fixed; inset: 0; background: rgb(0 0 0 / .6); z-index: 60;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 48px 16px; overflow-y: auto;
+}
+.overlay[hidden] { display: none; }
+.dialog {
+  width: 100%; max-width: 620px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--popover);
+  box-shadow: var(--floating-shadow); display: flex; flex-direction: column;
+}
+.dialog.wide { max-width: 780px; }
+.dialog.narrow { max-width: 440px; }
+.dialog-head { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: flex-start; }
+.dialog-head .spacer { flex: 1; }
+.dialog-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+.dialog-foot { padding: 12px 20px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.dialog-foot .spacer { flex: 1; }
+
+/* searchable event combobox */
+.combo { position: relative; }
+.combo-list {
+  position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 236px; overflow-y: auto; border-radius: calc(var(--radius) * 0.8);
+  border: 1px solid var(--border); background: var(--popover); box-shadow: var(--menu-shadow);
+  padding: 4px;
+}
+.combo-list[hidden] { display: none; }
+.combo-group { font-size: 11px; color: var(--faint-foreground); padding: 6px 8px 2px; text-transform: uppercase; letter-spacing: .04em; }
+.combo-opt {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 5px 8px; border: 0; background: none; color: inherit; font: inherit; font-size: 13px;
+  border-radius: 6px; cursor: pointer; text-align: left;
+}
+.combo-opt:hover, .combo-opt.active { background: var(--accent); }
+.combo-opt .spacer { flex: 1; }
+.combo-empty { padding: 10px 8px; font-size: 12px; color: var(--muted-foreground); }
+
+/* diff */
+.diff { border-radius: calc(var(--radius) * 0.8); border: 1px solid var(--border); overflow: hidden; background: var(--app-shell); }
+.diff-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 40%, transparent); }
+.diff pre { margin: 0; padding: 10px 0; overflow-x: auto; font-family: "Geist Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; }
+.diff .ln { display: block; padding: 0 12px; white-space: pre; }
+.diff .ln.add { background: color-mix(in oklab, var(--success) 14%, transparent); color: color-mix(in oklab, var(--success) 75%, var(--foreground)); }
+.diff .ln.del { background: color-mix(in oklab, var(--destructive) 12%, transparent); color: color-mix(in oklab, var(--destructive) 75%, var(--foreground)); }
+.diff .ln.ctx { color: var(--muted-foreground); }
+
+/* toast (sonner) */
+#toasts { position: fixed; right: 16px; bottom: 16px; z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.toast {
+  display: flex; gap: 8px; align-items: flex-start; min-width: 260px; max-width: 380px;
+  border-radius: calc(var(--radius) * 0.8); border: 1px solid var(--border);
+  background: var(--popover); box-shadow: var(--menu-shadow); padding: 10px 12px;
+}
+.toast .ico { margin-top: 1px; }
+
+/* gallery */
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(276px, 1fr)); gap: 12px; }
+.g-card { border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); padding: 14px; display: flex; flex-direction: column; gap: 9px; }
+.g-card:hover { border-color: color-mix(in oklab, var(--brand) 40%, var(--border)); }
+.g-card .g-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.g-card .g-foot { display: flex; gap: 6px; margin-top: auto; padding-top: 4px; }
+.compat { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* precedence layer stack */
+.layers { display: flex; flex-direction: column; gap: 8px; }
+.layer { border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; }
+.layer-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: color-mix(in oklab, var(--muted) 35%, transparent); }
+.layer-head .spacer { flex: 1; }
+.layer.writable .layer-head { background: color-mix(in oklab, var(--brand) 12%, transparent); }
+.layer-body { padding: 0; }
+.layer-entry { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
+.layer-entry.is-shadowed { background: color-mix(in oklab, var(--destructive) 5%, transparent); }
+.layer-entry.is-shadowed .cmd, .layer-entry.is-shadowed .matcher { opacity: .5; text-decoration: line-through; }
+.layer-entry .spacer { flex: 1; }
+.runorder {
+  width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; flex: none;
+  background: color-mix(in oklab, var(--success) 20%, transparent); color: var(--success);
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.runorder.off { background: var(--muted); color: var(--faint-foreground); }
+
+/* fire log */
+.log-row { display: grid; grid-template-columns: 92px 1fr 74px 130px; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); align-items: start; }
+.log-row:last-child { border-bottom: 0; }
+.log-row:hover { background: color-mix(in oklab, var(--accent) 40%, transparent); }
+.log-row.fail { background: color-mix(in oklab, var(--destructive) 7%, transparent); }
+.log-row.fail:hover { background: color-mix(in oklab, var(--destructive) 11%, transparent); }
+.log-head { display: grid; grid-template-columns: 92px 1fr 74px 130px; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+.log-head > span { font-size: 11px; color: var(--faint-foreground); text-transform: uppercase; letter-spacing: .04em; }
+.stderr {
+  margin-top: 5px; padding: 6px 8px; border-radius: 6px;
+  background: color-mix(in oklab, var(--destructive) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--destructive) 25%, transparent);
+  font-family: "Geist Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 16px;
+  white-space: pre-wrap; word-break: break-all;
+}
+.seg { display: inline-flex; border-radius: calc(var(--radius) * 0.8); border: 1px solid var(--border); overflow: hidden; }
+.seg button { appearance: none; border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--foreground); font-weight: 500; }
+.seg button:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+.kv dt { color: var(--muted-foreground); font-size: 12px; }
+.kv dd { margin: 0; font-size: 12px; }
+.stack { display: flex; flex-direction: column; gap: 10px; }
+.inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+hr.sep { border: 0; border-top: 1px solid var(--border); margin: 2px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Preview marker: this is a mock, every number below is invented. -->
+  <div class="preview-strip t-caption">
+    <span class="dot" aria-hidden="true"></span>
+    <strong class="semibold">Preview — sample data.</strong>
+    <span>Nothing here is connected to a runtime. Design sketch for LOCO-82, not a working feature.</span>
+    <span class="spacer"></span>
+    <button class="btn xs" id="themeToggle" type="button">Light / dark</button>
+  </div>
+
+  <header class="page-header t-body" id="pageHeader"></header>
+  <nav class="tabbar" id="tabbar" role="tablist" aria-label="Lifecycle hooks screens"></nav>
+
+  <div class="scroll" id="scroll">
+    <div class="rail" id="screen"></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" hidden></div>
+<div id="toasts" aria-live="polite"></div>
+
+<script>
+/* ==================================================================== *
+ * ICONS — inlined lucide geometry (ISC), so the file works offline.
+ * ==================================================================== */
+const P = {
+  webhook: '<path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  circleAlert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  checkCircle: '<path d="M21.801 10A10 10 0 1 1 17 3.335"/><path d="m9 11 3 3L22 4"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  lock: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12.18a1 1 0 0 0 .6.91l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 .58-.92"/><path d="M2 17.18a1 1 0 0 0 .6.91l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 .58-.92"/>',
+  activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  pkg: '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.7 4.4a2 2 0 0 0 2 0L20.7 7"/><path d="m7.5 4.27 9 5.15"/>',
+  wifiOff: '<path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  key: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  archive: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+  cpu: '<path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+  filter: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
+  gitBranch: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+  play: '<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/>',
+};
+function ic(name, size, cls) {
+  const d = P[name] || '';
+  return '<svg class="' + (cls || '') + '" width="' + (size || 14) + '" height="' + (size || 14) +
+    '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+}
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+</script>
+
+<script>
+/* ==================================================================== *
+ * SAMPLE DATA — all invented. See the "Preview — sample data" strip.
+ * ==================================================================== */
+
+/* Machines, so the runtime picker has something to group by
+   (runtime-local-skill-import-panel.tsx groups SelectItems under a
+   SelectLabel per machine). cc-claudesp is the real host; the other two
+   are invented purely to make the grouping visible. */
+const MACHINES = [
+  { id: 'cc-claudesp', title: 'cc-claudesp',  meta: 'Linux · x86_64 · daemon 01a0020a' },
+  { id: 'marty-mbp',   title: 'marty-mbp',    meta: 'macOS 15.3 · arm64 · daemon 4f11c8e2 (invented)' },
+  { id: 'loco-winlab', title: 'loco-winlab',  meta: 'Windows 11 · x86_64 · daemon 9b02ad57 (invented)' },
+];
+
+const RUNTIMES = [
+  {
+    id: 'b9322c50-ad96-489e-8aab-9e49f11c913a', machine: 'cc-claudesp', provider: 'claude',
+    name: 'Claude (cc-claudesp)', cli: 'claude 2.1.267', status: 'online',
+    scanned: '2026-09-11 15:52 EDT', state: 'ready',
+  },
+  {
+    id: '3327c002-1f3d-4c64-9eb7-e7cb1c77fd1f', machine: 'cc-claudesp', provider: 'codex',
+    name: 'Codex (cc-claudesp)', cli: 'codex 0.58.3', status: 'online',
+    scanned: '2026-09-11 15:52 EDT', state: 'ready',
+  },
+  {
+    id: '7a41e9d2-6c30-4f18-9ab2-1d5e77c4b809', machine: 'marty-mbp', provider: 'claude',
+    name: 'Claude (marty-mbp)', cli: 'claude 2.1.240', status: 'online',
+    scanned: '2026-09-11 15:49 EDT', state: 'empty',
+  },
+  {
+    id: 'e0c7b114-2af9-4d51-8e6c-b70f2a19dd43', machine: 'loco-winlab', provider: 'codex',
+    name: 'Codex (loco-winlab)', cli: 'codex 0.57.1', status: 'offline',
+    scanned: '2026-09-09 08:14 EDT', state: 'offline',
+  },
+];
+
+/* ---- Event catalogues -------------------------------------------------
+   Claude: all 33 events from the official reference (LOCO-80 §5). The nine
+   "common" ones are surfaced first in the picker; the rest are reachable
+   only by typing, which is the whole reason the picker is a searchable
+   combobox rather than a 33-item dropdown.
+   Codex: 12 events. Interrupt / PostCompact / SubagentStart are Codex-side
+   names with no Claude twin worth highlighting; Interrupt is Codex-only. */
+const CLAUDE_COMMON = ['PreToolUse','PostToolUse','UserPromptSubmit','Stop','SessionStart','SessionEnd','Notification','SubagentStop','PreCompact'];
+const CLAUDE_EVENTS = [
+  'SessionStart','Setup','InstructionsLoaded','UserPromptSubmit','UserPromptExpansion','MessageDisplay',
+  'PreToolUse','PermissionRequest','PostToolUse','PostToolUseFailure','PostToolBatch','PermissionDenied',
+  'Notification','SubagentStart','SubagentStop','TaskCreated','TaskCompleted','Stop','StopFailure',
+  'TeammateIdle','ConfigChange','CwdChanged','DirectoryAdded','FileChanged','WorktreeCreate','WorktreeRemove',
+  'PreCompact','PostCompact','PreModelSwitch','PostModelSwitch','SessionEnd','Elicitation','ElicitationResult',
+];
+const CODEX_EVENTS = [
+  'SessionStart','SubagentStart','UserPromptSubmit','PreToolUse','PermissionRequest','PostToolUse',
+  'PreCompact','PostCompact','Interrupt','SubagentStop','Stop','SessionEnd',
+];
+const CODEX_ONLY = ['Interrupt'];
+
+/* Handler types. `effective:false` = the provider parses the entry and then
+   silently skips it — the exact silent-failure class LOCO-79 says dominates
+   the complaints, so the editor has to refuse it rather than accept it. */
+const HANDLER_TYPES = {
+  claude: [
+    { v: 'command',  label: 'command',  effective: true,  note: 'Runs a shell command or an exec-form binary.' },
+    { v: 'http',     label: 'http',     effective: true,  note: 'POSTs the hook payload to a URL.' },
+    { v: 'mcp_tool', label: 'mcp_tool', effective: true,  note: 'Invokes an MCP tool.' },
+    { v: 'prompt',   label: 'prompt',   effective: true,  note: 'Asks the model inline; 30 s default timeout.' },
+    { v: 'agent',    label: 'agent',    effective: true,  note: 'Dispatches a subagent; 60 s default timeout.' },
+  ],
+  codex: [
+    { v: 'command',  label: 'command',  effective: true,  note: 'Runs a shell command. Supports commandWindows.' },
+    { v: 'mcp_tool', label: 'mcp_tool', effective: true,  note: 'Invokes an MCP tool.' },
+    { v: 'http',     label: 'http',     effective: false, note: 'Not part of the Codex handler set.' },
+    { v: 'prompt',   label: 'prompt',   effective: false, note: 'Parsed, then silently skipped by Codex.' },
+    { v: 'agent',    label: 'agent',    effective: false, note: 'Parsed, then silently skipped by Codex.' },
+  ],
+};
+
+/* ---- Scope layers ----------------------------------------------------
+   Ordered highest precedence first. `writable` is the honest part: user
+   scope is the only layer on the daemon host, so it is the only one a
+   write path could ever reach. Project/local live in the task worktree. */
+const LAYERS = {
+  claude: [
+    { id: 'session', label: 'Session',  file: '--settings <file>',                      writable: false, reach: 'not-discoverable',
+      why: 'Passed per-invocation on the CLI. Never present on disk, so discovery cannot see it.' },
+    { id: 'managed', label: 'Managed',  file: '/etc/claude-code/managed-settings.json', writable: false, reach: 'host',
+      why: 'Org policy. Managed hooks win outright and only a managed disableAllHooks can turn them off.' },
+    { id: 'local',   label: 'Local',    file: '<worktree>/.claude/settings.local.json', writable: false, reach: 'worktree',
+      why: 'Gitignored, per-checkout. Lives in the task worktree, not on the daemon host — read-only here.' },
+    { id: 'project', label: 'Project',  file: '<worktree>/.claude/settings.json',       writable: false, reach: 'worktree',
+      why: 'Committed with the repo. Lives in the task worktree, not on the daemon host — read-only here.' },
+    { id: 'user',    label: 'User',     file: '~/.claude/settings.json',                writable: true,  reach: 'host',
+      why: 'On the daemon host. The only layer Multica could write.' },
+  ],
+  codex: [
+    { id: 'plugin',      label: 'Plugin',  file: '<plugin>/hooks/hooks.json',  writable: false, reach: 'host',
+      why: 'Bundled with an installed Codex plugin. Trusted by the plugin, not editable here.' },
+    { id: 'repo-json',   label: 'Project', file: '<repo>/.codex/hooks.json',   writable: false, reach: 'worktree',
+      why: 'Lives in the task worktree, not on the daemon host — read-only here.' },
+    { id: 'repo-toml',   label: 'Project', file: '<repo>/.codex/config.toml',  writable: false, reach: 'worktree',
+      why: 'Inline [[hooks.Event]] tables in the repo config. Read-only here.' },
+    { id: 'user-json',   label: 'User',    file: '~/.codex/hooks.json',        writable: true,  reach: 'host',
+      why: 'On the daemon host. The primary layer Multica could write.' },
+    { id: 'user-toml',   label: 'User',    file: '~/.codex/config.toml',       writable: true,  reach: 'host',
+      why: 'Inline [[hooks.Event]] tables. Writable, but editing TOML in place is riskier than the JSON file.' },
+  ],
+};
+
+/* ---- Hook fixtures ---------------------------------------------------
+   `owner` — who wrote the entry. Multica may only park/unpark what it
+   wrote; foreign entries are shown but not touched (LOCO-79 pain #3:
+   managers clobbering unrelated settings).
+   `parked` — the entry sits in a `_disabledHooks` sidecar key, not in
+   `hooks`, so it is configured but not registered. See PARK_COPY.
+   `trust` — Codex only: 'trusted' | 'stale' | 'n/a'. */
+const HOOKS = {
+  /* ---------------- Claude (cc-claudesp) ---------------- */
+  'b9322c50-ad96-489e-8aab-9e49f11c913a': [
+    { id: 'c1', event: 'PreToolUse', matcher: 'Bash', scope: 'local', type: 'command',
+      command: '.claude/hooks/repo-bash-policy.sh', timeout: 15, async: false, shell: 'bash',
+      owner: 'user', parked: false, desc: 'Repo-local Bash policy. Wins because Local defines PreToolUse.' },
+    { id: 'c2', event: 'PreToolUse', matcher: 'Bash', scope: 'project', type: 'command',
+      command: '.claude/hooks/block-force-push.py', timeout: 10, async: false, shell: 'bash',
+      owner: 'user', parked: false, desc: 'Shadowed: Local already defines PreToolUse.' },
+    { id: 'c3', event: 'PreToolUse', matcher: 'Write|Edit|MultiEdit', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/secret-firewall.js', timeout: 20, async: false, shell: 'bash',
+      owner: 'multica', parked: false, installedFrom: 'secret-firewall',
+      desc: 'Shadowed: Local defines PreToolUse, so nothing in User runs for this event.' },
+    { id: 'c4', event: 'PreToolUse', matcher: 'Bash', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/rm-rf-guard.py', timeout: 10, async: false, shell: 'bash',
+      owner: 'multica', parked: false, installedFrom: 'dangerous-command-guard',
+      desc: 'Shadowed: same event, lower layer.' },
+
+    { id: 'c5', event: 'PostToolUse', matcher: 'Write|Edit', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/format-changed.sh', timeout: 30, async: true, shell: 'bash',
+      owner: 'multica', parked: false, installedFrom: 'auto-format',
+      desc: 'Only layer defining PostToolUse, so it runs.' },
+    { id: 'c6', event: 'PostToolUse', matcher: 'Edit.*', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/no-mock-code.py', timeout: 15, async: false, shell: 'bash',
+      owner: 'user', parked: false, overmatch: true,
+      desc: 'Matcher is an unanchored regex — also fires on NotebookEdit and MultiEdit.' },
+
+    { id: 'c7', event: 'UserPromptSubmit', matcher: '', scope: 'project', type: 'command',
+      command: '.claude/hooks/inject-repo-context.sh', timeout: 30, async: false, shell: 'bash',
+      owner: 'user', parked: false, desc: 'Project defines UserPromptSubmit and Local does not, so Project wins.' },
+    { id: 'c8', event: 'UserPromptSubmit', matcher: '', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/prompt-audit.py', timeout: 30, async: true, shell: 'bash',
+      owner: 'multica', parked: false, desc: 'Shadowed by Project.' },
+
+    { id: 'c9', event: 'SessionStart', matcher: 'startup|resume', scope: 'managed', type: 'command',
+      command: '/opt/loco/policy/session-attest.sh', timeout: 20, async: false, shell: 'bash',
+      owner: 'managed', parked: false, desc: 'Managed policy. Cannot be overridden or parked from here.' },
+    { id: 'c10', event: 'SessionStart', matcher: '', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/session-logger.js', timeout: 10, async: true, shell: 'bash',
+      owner: 'multica', parked: false, installedFrom: 'session-logger',
+      desc: 'Shadowed by the managed layer.' },
+
+    { id: 'c11', event: 'Stop', matcher: '', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/context-cost.js', timeout: 20, async: false, shell: 'bash',
+      owner: 'multica', parked: false, installedFrom: 'context-cost',
+      desc: 'Reports token cost at the end of a turn.' },
+
+    { id: 'c12', event: 'Notification', matcher: '', scope: 'user', type: 'http',
+      url: 'https://hooks.slack.com/services/T0…/B0…/xxxx', timeout: 10, async: true,
+      owner: 'multica', parked: false, installedFrom: 'slack-notify',
+      desc: 'http handler — Claude only. Codex has no http type.' },
+
+    { id: 'c13', event: 'SubagentStop', matcher: '', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/subagent-summary.py', timeout: 25, async: false, shell: 'bash',
+      owner: 'multica', parked: true, desc: 'Parked by Multica — configured but not registered.' },
+
+    { id: 'c14', event: 'PreCompact', matcher: 'manual', scope: 'user', type: 'command',
+      command: 'C:\\Users\\Marty Kelly\\bin\\snapshot.sh', timeout: 30, async: false, shell: 'bash',
+      owner: 'user', parked: false, broken: 'path',
+      desc: 'Windows separators and an unquoted space. Fails on every fire, silently.' },
+
+    { id: 'c15', event: 'SessionEnd', matcher: '', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/flush-telemetry.py', timeout: 1, async: false, shell: 'bash',
+      owner: 'user', parked: false, desc: 'SessionEnd hooks share a 1.5 s budget across all of them.' },
+
+    { id: 'c16', event: 'FileChanged', matcher: 'ts|tsx', scope: 'user', type: 'command',
+      command: '~/.claude/hooks/typecheck-touched.sh', timeout: 45, async: true, shell: 'bash',
+      owner: 'user', parked: false, desc: 'FileChanged uses the narrow exact matcher set (no regex).' },
+  ],
+
+  /* ---------------- Codex (cc-claudesp) ---------------- */
+  '3327c002-1f3d-4c64-9eb7-e7cb1c77fd1f': [
+    { id: 'x1', event: 'PreToolUse', matcher: 'shell', scope: 'user-json', type: 'command',
+      command: '~/.codex/hooks/shell-policy.sh', timeout: 15, async: false, trust: 'trusted',
+      statusMessage: 'Checking shell policy…', owner: 'user', parked: false,
+      desc: 'Runs. On Codex this does not shadow anything below it.' },
+    { id: 'x2', event: 'PreToolUse', matcher: 'shell', scope: 'repo-json', type: 'command',
+      command: '.codex/hooks/repo-shell-allowlist.py', timeout: 10, async: false, trust: 'trusted',
+      owner: 'user', parked: false,
+      desc: 'Also runs — Codex merges. Both handlers fire on every shell call.' },
+    { id: 'x3', event: 'PreToolUse', matcher: '*', scope: 'user-toml', type: 'command',
+      command: '~/.codex/hooks/tool-audit.sh', timeout: 10, async: true, trust: 'trusted',
+      owner: 'multica', parked: false, desc: 'Third handler on the same event. Also runs.' },
+
+    { id: 'x4', event: 'PostToolUse', matcher: 'apply_patch', scope: 'user-json', type: 'command',
+      command: '~/.codex/hooks/format-patch.sh', commandWindows: 'powershell -File %USERPROFILE%\\.codex\\hooks\\format-patch.ps1',
+      timeout: 30, async: true, trust: 'trusted', owner: 'multica', parked: false, installedFrom: 'auto-format',
+      desc: 'Has a commandWindows override — a Codex-only field.' },
+
+    { id: 'x5', event: 'PostToolUse', matcher: 'apply_patch', scope: 'user-json', type: 'command',
+      command: '~/.codex/hooks/secret-firewall.js', timeout: 20, async: false, trust: 'stale',
+      trustedHash: 'b41c9f0e7a2d5e88', currentHash: '1f7ad30c9b6e4412', editedAt: '2026-09-11 15:47 EDT',
+      owner: 'multica', parked: false, installedFrom: 'secret-firewall',
+      desc: 'Edited since it was trusted. Codex skips it entirely until it is re-trusted.' },
+
+    { id: 'x6', event: 'UserPromptSubmit', matcher: '', scope: 'user-json', type: 'prompt',
+      prompt: 'Rewrite the user prompt to include the current sprint goal.', timeout: 30,
+      trust: 'trusted', owner: 'user', parked: false, ineffective: true,
+      desc: 'type: prompt is parsed by Codex and then silently skipped. It never runs.' },
+
+    { id: 'x7', event: 'Stop', matcher: '', scope: 'user-json', type: 'command',
+      command: '~/.codex/hooks/turn-gate.py', timeout: 20, async: false, trust: 'trusted',
+      owner: 'user', parked: false, codexStopBlock: true,
+      desc: 'Emits decision:"block". On Codex that CONTINUES the turn — the opposite of Claude.' },
+
+    { id: 'x8', event: 'Interrupt', matcher: '', scope: 'user-json', type: 'command',
+      command: '~/.codex/hooks/on-interrupt-cleanup.sh', timeout: 10, async: false, trust: 'trusted',
+      owner: 'multica', parked: false, desc: 'Interrupt has no Claude equivalent.' },
+
+    { id: 'x9', event: 'SessionStart', matcher: '', scope: 'plugin', type: 'command',
+      command: '${CODEX_PLUGIN_ROOT}/hooks/bootstrap.js', timeout: 15, async: false, trust: 'managed',
+      owner: 'plugin', parked: false, desc: 'Plugin-bundled. Trusted by policy, not editable here.' },
+
+    { id: 'x10', event: 'PermissionRequest', matcher: 'shell', scope: 'user-json', type: 'mcp_tool',
+      mcpTool: 'loco-policy__review_command', timeout: 20, trust: 'trusted',
+      additionalContextLimit: 4096, owner: 'multica', parked: false,
+      desc: 'mcp_tool is effective on both providers.' },
+
+    { id: 'x11', event: 'SessionEnd', matcher: '', scope: 'user-json', type: 'command',
+      command: '~/.codex/hooks/session-logger.js', timeout: 10, async: true, trust: 'trusted',
+      owner: 'multica', parked: true, installedFrom: 'session-logger',
+      desc: 'Parked by Multica — removed from hooks.json, kept in the Multica-owned sidecar.' },
+  ],
+
+  '7a41e9d2-6c30-4f18-9ab2-1d5e77c4b809': [],
+  'e0c7b114-2af9-4d51-8e6c-b70f2a19dd43': [],
+};
+
+/* ---- Fire log --------------------------------------------------------
+   Provenance matters and differs per provider, so each log carries its
+   own source note rather than a shared "events" abstraction. */
+const FIRE_LOG = {
+  'b9322c50-ad96-489e-8aab-9e49f11c913a': {
+    source: 'Parsed from the host-side Claude debug log (`claude --debug`, matcher counts at CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose).',
+    sourceOk: true,
+    rows: [
+      { t: '15:52:09', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: 412, verdict: 'success', task: 'LOCO-82' },
+      { t: '15:52:09', event: 'PostToolUse', matcher: 'Edit.*', hook: 'no-mock-code.py', ms: 121, verdict: 'success', task: 'LOCO-82',
+        note: 'Matched NotebookEdit as well as Edit — 2 of 2 candidate tools matched.' },
+      { t: '15:51:47', event: 'PreCompact', matcher: 'manual', hook: 'snapshot.sh', ms: 8, verdict: 'failed', task: 'LOCO-82',
+        stderr: 'bash: C:UsersMarty Kellybinsnapshot.sh: No such file or directory\nhook failed with non-blocking status code 127' },
+      { t: '15:51:20', event: 'PreToolUse', matcher: 'Bash', hook: 'repo-bash-policy.sh', ms: 64, verdict: 'blocked', task: 'LOCO-82',
+        note: 'Exit 2 — tool call rejected. Reason: "git push --force is not allowed on this branch".' },
+      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'inject-repo-context.sh', ms: 233, verdict: 'success', task: 'LOCO-82' },
+      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'prompt-audit.py', ms: 0, verdict: 'shadowed', task: 'LOCO-82',
+        note: 'Never invoked: Project defines UserPromptSubmit, so the User entry is shadowed.' },
+      { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
+        note: 'async:true — spawned and detached. Claude records the spawn, never the outcome.' },
+      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'rm-rf-guard.py', ms: 0, verdict: 'shadowed', task: 'LOCO-81' },
+      { t: '15:48:03', event: 'SessionStart', matcher: 'startup|resume', hook: 'session-attest.sh', ms: 891, verdict: 'success', task: 'LOCO-81' },
+      { t: '15:47:55', event: 'SessionEnd', matcher: '—', hook: 'flush-telemetry.py', ms: 1500, verdict: 'timeout', task: 'LOCO-78',
+        stderr: 'hook exceeded its share of the 1.5s SessionEnd budget and was killed' },
+      { t: '15:41:02', event: 'Stop', matcher: '—', hook: 'context-cost.js', ms: 77, verdict: 'success', task: 'LOCO-78' },
+    ],
+  },
+  '3327c002-1f3d-4c64-9eb7-e7cb1c77fd1f': {
+    source: 'Reconstructed from Codex exit codes and statusMessage lines. Codex writes no per-hook debug log, so durations are wall-clock around the turn and a skipped hook is inferred, not reported.',
+    sourceOk: false,
+    rows: [
+      { t: '15:52:11', event: 'PreToolUse', matcher: 'shell', hook: 'shell-policy.sh', ms: 58, verdict: 'success', task: 'LOCO-82' },
+      { t: '15:52:11', event: 'PreToolUse', matcher: 'shell', hook: 'repo-shell-allowlist.py', ms: 96, verdict: 'success', task: 'LOCO-82',
+        note: 'Ran in the same fire as shell-policy.sh — Codex merges, so both handlers execute.' },
+      { t: '15:52:11', event: 'PreToolUse', matcher: '*', hook: 'tool-audit.sh', ms: null, verdict: 'async', task: 'LOCO-82' },
+      { t: '15:51:58', event: 'PostToolUse', matcher: 'apply_patch', hook: 'secret-firewall.js', ms: 0, verdict: 'untrusted', task: 'LOCO-82',
+        stderr: 'hook skipped: trusted_hash b41c9f0e… does not match current hash 1f7ad30c…\nrun `/hooks` in Codex to review and trust it' },
+      { t: '15:51:58', event: 'PostToolUse', matcher: 'apply_patch', hook: 'format-patch.sh', ms: null, verdict: 'async', task: 'LOCO-82' },
+      { t: '15:51:12', event: 'UserPromptSubmit', matcher: '—', hook: 'prompt-rewrite (type: prompt)', ms: 0, verdict: 'ineffective', task: 'LOCO-82',
+        note: 'Codex parsed the entry and skipped it. type: prompt is never executed on Codex.' },
+      { t: '15:50:40', event: 'Stop', matcher: '—', hook: 'turn-gate.py', ms: 143, verdict: 'continued', task: 'LOCO-82',
+        note: 'Returned decision:"block". On Codex that continued the turn.' },
+      { t: '15:44:19', event: 'Interrupt', matcher: '—', hook: 'on-interrupt-cleanup.sh', ms: 61, verdict: 'success', task: 'LOCO-80' },
+      { t: '15:40:02', event: 'SessionStart', matcher: '—', hook: 'bootstrap.js (plugin)', ms: 302, verdict: 'success', task: 'LOCO-80' },
+    ],
+  },
+  '7a41e9d2-6c30-4f18-9ab2-1d5e77c4b809': { source: 'No hooks configured, so nothing has fired.', sourceOk: true, rows: [] },
+  'e0c7b114-2af9-4d51-8e6c-b70f2a19dd43': { source: 'Runtime offline since 2026-09-09 08:14 EDT. The log below is the last cached read.', sourceOk: false, rows: [] },
+};
+
+const VERDICTS = {
+  success:     { label: 'success',     cls: 'b-ok',   icon: 'check' },
+  blocked:     { label: 'blocked',     cls: 'b-warn', icon: 'ban' },
+  failed:      { label: 'failed',      cls: 'b-bad',  icon: 'circleAlert' },
+  timeout:     { label: 'timed out',   cls: 'b-bad',  icon: 'clock' },
+  async:       { label: 'async · unknown', cls: '',   icon: 'zap' },
+  shadowed:    { label: 'never ran · shadowed', cls: '', icon: 'layers' },
+  untrusted:   { label: 'skipped · not trusted', cls: 'b-bad', icon: 'key' },
+  ineffective: { label: 'skipped · type not supported', cls: 'b-bad', icon: 'ban' },
+  continued:   { label: 'continued turn', cls: 'b-warn', icon: 'info' },
+};
+
+/* ---- Starter-hooks gallery ------------------------------------------
+   Catalog-card layout modelled on karanb192.github.io/claude-code-hooks
+   (MIT). Provider compatibility is on the card because "install" means
+   two different things depending on which runtime is selected. */
+const GALLERY = [
+  { id: 'secret-firewall', name: 'Secret firewall', event: 'PreToolUse', matcher: 'Write|Edit|MultiEdit',
+    desc: 'Blocks a write whose diff contains an API key, private key or .env value.',
+    levels: ['Warn','Ask','Block'], claude: true, codex: true, type: 'command', src: 'karanb192/claude-code-hooks' },
+  { id: 'dangerous-command-guard', name: 'Dangerous command guard', event: 'PreToolUse', matcher: 'Bash',
+    desc: 'Refuses rm -rf, force pushes, DROP TABLE and curl-pipe-to-shell.',
+    levels: ['Ask','Block'], claude: true, codex: true, type: 'command', src: 'karanb192/claude-code-hooks' },
+  { id: 'gitignore-enforcer', name: 'Gitignore enforcer', event: 'PreToolUse', matcher: 'Write',
+    desc: 'Stops writes to paths the repo has deliberately ignored.',
+    levels: ['Warn','Block'], claude: true, codex: true, type: 'command', src: 'webdevtodayjason/claude-hooks' },
+  { id: 'auto-format', name: 'Format on write', event: 'PostToolUse', matcher: 'Write|Edit',
+    desc: 'Runs the repo formatter over whatever the turn just touched.',
+    levels: ['Warn'], claude: true, codex: true, type: 'command', src: 'webdevtodayjason/claude-hooks' },
+  { id: 'no-mock-code', name: 'No mock code', event: 'PostToolUse', matcher: '^Edit$',
+    desc: 'Flags TODO stubs and fake return values left behind in an edit.',
+    levels: ['Warn','Ask'], claude: true, codex: true, type: 'command', src: 'webdevtodayjason/claude-hooks' },
+  { id: 'session-logger', name: 'Session logger', event: 'SessionStart · SessionEnd', matcher: '—',
+    desc: 'Appends a JSONL line per session with cwd, branch and duration.',
+    levels: [], claude: true, codex: true, type: 'command', src: 'karanb192/claude-code-hooks' },
+  { id: 'slack-notify', name: 'Slack notification', event: 'Notification', matcher: '—',
+    desc: 'Posts a permission prompt or idle notice into a Slack channel.',
+    levels: [], claude: true, codex: false, type: 'http',
+    incompat: 'Needs the http handler type, which Codex does not have. Installable on Claude runtimes only.',
+    src: 'karanb192/claude-code-hooks' },
+  { id: 'context-cost', name: 'Context-cost leaderboard', event: 'Stop', matcher: '—',
+    desc: 'Records tokens and dollars per turn and prints a running leaderboard.',
+    levels: [], claude: true, codex: true, type: 'command', src: 'karanb192/claude-code-hooks' },
+  { id: 'plan-annotator', name: 'Plan annotator', event: 'PreToolUse', matcher: '^ExitPlanMode$',
+    desc: 'Intercepts a plan, opens a review UI, returns the annotated decision.',
+    levels: ['Ask'], claude: true, codex: false, type: 'command',
+    incompat: 'Depends on the ExitPlanMode tool, which Codex does not expose.',
+    src: 'backnotprop/plannotator (Apache-2.0)' },
+];
+
+/* Copy that has to stay honest in one place, because it is the answer to
+   "what does the toggle actually do". */
+const PARK_COPY = {
+  claude: {
+    verb: 'Park',
+    what: 'Moves the entry out of <code class="cmd">hooks</code> and into a <code class="cmd">_disabledHooks</code> key in the same settings file.',
+    why: 'Claude ignores unknown top-level keys, so the hook stops being registered and nothing is spawned per event. The entry is preserved verbatim and unparking moves it back.',
+    caveat: 'There is no native per-hook disable in Claude Code — <code class="cmd">/hooks</code> is read-only and only a global <code class="cmd">disableAllHooks</code> exists. Parking is Multica\'s own mechanism, not a Claude feature.',
+  },
+  codex: {
+    verb: 'Park',
+    what: 'Removes the entry from <code class="cmd">~/.codex/hooks.json</code> and keeps it in a Multica-owned sidecar.',
+    why: 'Codex has no disable flag either. Keeping the entry outside hooks.json is the only way to stop it running without losing it.',
+    caveat: 'Any write to a Codex hooks file invalidates the trust hashes recorded in <code class="cmd">[hooks.state]</code>. Parking or unparking will leave hooks needing re-trust.',
+  },
+};
+</script>
+
+<script>
+/* ==================================================================== *
+ * STATE + RESOLUTION
+ * ==================================================================== */
+const state = {
+  runtimeId: 'b9322c50-ad96-489e-8aab-9e49f11c913a',
+  screen: 'hooks',
+  collapsed: {},          // event -> true
+  query: '',
+  logFilter: 'all',
+  stateDemo: 'discovery', // discovery | empty | offline
+  discoveryStep: 3,
+};
+
+const rt = () => RUNTIMES.find((r) => r.id === state.runtimeId);
+const machineOf = (r) => MACHINES.find((m) => m.id === r.machine);
+const layersOf = (prov) => LAYERS[prov];
+const layerMeta = (prov, id) => layersOf(prov).find((l) => l.id === id) || { label: id, file: id, writable: false };
+const hooksOf = (id) => HOOKS[id] || [];
+const providerLabel = (p) => (p === 'claude' ? 'Claude Code' : 'Codex');
+
+/* Claude overrides per event: the highest-priority layer that defines the
+   event wins outright and every entry below it is shadowed. Codex merges:
+   every entry runs. This function is the only place that difference lives,
+   which is why the two screens can render genuinely different pictures
+   instead of one screen with a flag. */
+function resolve(runtime) {
+  const hooks = hooksOf(runtime.id);
+  const order = layersOf(runtime.provider).map((l) => l.id);
+  const byEvent = {};
+  hooks.forEach((h) => { (byEvent[h.event] = byEvent[h.event] || []).push(h); });
+
+  Object.keys(byEvent).forEach((ev) => {
+    const group = byEvent[ev];
+    if (runtime.provider === 'claude') {
+      const live = group.filter((h) => !h.parked);
+      const winningScope = live
+        .map((h) => h.scope)
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
+      group.forEach((h) => {
+        h._shadowed = !h.parked && h.scope !== winningScope;
+        h._winningScope = winningScope;
+      });
+      let n = 0;
+      group.forEach((h) => { h._runOrder = (!h.parked && !h._shadowed) ? ++n : null; });
+    } else {
+      group.forEach((h) => { h._shadowed = false; });
+      let n = 0;
+      group
+        .slice()
+        .sort((a, b) => order.indexOf(a.scope) - order.indexOf(b.scope))
+        .forEach((h) => { h._runOrder = runState(h, runtime).runs ? ++n : null; });
+    }
+  });
+  return byEvent;
+}
+
+/* One honest answer to "is this running right now?", with the reason. */
+function runState(h, runtime) {
+  if (h.parked)      return { runs: false, label: 'Parked',       cls: '',       icon: 'archive',
+    why: 'Configured but not registered. Multica moved the entry out of the hooks key.' };
+  if (h._shadowed)   return { runs: false, label: 'Shadowed',     cls: '',       icon: 'layers',
+    why: 'A higher-precedence file defines ' + h.event + ', so this entry is never loaded.' };
+  if (h.ineffective) return { runs: false, label: 'Never runs',   cls: 'b-bad',  icon: 'ban',
+    why: 'Codex parses type: ' + h.type + ' and then skips it. It has never executed.' };
+  if (h.trust === 'stale') return { runs: false, label: 'Not trusted', cls: 'b-bad', icon: 'key',
+    why: 'Edited since it was trusted. Codex skips it until the new hash is trusted on the host.' };
+  if (h.broken === 'path') return { runs: true, label: 'Failing',  cls: 'b-bad',  icon: 'circleAlert',
+    why: 'Registered and fires, but the command cannot be found. Claude treats that as non-blocking, so nothing surfaces in the session.' };
+  if (h.async)       return { runs: true,  label: 'Active · async', cls: 'b-ok', icon: 'zap',
+    why: 'Runs detached. Its exit status is never checked, so a failure is invisible.' };
+  return { runs: true, label: 'Active', cls: 'b-ok', icon: 'check', why: 'Registered and running.' };
+}
+
+/* The matcher rule is the single most surprising thing in the schema, so
+   it gets a live interpretation rather than a tooltip. */
+function interpretMatcher(v) {
+  const s = (v || '').trim();
+  if (s === '' || s === '*') return { kind: 'all', text: 'every tool fires this hook. Empty and * are the same thing.' };
+  if (/^[A-Za-z0-9_\-,| ]+$/.test(s)) {
+    const parts = s.split(/[|,]/).map((x) => x.trim()).filter(Boolean);
+    return { kind: 'exact', text: parts.length > 1
+      ? 'matches only ' + parts.join(', ') + ' — nothing else.'
+      : 'matches only ' + parts[0] + ' — nothing else.' };
+  }
+  const extra = [];
+  if (/^[A-Za-z0-9_]+\.\*$/.test(s)) {
+    const stem = s.slice(0, -2);
+    extra.push('Unanchored, so it also matches Notebook' + stem + ' and Multi' + stem + '. Use ^' + stem + '$ for whole-string.');
+  } else if (!s.startsWith('^')) {
+    extra.push('Unanchored — it matches anywhere in the tool name. Add ^ and $ to pin it.');
+  }
+  return { kind: 'regex', text: 'treated as a JavaScript regex, because it contains a character outside [A-Za-z0-9_-,| ]. ' + extra.join(' ') };
+}
+
+function validateCommand(cmd) {
+  const s = (cmd || '').trim();
+  if (!s) return { level: 'error', text: 'A command handler needs a command.' };
+  if (s.includes('\\')) return { level: 'error',
+    text: 'Backslashes are Windows separators. Claude runs this through bash, which reads \\U as an escape — the path collapses to C:UsersMarty and fails with status 127 on every fire, silently.' };
+  if (/\s/.test(s.split(' ')[0]) === false && / /.test(s) && !/["']/.test(s)) {
+    const first = s.split(' ')[0];
+    if (!/^(sh|bash|node|python3?|npx|pnpm|uv|deno)$/.test(first)) {
+      return { level: 'warn', text: 'This path contains a space and is unquoted. Wrap it in double quotes or the shell will split it.' };
+    }
+  }
+  return null;
+}
+
+/* ==================================================================== *
+ * SHELL
+ * ==================================================================== */
+const SCREENS = [
+  { id: 'hooks',      label: 'Hooks',            icon: 'webhook' },
+  { id: 'precedence', label: 'Scope & precedence', icon: 'layers' },
+  { id: 'log',        label: 'Fire log',         icon: 'activity' },
+  { id: 'gallery',    label: 'Starter hooks',    icon: 'pkg' },
+  { id: 'states',     label: 'Discovery & edge states', icon: 'refresh' },
+];
+
+function renderHeader() {
+  const r = rt();
+  const m = machineOf(r);
+  document.getElementById('pageHeader').innerHTML = `
+    <div class="inline" style="flex:1;min-width:0">
+      <a class="crumb" href="#">Runtimes</a>
+      ${ic('chevronRight', 12, 'faint')}
+      <a class="crumb" href="#">${esc(m.title)}</a>
+      ${ic('chevronRight', 12, 'faint')}
+      <span class="mono t-caption">${esc(r.name)}</span>
+      <span class="badge ${r.provider === 'claude' ? 'b-claude' : 'b-codex'}">${esc(providerLabel(r.provider))}</span>
+      <span class="badge ${r.status === 'online' ? 'b-ok' : 'b-bad'}">${r.status}</span>
+    </div>
+    <div class="inline t-caption muted">
+      ${ic('lock', 12)} User scope writable · project and local read-only
+    </div>`;
+}
+
+function renderTabs() {
+  document.getElementById('tabbar').innerHTML = SCREENS.map((s) => `
+    <button class="tab" role="tab" aria-selected="${s.id === state.screen}" data-screen="${s.id}">
+      ${ic(s.icon, 14)}${esc(s.label)}
+    </button>`).join('');
+}
+
+/* Runtime picker — grouped by machine, exactly like the local-skills
+   import panel (SelectGroup + SelectLabel per machine). */
+function runtimePicker() {
+  const r = rt();
+  const groups = MACHINES.map((m) => {
+    const rs = RUNTIMES.filter((x) => x.machine === m.id);
+    if (!rs.length) return '';
+    return `<optgroup label="${esc(m.title)} — ${esc(m.meta)}">` +
+      rs.map((x) => `<option value="${x.id}" ${x.id === state.runtimeId ? 'selected' : ''}>${esc(x.name)} · ${esc(x.cli)}${x.status === 'offline' ? ' · offline' : ''}</option>`).join('') +
+      `</optgroup>`;
+  }).join('');
+  return `
+  <div class="card">
+    <div class="card-body tight">
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:260px">
+          <label for="rtSel">Runtime</label>
+          <div class="select-wrap">
+            <select class="select" id="rtSel">${groups}</select>
+            ${ic('chevronDown', 14)}
+          </div>
+        </div>
+        <div class="inline">
+          <span class="badge ${r.provider === 'claude' ? 'b-claude' : 'b-codex'}">${ic('cpu', 11)}${esc(providerLabel(r.provider))}</span>
+          <span class="badge">${esc(r.cli)}</span>
+          <span class="badge ${r.status === 'online' ? 'b-ok' : 'b-bad'}">${r.status === 'online' ? ic('check', 11) : ic('wifiOff', 11)}${r.status}</span>
+        </div>
+        <div class="inline">
+          <button class="btn sm" data-act="rescan">${ic('refresh', 13)}Re-scan</button>
+        </div>
+      </div>
+      <div class="t-caption faint" style="margin-top:8px">
+        ${esc(r.id)} · last read ${esc(r.scanned)}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* The provider-behaviour strip. One line, provider-specific, stating the
+   thing that actually changes what happens at runtime — not a generic
+   "providers differ" banner. It is persistent because the rule it states
+   is the rule the rest of the screen is rendered under. */
+function behaviorStrip(prov) {
+  if (prov === 'claude') {
+    return `
+    <div class="behavior-strip claude">
+      ${ic('layers', 15, 'ico')}
+      <div>
+        <div class="t-label"><strong class="semibold">Claude overrides.</strong>
+        For each event, the highest-precedence file that defines it wins and every entry below is
+        <span class="strike">shadowed</span> — not merged. 33 events. <code class="cmd">http</code>,
+        <code class="cmd">prompt</code> and <code class="cmd">agent</code> handlers all work.</div>
+        <div class="t-caption muted" style="margin-top:2px">Precedence: <code class="cmd">--settings</code> › managed › local › project › user.</div>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn sm" data-screen="precedence">See what wins</button>
+    </div>`;
+  }
+  return `
+  <div class="behavior-strip codex">
+    ${ic('gitBranch', 15, 'ico')}
+    <div>
+      <div class="t-label"><strong class="semibold">Codex merges.</strong>
+      Every matching hook in every file runs. Nothing is ever shadowed, so three entries on one event
+      means three processes per fire. 12 events. Only <code class="cmd">command</code> and
+      <code class="cmd">mcp_tool</code> do anything.</div>
+      <div class="t-caption muted" style="margin-top:2px">Hooks also run only while their hash is trusted — any edit stops them until re-trusted.</div>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn sm" data-screen="precedence">See run order</button>
+  </div>`;
+}
+
+/* ==================================================================== *
+ * SCREEN 1 — HOOKS LIST
+ * ==================================================================== */
+function screenHooks() {
+  const r = rt();
+  if (r.status === 'offline') return offlineBody(r);
+  const byEvent = resolve(r);
+  const hooks = hooksOf(r.id);
+  if (!hooks.length) return emptyBody(r);
+
+  const q = state.query.trim().toLowerCase();
+  const events = Object.keys(byEvent).sort((a, b) => {
+    const order = r.provider === 'claude' ? CLAUDE_EVENTS : CODEX_EVENTS;
+    return order.indexOf(a) - order.indexOf(b);
+  });
+
+  const groupsHtml = events.map((ev) => {
+    const group = byEvent[ev].filter((h) => !q ||
+      ev.toLowerCase().includes(q) ||
+      (h.matcher || '').toLowerCase().includes(q) ||
+      (h.command || h.url || h.mcpTool || '').toLowerCase().includes(q));
+    if (!group.length) return '';
+    if (r.provider === 'codex') {
+      const lo = layersOf('codex').map((l) => l.id);
+      group.sort((a, b) => lo.indexOf(a.scope) - lo.indexOf(b.scope));
+    }
+    const open = !state.collapsed[ev];
+    const running = group.filter((h) => runState(h, r).runs).length;
+    const trouble = group.filter((h) => { const s = runState(h, r); return !s.runs && (h.ineffective || h.trust === 'stale'); }).length;
+
+    return `
+    <div class="event-group">
+      <button class="event-head" aria-expanded="${open}" data-toggle-event="${esc(ev)}">
+        ${ic('chevronDown', 14, 'chev')}
+        <span class="mono t-label medium">${esc(ev)}</span>
+        ${CODEX_ONLY.includes(ev) ? '<span class="badge b-codex">Codex-only event</span>' : ''}
+        <span class="badge">${group.length} ${group.length === 1 ? 'hook' : 'hooks'}</span>
+        <span class="badge ${running ? 'b-ok' : 'b-dim'}">${running} running</span>
+        ${trouble ? `<span class="badge b-bad">${ic('alert', 11)}${trouble} not running</span>` : ''}
+        ${r.provider === 'codex' && running > 1 ? `<span class="badge b-codex">${ic('gitBranch', 11)}all ${running} fire</span>` : ''}
+        ${r.provider === 'claude' && group.filter((h) => h._shadowed).length ? `<span class="badge">${ic('layers', 11)}${group.filter((h) => h._shadowed).length} shadowed</span>` : ''}
+        <span class="spacer"></span>
+        <span class="t-caption faint">${r.provider === 'claude'
+          ? (!group[0]._winningScope ? 'nothing loads — all parked'
+            : group.filter((h) => h._shadowed).length ? 'wins: ' + esc(layerMeta(r.provider, group[0]._winningScope).file) : 'single layer')
+          : 'merged across ' + new Set(group.map((h) => h.scope)).size + ' file(s)'}</span>
+      </button>
+      ${open ? hookTable(group, r) : ''}
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="two-col">
+    <div class="col-main">
+      ${runtimePicker()}
+      ${behaviorStrip(r.provider)}
+      ${r.provider === 'codex' && hooks.some((h) => h.trust === 'stale') ? trustBanner(hooks.filter((h) => h.trust === 'stale')) : ''}
+      ${hooks.some((h) => h.broken === 'path') ? `
+        <div class="notice bad t-label">
+          ${ic('circleAlert', 15, 'ico')}
+          <div>
+            <strong class="semibold">1 hook is registered but cannot run.</strong>
+            <code class="cmd">snapshot.sh</code> has failed on every <code class="cmd">PreCompact</code> fire since 2026-09-04 with status 127.
+            Claude treats a failing hook as non-blocking, so the session shows nothing.
+            <div style="margin-top:6px"><button class="btn sm" data-screen="log">${ic('activity', 13)}Open fire log</button>
+            <button class="btn sm" data-edit="c14">${ic('pencil', 13)}Fix the path</button></div>
+          </div>
+        </div>` : ''}
+
+      <div class="inline">
+        <div class="field" style="flex:1;min-width:200px;max-width:320px">
+          <label class="sr" for="hookSearch">Filter hooks</label>
+          <div class="select-wrap">
+            <input class="input" id="hookSearch" placeholder="Filter by event, matcher or command" value="${esc(state.query)}" style="padding-left:30px" />
+            <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--faint-foreground)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true">${P.search}</svg>
+          </div>
+        </div>
+        <span style="flex:1"></span>
+        <button class="btn sm" data-screen="gallery">${ic('pkg', 13)}Starter hooks</button>
+        <button class="btn sm primary" data-add="1">${ic('plus', 13)}Add hook</button>
+      </div>
+
+      <div>${groupsHtml || `<div class="card"><div class="empty"><div class="media">${ic('search', 20)}</div><div class="t-title-sm medium">No hook matches “${esc(state.query)}”</div><div class="t-caption muted">Try an event name, a matcher, or part of a command.</div></div></div>`}</div>
+    </div>
+    <div class="col-rail">${railCards(r, hooks)}</div>
+  </div>`;
+}
+
+function hookTable(group, r) {
+  return `
+  <table class="tbl">
+    <thead><tr>
+      <th style="width:1%"></th>
+      <th style="width:16%">Matcher</th>
+      <th style="width:11%">Handler</th>
+      <th>Command</th>
+      <th style="width:19%">Source</th>
+      <th style="width:16%">State</th>
+      <th style="width:1%"></th>
+    </tr></thead>
+    <tbody>
+      ${group.map((h) => hookRow(h, r)).join('')}
+    </tbody>
+  </table>`;
+}
+
+function hookRow(h, r) {
+  const st = runState(h, r);
+  const lm = layerMeta(r.provider, h.scope);
+  const types = HANDLER_TYPES[r.provider].find((t) => t.v === h.type);
+  const target = h.command || h.url || h.mcpTool || h.prompt || '—';
+  const mi = interpretMatcher(h.matcher);
+  const cmdIssue = h.type === 'command' ? validateCommand(h.command) : null;
+
+  return `
+  <tr class="${h._shadowed ? 'shadowed' : ''}">
+    <td>${r.provider === 'codex'
+      ? `<span class="runorder ${h._runOrder ? '' : 'off'}" title="${h._runOrder ? 'Runs ' + ordinal(h._runOrder) + ' on this event' : 'Does not run'}">${h._runOrder || '–'}</span>`
+      : `<span class="runorder ${st.runs ? '' : 'off'}" title="${esc(st.why)}">${st.runs ? ic('check', 12) : ic('ban', 12)}</span>`}</td>
+    <td>
+      <span class="cmd matcher">${h.matcher ? esc(h.matcher) : '<span class="faint">* (all)</span>'}</span>
+      ${mi.kind === 'regex' ? `<div class="t-micro" style="color:var(--warning);margin-top:2px">${ic('alert', 10)} regex, unanchored</div>` : ''}
+    </td>
+    <td>
+      <span class="badge ${types && !types.effective ? 'b-bad' : ''}">${esc(h.type)}</span>
+      ${h.async ? `<div class="t-micro faint" style="margin-top:2px">async</div>` : ''}
+      ${types && !types.effective ? `<div class="t-micro" style="color:var(--destructive);margin-top:2px">skipped by Codex</div>` : ''}
+    </td>
+    <td>
+      <div class="cmd">${esc(target)}</div>
+      ${h.commandWindows ? `<div class="t-micro faint" style="margin-top:3px">${ic('info', 10)} commandWindows: <span class="cmd">${esc(h.commandWindows)}</span></div>` : ''}
+      ${h.statusMessage ? `<div class="t-micro faint" style="margin-top:2px">statusMessage: “${esc(h.statusMessage)}”</div>` : ''}
+      ${h.additionalContextLimit ? `<div class="t-micro faint" style="margin-top:2px">additionalContextLimit: ${h.additionalContextLimit}</div>` : ''}
+      ${cmdIssue ? `<div class="t-micro" style="color:var(--${cmdIssue.level === 'error' ? 'destructive' : 'warning'});margin-top:3px">${ic('alert', 10)} ${esc(cmdIssue.text.split('.')[0])}.</div>` : ''}
+      ${h.codexStopBlock ? `<div class="t-micro" style="color:var(--warning);margin-top:3px">${ic('alert', 10)} Emits <span class="cmd">decision:"block"</span> on <span class="cmd">Stop</span> — on Codex that <strong>continues</strong> the turn.</div>` : ''}
+      <div class="t-micro faint" style="margin-top:3px">timeout ${h.timeout != null ? h.timeout + 's' : 'default'}${h.shell ? ' · ' + esc(h.shell) : ''}</div>
+    </td>
+    <td>
+      <div class="inline">
+        <span class="badge ${lm.writable ? 'b-brand' : ''}">${lm.writable ? '' : ic('lock', 10)}${esc(lm.label)}</span>
+      </div>
+      <div class="cmd t-micro faint" style="margin-top:3px">${esc(lm.file)}</div>
+      ${h.owner === 'multica' ? `<div class="t-micro" style="margin-top:2px;color:var(--brand)">${ic('check', 10)} written by Multica</div>`
+        : h.owner === 'managed' ? `<div class="t-micro faint" style="margin-top:2px">org policy</div>`
+        : h.owner === 'plugin' ? `<div class="t-micro faint" style="margin-top:2px">plugin-bundled</div>`
+        : `<div class="t-micro faint" style="margin-top:2px">not written by Multica</div>`}
+    </td>
+    <td>
+      <div class="inline">
+        <span class="badge ${st.cls}">${ic(st.icon, 11)}${esc(st.label)}</span>
+        ${h.trust === 'stale' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}Re-trust</button>` : ''}
+      </div>
+      <div class="t-micro faint" style="margin-top:3px">${esc(st.why)}</div>
+    </td>
+    <td class="nowrap">
+      <div class="inline" style="gap:2px">
+        <label class="sr" for="park-${h.id}">${h.parked ? 'Unpark' : 'Park'} this hook</label>
+        <input class="switch" type="checkbox" id="park-${h.id}" ${h.parked ? '' : 'checked'} ${lm.writable && h.owner !== 'managed' && h.owner !== 'plugin' ? '' : 'disabled'} data-park="${h.id}"
+          title="${lm.writable && h.owner !== 'managed' && h.owner !== 'plugin' ? 'Registered — click to park' : 'Read-only source: Multica cannot change this file'}" />
+        <button class="btn ghost icon" data-edit="${h.id}" title="Edit" ${lm.writable ? '' : 'disabled'}>${ic('pencil', 14)}</button>
+        <button class="btn ghost icon" data-del="${h.id}" title="Delete" ${lm.writable ? '' : 'disabled'}>${ic('trash', 14)}</button>
+      </div>
+    </td>
+  </tr>`;
+}
+const ordinal = (n) => n + (['th','st','nd','rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : Math.min(n % 10, 4)] || 'th');
+
+function trustBanner(stale) {
+  return `
+  <div class="notice bad t-label">
+    ${ic('key', 15, 'ico')}
+    <div>
+      <strong class="semibold">${stale.length} Codex hook${stale.length > 1 ? 's are' : ' is'} edited but not trusted — ${stale.length > 1 ? 'they are' : 'it is'} not running.</strong>
+      Codex records trust against the hook's hash in <code class="cmd">[hooks.state]</code>. Any edit — including one Multica makes — invalidates it,
+      and Codex skips the hook silently until the new hash is trusted.
+      <div style="margin-top:6px">${stale.map((h) => `<button class="btn sm" data-retrust="${h.id}">${ic('key', 13)}Re-trust ${esc((h.command || '').split('/').pop())}</button>`).join(' ')}</div>
+    </div>
+  </div>`;
+}
+
+function railCards(r, hooks) {
+  const layers = layersOf(r.provider);
+  const counts = {};
+  hooks.forEach((h) => { counts[h.scope] = (counts[h.scope] || 0) + 1; });
+  const running = hooks.filter((h) => runState(h, r).runs).length;
+  const parked = hooks.filter((h) => h.parked).length;
+  const shadowed = hooks.filter((h) => h._shadowed).length;
+  const broken = hooks.filter((h) => h.broken || h.ineffective || h.trust === 'stale').length;
+
+  return `
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">${ic('activity', 14)} This runtime</span></div>
+    <div class="card-body tight">
+      <dl class="kv">
+        <dt>Running</dt><dd><span class="badge b-ok">${running}</span></dd>
+        <dt>Parked</dt><dd><span class="badge">${parked}</span></dd>
+        ${r.provider === 'claude' ? `<dt>Shadowed</dt><dd><span class="badge">${shadowed}</span></dd>` : `<dt>Shadowed</dt><dd><span class="badge b-dim">n/a on Codex</span></dd>`}
+        <dt>Not working</dt><dd><span class="badge ${broken ? 'b-bad' : ''}">${broken}</span></dd>
+      </dl>
+      <hr class="sep" style="margin:10px 0" />
+      <div class="t-caption muted">Configured ${hooks.length} · across ${new Set(hooks.map((h) => h.scope)).size} files · ${new Set(hooks.map((h) => h.event)).size} events</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">${ic('layers', 14)} Scopes</span>
+      <span class="spacer"></span><button class="btn xs" data-screen="precedence">Detail</button></div>
+    <div class="card-body tight">
+      <div class="stack">
+      ${layers.map((l) => `
+        <div class="inline t-caption" style="gap:6px">
+          <span class="badge ${l.writable ? 'b-brand' : ''}" style="min-width:64px;justify-content:center">${l.writable ? ic('pencil', 10) : ic('lock', 10)}${esc(l.label)}</span>
+          <span class="cmd t-micro faint" style="flex:1;min-width:0">${esc(l.file)}</span>
+          <span class="badge b-dim">${counts[l.id] || 0}</span>
+        </div>`).join('')}
+      </div>
+      <hr class="sep" style="margin:10px 0" />
+      <div class="t-caption muted">Only <strong class="semibold">${esc([...new Set(layers.filter((l) => l.writable).map((l) => l.label))].join(' / '))}</strong> scope is on the daemon host, so it is the only one Multica could write. Everything else is read-only here.</div>
+    </div>
+  </div>
+
+  <div class="card" style="border-color:color-mix(in oklab, var(--warning) 30%, var(--border))">
+    <div class="card-head" style="background:color-mix(in oklab, var(--warning) 8%, transparent)">
+      <span class="t-label medium">${ic('alert', 14)} Not built yet</span>
+    </div>
+    <div class="card-body tight">
+      <div class="t-caption muted stack">
+        <div>This screen shows four things Multica cannot do today. They are sketched so Marty can react to them, not because they exist.</div>
+        <div>${ic('x', 11)} <strong class="semibold">Reading</strong> a hooks file — discovery only covers fixed skill and MCP paths.</div>
+        <div>${ic('x', 11)} <strong class="semibold">Writing</strong> any file on a runtime host — no write path exists at all.</div>
+        <div>${ic('x', 11)} <strong class="semibold">Parking</strong> — Multica's own mechanism; neither provider has a per-hook disable.</div>
+        <div>${ic('x', 11)} <strong class="semibold">Re-trusting</strong> a Codex hook — trust is granted by an interactive CLI on the host.</div>
+      </div>
+    </div>
+  </div>`;
+}
+</script>
+
+<script>
+/* ==================================================================== *
+ * SCREEN 2 — SCOPE & PRECEDENCE
+ * The two providers get two different layouts on purpose. Claude's
+ * question is "which one wins"; Codex's question is "how many run and in
+ * what order". Rendering Codex with the Claude treatment would imply
+ * shadowing exists there, which is the exact lie this screen must avoid.
+ * ==================================================================== */
+function screenPrecedence() {
+  const r = rt();
+  if (r.status === 'offline') return offlineBody(r);
+  const byEvent = resolve(r);
+  const hooks = hooksOf(r.id);
+  if (!hooks.length) return emptyBody(r);
+
+  return `
+  <div class="two-col">
+    <div class="col-main">
+      ${runtimePicker()}
+      ${behaviorStrip(r.provider)}
+      ${r.provider === 'claude' ? claudePrecedence(r, byEvent) : codexPrecedence(r, byEvent)}
+      ${scopeLegend(r)}
+    </div>
+    <div class="col-rail">${precedenceRail(r)}</div>
+  </div>`;
+}
+
+/* ---------- Claude: override model ---------- */
+function claudePrecedence(r, byEvent) {
+  const order = layersOf('claude').map((l) => l.id);
+  const events = Object.keys(byEvent).sort((a, b) => CLAUDE_EVENTS.indexOf(a) - CLAUDE_EVENTS.indexOf(b));
+  const contested = events.filter((ev) => byEvent[ev].some((h) => h._shadowed));
+
+  return `
+  <div class="card">
+    <div class="card-head">
+      <span class="t-label medium">${ic('shield', 14)} What actually runs</span>
+      <span class="badge b-claude">override model</span>
+      <span class="spacer"></span>
+      <span class="t-caption muted">${contested.length} of ${events.length} events are contested</span>
+    </div>
+    <table class="tbl">
+      <thead><tr>
+        <th style="width:20%">Event</th>
+        <th style="width:28%">Defined in</th>
+        <th>Wins</th>
+        <th style="width:26%">Shadowed</th>
+      </tr></thead>
+      <tbody>
+      ${events.map((ev) => {
+        const g = byEvent[ev];
+        const scopes = order.filter((s) => g.some((h) => h.scope === s && !h.parked));
+        const win = g[0]._winningScope;
+        const shadow = g.filter((h) => h._shadowed);
+        return `<tr>
+          <td><span class="mono t-label">${esc(ev)}</span></td>
+          <td><div class="cellflex">${scopes.map((s) => `<span class="badge ${s === win ? 'b-ok' : 'b-dim'}">${esc(layerMeta('claude', s).label)}</span>`).join('')}</div></td>
+          <td>
+            ${win
+              ? `<div class="cmd">${esc(layerMeta('claude', win).file)}</div>
+                 <div class="t-micro faint" style="margin-top:2px">${g.filter((h) => !h._shadowed && !h.parked).length} handler(s) load from here</div>`
+              : `<div class="t-caption" style="color:var(--warning)">${ic('archive', 11)} Nothing loads — every entry for this event is parked</div>`}
+          </td>
+          <td>${shadow.length
+            ? `<div class="t-caption" style="color:var(--destructive)">${ic('layers', 11)} ${shadow.length} entr${shadow.length === 1 ? 'y' : 'ies'} never load</div>
+               ${shadow.map((h) => `<div class="cmd t-micro strike" style="opacity:.6;margin-top:2px">${esc((h.command || h.url || '').split('/').pop())}</div>`).join('')}`
+            : '<span class="t-caption faint">—</span>'}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+    <div class="card-body tight" style="border-top:1px solid var(--border)">
+      <div class="t-caption muted">Override is per event, not per matcher. The moment a higher layer names
+      <code class="cmd">PreToolUse</code>, <em>every</em> <code class="cmd">PreToolUse</code> entry below it stops loading — even a matcher the
+      winning layer never mentions. That is the trap: adding one repo-local Bash rule silently turned off the user-scope secret firewall below.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">${ic('layers', 14)} Layers, highest precedence first</span></div>
+    <div class="card-body">
+      <div class="layers">
+      ${layersOf('claude').map((l) => {
+        const entries = hooksOf(r.id).filter((h) => h.scope === l.id);
+        return `
+        <div class="layer ${l.writable ? 'writable' : ''}">
+          <div class="layer-head">
+            <span class="badge ${l.writable ? 'b-brand' : ''}">${l.writable ? ic('pencil', 10) : ic('lock', 10)}${esc(l.label)}</span>
+            <span class="cmd t-caption">${esc(l.file)}</span>
+            <span class="spacer"></span>
+            ${l.reach === 'not-discoverable' ? '<span class="badge b-warn">not discoverable</span>' : ''}
+            ${l.reach === 'worktree' ? '<span class="badge">in the task worktree</span>' : ''}
+            <span class="badge b-dim">${entries.length}</span>
+          </div>
+          <div class="layer-body">
+            ${entries.length ? entries.map((h) => `
+              <div class="layer-entry ${h._shadowed ? 'is-shadowed' : ''}">
+                <span class="runorder ${runState(h, r).runs ? '' : 'off'}">${runState(h, r).runs ? ic('check', 12) : ic('ban', 12)}</span>
+                <div style="min-width:0">
+                  <div class="inline">
+                    <span class="mono t-label">${esc(h.event)}</span>
+                    <span class="cmd matcher t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
+                    <span class="badge">${esc(h.type)}</span>
+                  </div>
+                  <div class="cmd t-caption" style="margin-top:2px">${esc(h.command || h.url || h.mcpTool || '')}</div>
+                  <div class="t-micro ${h._shadowed ? '' : 'faint'}" style="margin-top:2px;${h._shadowed ? 'color:var(--destructive)' : ''}">${esc(runState(h, r).why)}</div>
+                </div>
+                <span class="spacer"></span>
+                ${h.parked ? '<span class="badge">parked</span>' : ''}
+              </div>`).join('')
+              : `<div class="layer-entry"><span class="t-caption faint">${l.reach === 'not-discoverable' ? 'Cannot be read — a --settings file only exists for the life of one invocation.' : 'No hooks in this layer.'}</span></div>`}
+          </div>
+        </div>`;
+      }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Codex: merge model ---------- */
+function codexPrecedence(r, byEvent) {
+  const order = layersOf('codex').map((l) => l.id);
+  const events = Object.keys(byEvent).sort((a, b) => CODEX_EVENTS.indexOf(a) - CODEX_EVENTS.indexOf(b));
+
+  return `
+  <div class="notice info t-label">
+    ${ic('info', 15, 'ico')}
+    <div><strong class="semibold">There is no “wins” column on this screen, because on Codex nothing wins.</strong>
+    Every file contributes and every contribution runs. A hook here is only ever skipped for two reasons —
+    its hash is not trusted, or its handler type does nothing on Codex — never because another file outranked it.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <span class="t-label medium">${ic('gitBranch', 14)} Run order per event</span>
+      <span class="badge b-codex">merge model</span>
+      <span class="spacer"></span>
+      <span class="t-caption muted">${hooksOf(r.id).filter((h) => runState(h, r).runs).length} handlers will execute across ${events.length} events</span>
+    </div>
+    <div class="card-body">
+      <div class="stack" style="gap:14px">
+      ${events.map((ev) => {
+        const g = byEvent[ev].slice().sort((a, b) => order.indexOf(a.scope) - order.indexOf(b.scope));
+        const runs = g.filter((h) => runState(h, r).runs);
+        const files = new Set(g.map((h) => h.scope)).size;
+        return `
+        <div>
+          <div class="inline" style="margin-bottom:6px">
+            <span class="mono t-label medium">${esc(ev)}</span>
+            ${CODEX_ONLY.includes(ev) ? '<span class="badge b-codex">Codex-only</span>' : ''}
+            <span class="badge ${runs.length > 1 ? 'b-codex' : ''}">${runs.length} of ${g.length} run${runs.length === 1 ? '' : 's'}</span>
+            <span class="badge b-dim">${files} file${files > 1 ? 's' : ''}</span>
+            ${runs.length > 1 ? `<span class="t-caption muted">${runs.length} processes per fire, in this order</span>` : ''}
+          </div>
+          <div class="layer">
+            ${g.map((h) => {
+              const st = runState(h, r);
+              const lm = layerMeta('codex', h.scope);
+              return `
+              <div class="layer-entry">
+                <span class="runorder ${h._runOrder ? '' : 'off'}">${h._runOrder || ic('ban', 12)}</span>
+                <div style="min-width:0">
+                  <div class="inline">
+                    <span class="cmd">${esc((h.command || h.mcpTool || h.prompt || '').slice(0, 64))}</span>
+                    <span class="badge ${st.cls}">${ic(st.icon, 11)}${esc(st.label)}</span>
+                    <span class="badge ${lm.writable ? 'b-brand' : ''}">${lm.writable ? '' : ic('lock', 10)}${esc(lm.label)}</span>
+                  </div>
+                  <div class="t-micro faint" style="margin-top:2px">
+                    <span class="cmd">${esc(lm.file)}</span> · matcher <span class="cmd">${h.matcher ? esc(h.matcher) : '*'}</span> · ${esc(h.type)}${h.async ? ' · async' : ''}
+                  </div>
+                  ${!st.runs ? `<div class="t-micro" style="margin-top:2px;color:var(--destructive)">${esc(st.why)}</div>` : ''}
+                </div>
+                <span class="spacer"></span>
+                ${h.trust === 'stale' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}Re-trust</button>` : ''}
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+      </div>
+    </div>
+    <div class="card-body tight" style="border-top:1px solid var(--border)">
+      <div class="t-caption muted">Merge order decides sequence, not authority. <code class="cmd">PreToolUse</code> here runs three handlers on every
+      shell call — a repo allowlist, a user policy script and an async audit — and any one of them can block. Adding a hook on Codex always adds
+      work; it never replaces work, which is the opposite of the Claude screen.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">${ic('layers', 14)} Layers, merge order</span></div>
+    <div class="card-body">
+      <div class="layers">
+      ${layersOf('codex').map((l) => {
+        const entries = hooksOf(r.id).filter((h) => h.scope === l.id);
+        return `
+        <div class="layer ${l.writable ? 'writable' : ''}">
+          <div class="layer-head">
+            <span class="badge ${l.writable ? 'b-brand' : ''}">${l.writable ? ic('pencil', 10) : ic('lock', 10)}${esc(l.label)}</span>
+            <span class="cmd t-caption">${esc(l.file)}</span>
+            <span class="spacer"></span>
+            ${l.reach === 'worktree' ? '<span class="badge">in the task worktree</span>' : ''}
+            ${l.id === 'user-toml' ? '<span class="badge b-warn">TOML</span>' : ''}
+            <span class="badge b-dim">${entries.length}</span>
+          </div>
+          <div class="layer-body">
+            ${entries.length ? entries.map((h) => `
+              <div class="layer-entry">
+                <span class="runorder ${runState(h, r).runs ? '' : 'off'}">${runState(h, r).runs ? ic('check', 12) : ic('ban', 12)}</span>
+                <div style="min-width:0">
+                  <div class="inline"><span class="mono t-label">${esc(h.event)}</span>
+                  <span class="cmd matcher t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
+                  <span class="badge">${esc(h.type)}</span></div>
+                  <div class="cmd t-caption" style="margin-top:2px">${esc(h.command || h.mcpTool || h.prompt || '')}</div>
+                </div>
+                <span class="spacer"></span>
+                ${h.parked ? '<span class="badge">parked</span>' : ''}
+              </div>`).join('')
+              : '<div class="layer-entry"><span class="t-caption faint">No hooks in this layer.</span></div>'}
+          </div>
+        </div>`;
+      }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function scopeLegend(r) {
+  return `
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">${ic('lock', 14)} Why most of this is read-only</span></div>
+    <div class="card-body tight">
+      <div class="stack">
+      ${layersOf(r.provider).map((l) => `
+        <div class="inline" style="align-items:flex-start">
+          <span class="badge ${l.writable ? 'b-brand' : ''}" style="min-width:74px;justify-content:center">${l.writable ? ic('pencil', 10) : ic('lock', 10)}${esc(l.label)}</span>
+          <div style="min-width:0">
+            <div class="cmd t-caption">${esc(l.file)}</div>
+            <div class="t-caption muted">${esc(l.why)}</div>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function precedenceRail(r) {
+  return `
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">${ic('cpu', 14)} Claude vs Codex</span></div>
+    <div class="card-body tight">
+      <div class="stack t-caption">
+        <div><strong class="semibold">Precedence</strong><div class="muted">Claude: highest layer overrides, the rest are shadowed. Codex: all layers merge, everything runs.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Events</strong><div class="muted">Claude 33 · Codex 12. <code class="cmd">Interrupt</code> exists only on Codex; <code class="cmd">FileChanged</code>, <code class="cmd">TeammateIdle</code>, <code class="cmd">ConfigChange</code> and 20 more only on Claude.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Handler types</strong><div class="muted">Claude: command, http, mcp_tool, prompt, agent. Codex: command and mcp_tool only — <code class="cmd">prompt</code> and <code class="cmd">agent</code> are parsed and then skipped.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Trust</strong><div class="muted">Codex runs a hook only while its hash matches <code class="cmd">[hooks.state].trusted_hash</code>. Claude has no equivalent.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Stop + block</strong><div class="muted">Claude: rejects the stop. Codex: <em>continues</em> the turn. Same JSON, opposite outcome.</div></div>
+        <hr class="sep" />
+        <div><strong class="semibold">Windows</strong><div class="muted">Codex has <code class="cmd">commandWindows</code>; Claude has <code class="cmd">shell: "powershell"</code>.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">${ic('eye', 14)} Layers not shown</span></div>
+    <div class="card-body tight">
+      <div class="t-caption muted stack">
+        <div>Both providers load hooks from places no discovery pass can enumerate. They are listed so the count above is not mistaken for the whole truth.</div>
+        ${r.provider === 'claude' ? `
+        <div>· <code class="cmd">--settings &lt;file&gt;</code> passed per invocation</div>
+        <div>· plugin <code class="cmd">hooks/hooks.json</code>, per enabled plugin</div>
+        <div>· skill frontmatter, for the rest of a session</div>
+        <div>· subagent frontmatter, while a subagent runs</div>` : `
+        <div>· plugin-bundled hooks, per enabled Codex plugin</div>
+        <div>· <code class="cmd">requirements.toml</code> / MDM managed hooks, trusted by policy</div>
+        <div>· anything added inside a live session via <code class="cmd">/hooks</code></div>`}
+      </div>
+    </div>
+  </div>`;
+}
+</script>
+
+<script>
+/* ==================================================================== *
+ * SCREEN 3 — FIRE LOG
+ * The answer to LOCO-79's #1 complaint: a broken hook is a non-blocking
+ * error, so the guard stops enforcing with nothing on screen. Shape
+ * borrowed from the filterable event timelines (disler / agents-observe /
+ * Agent-Monitor); the data is host-side and already exists for Claude.
+ * ==================================================================== */
+function screenLog() {
+  const r = rt();
+  const feed = FIRE_LOG[r.id] || { rows: [], source: '', sourceOk: true };
+  const failish = ['failed', 'timeout', 'untrusted', 'ineffective'];
+  const rows = feed.rows.filter((row) => {
+    if (state.logFilter === 'failures') return failish.includes(row.verdict);
+    if (state.logFilter === 'never') return ['shadowed', 'ineffective', 'untrusted'].includes(row.verdict);
+    if (state.logFilter === 'blocked') return ['blocked', 'continued'].includes(row.verdict);
+    return true;
+  });
+  const nFail = feed.rows.filter((x) => failish.includes(x.verdict)).length;
+  const nNever = feed.rows.filter((x) => ['shadowed', 'ineffective', 'untrusted'].includes(x.verdict)).length;
+
+  return `
+  <div class="two-col">
+    <div class="col-main">
+      ${runtimePicker()}
+      ${nFail ? `
+      <div class="notice bad t-label">
+        ${ic('circleAlert', 15, 'ico')}
+        <div><strong class="semibold">${nFail} hook fire${nFail > 1 ? 's' : ''} failed in the last hour and none of them surfaced in the session.</strong>
+        A hook that exits non-zero on a non-blocking event is swallowed by the CLI — the guard simply stops guarding.
+        This feed is the only place that shows up.</div>
+      </div>` : ''}
+
+      <div class="card">
+        <div class="card-head">
+          <span class="t-label medium">${ic('activity', 14)} Hook fires</span>
+          <span class="spacer"></span>
+          <div class="seg" role="group" aria-label="Filter fires">
+            <button data-log="all" aria-pressed="${state.logFilter === 'all'}">All ${feed.rows.length}</button>
+            <button data-log="failures" aria-pressed="${state.logFilter === 'failures'}">Failures ${nFail}</button>
+            <button data-log="never" aria-pressed="${state.logFilter === 'never'}">Never ran ${nNever}</button>
+            <button data-log="blocked" aria-pressed="${state.logFilter === 'blocked'}">Decisions</button>
+          </div>
+        </div>
+        ${rows.length ? `
+        <div class="log-head"><span>Time</span><span>Event · matcher · hook</span><span>Duration</span><span>Verdict</span></div>
+        ${rows.map(logRow).join('')}`
+        : `<div class="empty"><div class="media">${ic('filter', 20)}</div>
+            <div class="t-title-sm medium">Nothing matches this filter</div>
+            <div class="t-caption muted">${feed.rows.length ? 'Switch back to All to see every fire.' : esc(feed.source)}</div></div>`}
+      </div>
+
+      <div class="notice ${feed.sourceOk ? 'info' : 'warn'} t-caption">
+        ${ic(feed.sourceOk ? 'info' : 'alert', 14, 'ico')}
+        <div><strong class="semibold">Where this comes from.</strong> ${esc(feed.source)}</div>
+      </div>
+    </div>
+    <div class="col-rail">
+      <div class="card">
+        <div class="card-head"><span class="t-label medium">${ic('eye', 14)} What a verdict means</span></div>
+        <div class="card-body tight">
+          <div class="stack t-caption">
+            <div><span class="badge b-ok">${ic('check', 11)}success</span> <span class="muted">exit 0.</span></div>
+            <div><span class="badge b-warn">${ic('ban', 11)}blocked</span> <span class="muted">exit 2 on a blockable event — the tool call was rejected.</span></div>
+            <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero, non-blocking. Invisible in the session.</span></div>
+            <div><span class="badge b-bad">${ic('clock', 11)}timed out</span> <span class="muted">killed at its timeout.</span></div>
+            <div><span class="badge">${ic('zap', 11)}async · unknown</span> <span class="muted">detached. Neither CLI records the outcome — a permanent blind spot, not a gap in this feed.</span></div>
+            <div><span class="badge">${ic('layers', 11)}shadowed</span> <span class="muted">Claude only. Never invoked at all.</span></div>
+            <div><span class="badge b-bad">${ic('key', 11)}not trusted</span> <span class="muted">Codex only. Skipped on a hash mismatch.</span></div>
+            <div><span class="badge b-warn">${ic('info', 11)}continued turn</span> <span class="muted">Codex only. <code class="cmd">decision:"block"</code> on <code class="cmd">Stop</code> continues rather than rejects.</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="border-color:color-mix(in oklab, var(--warning) 30%, var(--border))">
+        <div class="card-head" style="background:color-mix(in oklab, var(--warning) 8%, transparent)">
+          <span class="t-label medium">${ic('alert', 14)} Not built yet</span>
+        </div>
+        <div class="card-body tight">
+          <div class="t-caption muted stack">
+            <div>Claude writes per-hook results host-side today, so the data exists — but nothing ships it to the server.</div>
+            <div>${ic('x', 11)} No log-tailing pending action, and no store for fires.</div>
+            <div>${ic('x', 11)} Codex writes no per-hook log at all. The Codex feed above is inferred, and its durations are approximations — flagged on screen rather than dressed up.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function logRow(row) {
+  const v = VERDICTS[row.verdict] || { label: row.verdict, cls: '', icon: 'info' };
+  const bad = ['failed', 'timeout', 'untrusted', 'ineffective'].includes(row.verdict);
+  return `
+  <div class="log-row ${bad ? 'fail' : ''}">
+    <span class="cmd t-caption faint">${esc(row.t)}</span>
+    <div style="min-width:0">
+      <div class="inline">
+        <span class="mono t-label">${esc(row.event)}</span>
+        <span class="faint t-caption">·</span>
+        <span class="cmd t-caption faint">${esc(row.matcher)}</span>
+        <span class="faint t-caption">·</span>
+        <span class="cmd t-caption">${esc(row.hook)}</span>
+        <span class="badge b-dim">${esc(row.task)}</span>
+      </div>
+      ${row.note ? `<div class="t-caption muted" style="margin-top:2px">${esc(row.note)}</div>` : ''}
+      ${row.stderr ? `<div class="stderr">${esc(row.stderr)}</div>` : ''}
+    </div>
+    <span class="cmd t-caption ${row.ms == null ? 'faint' : ''}">${row.ms == null ? '—' : row.ms + ' ms'}</span>
+    <span><span class="badge ${v.cls}">${ic(v.icon, 11)}${esc(v.label)}</span></span>
+  </div>`;
+}
+
+/* ==================================================================== *
+ * SCREEN 4 — STARTER HOOKS GALLERY
+ * Catalog-card layout after karanb192.github.io/claude-code-hooks (MIT).
+ * Provider compatibility is on the card because "Install" means two
+ * different things depending on the selected runtime — and for two of
+ * these it means "not possible here".
+ * ==================================================================== */
+function screenGallery() {
+  const r = rt();
+  const installed = new Set(hooksOf(r.id).map((h) => h.installedFrom).filter(Boolean));
+  return `
+  <div class="two-col">
+    <div class="col-main">
+      ${runtimePicker()}
+      <div class="notice info t-label">
+        ${ic('pkg', 15, 'ico')}
+        <div><strong class="semibold">Install targets ${esc(r.name)} — ${esc(providerLabel(r.provider))}, user scope.</strong>
+        Cards that need a handler type or a tool this provider does not have are marked and cannot be installed here.</div>
+      </div>
+      <div class="gallery">
+      ${GALLERY.map((g) => {
+        const ok = r.provider === 'claude' ? g.claude : g.codex;
+        const has = installed.has(g.id);
+        return `
+        <div class="g-card">
+          <div class="g-top">
+            <span class="mono t-label medium" style="flex:1;min-width:0">${esc(g.name)}</span>
+            ${has ? '<span class="badge b-ok">installed</span>' : ''}
+          </div>
+          <div class="inline">
+            <span class="badge">${esc(g.event)}</span>
+            <span class="cmd t-caption faint">${esc(g.matcher)}</span>
+          </div>
+          <div class="t-caption muted">${esc(g.desc)}</div>
+          ${g.levels.length ? `<div class="inline t-micro">
+            <span class="faint">Severity</span>
+            ${g.levels.map((l) => `<span class="badge ${l === 'Block' ? 'b-bad' : l === 'Ask' ? 'b-warn' : ''}">${esc(l)}</span>`).join('')}
+          </div>` : ''}
+          <div class="compat t-micro">
+            <span class="badge ${g.claude ? 'b-ok' : 'b-bad'}">${g.claude ? ic('check', 10) : ic('x', 10)}Claude</span>
+            <span class="badge ${g.codex ? 'b-ok' : 'b-bad'}">${g.codex ? ic('check', 10) : ic('x', 10)}Codex</span>
+            <span class="badge b-dim">${esc(g.type)}</span>
+          </div>
+          ${!ok ? `<div class="t-micro" style="color:var(--warning)">${ic('alert', 10)} ${esc(g.incompat || 'Not supported on this provider.')}</div>` : ''}
+          <div class="g-foot">
+            <button class="btn sm ${ok && !has ? 'primary' : ''}" ${ok && !has ? `data-install="${g.id}"` : 'disabled'}>
+              ${has ? ic('check', 13) : ic('download', 13)}${has ? 'Installed' : ok ? 'Install' : 'Unavailable'}
+            </button>
+            <button class="btn sm" data-src="${g.id}">${ic('ext', 13)}Source</button>
+          </div>
+        </div>`;
+      }).join('')}
+      </div>
+    </div>
+    <div class="col-rail">
+      <div class="card">
+        <div class="card-head"><span class="t-label medium">${ic('shield', 14)} Severity, honestly</span></div>
+        <div class="card-body tight">
+          <div class="t-caption muted stack">
+            <div>Warn / Ask / Block is not a field in either schema. It is a convention these hook scripts implement themselves — <code class="cmd">HOOK_SAFETY_LEVEL</code> plus <code class="cmd">permissionDecision: "ask"</code>.</div>
+            <div>So it appears on gallery cards, where Multica controls what it installs, and deliberately <strong class="semibold">not</strong> as a column on the hooks list, where it would imply a per-hook setting that does not exist.</div>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="border-color:color-mix(in oklab, var(--warning) 30%, var(--border))">
+        <div class="card-head" style="background:color-mix(in oklab, var(--warning) 8%, transparent)">
+          <span class="t-label medium">${ic('alert', 14)} Not built yet</span>
+        </div>
+        <div class="card-body tight">
+          <div class="t-caption muted stack">
+            <div>${ic('x', 11)} Installing means writing a script <em>and</em> a settings entry on the host. Neither is possible today.</div>
+            <div>${ic('x', 11)} There is no catalog service. These nine entries are hard-coded here.</div>
+            <div>${ic('x', 11)} Claude's native <code class="cmd">/plugin marketplace</code> route would avoid file surgery entirely and is probably the better v1 — worth deciding before building a writer.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ==================================================================== *
+ * SCREEN 5 — DISCOVERY / EMPTY / OFFLINE
+ * Discovery mirrors the local-skills panel: initiate, then poll the
+ * result endpoint every 500 ms up to 30 s, Skeleton in the meantime.
+ * ==================================================================== */
+const DISCOVERY_STEPS = [
+  { label: 'Initiating discovery', detail: 'POST /api/runtimes/{id}/hooks' },
+  { label: 'Queued for the next daemon heartbeat', detail: 'pending action · up to 5 s' },
+  { label: 'Reading provider config on the host', detail: '~/.claude/settings.json · /etc/claude-code/managed-settings.json' },
+  { label: 'Parsing and resolving precedence', detail: 'server-side' },
+  { label: 'Done', detail: '16 hooks across 4 files' },
+];
+
+function screenStates() {
+  return `
+  <div class="two-col">
+    <div class="col-main">
+      <div class="card">
+        <div class="card-body tight">
+          <div class="inline">
+            <span class="t-label medium">State</span>
+            <div class="seg" role="group" aria-label="Choose a state to preview">
+              <button data-demo="discovery" aria-pressed="${state.stateDemo === 'discovery'}">Discovery</button>
+              <button data-demo="empty" aria-pressed="${state.stateDemo === 'empty'}">Empty</button>
+              <button data-demo="offline" aria-pressed="${state.stateDemo === 'offline'}">Runtime offline</button>
+            </div>
+            <span style="flex:1"></span>
+            <span class="t-caption muted">These three states are reachable from the runtime picker too — marty-mbp is empty, loco-winlab is offline.</span>
+          </div>
+        </div>
+      </div>
+      ${state.stateDemo === 'discovery' ? discoveryBody()
+        : state.stateDemo === 'empty' ? emptyCard(RUNTIMES[2])
+        : offlineCard(RUNTIMES[3])}
+    </div>
+    <div class="col-rail">
+      <div class="card">
+        <div class="card-head"><span class="t-label medium">${ic('refresh', 14)} Why initiate-then-poll</span></div>
+        <div class="card-body tight">
+          <div class="t-caption muted stack">
+            <div>The server cannot call a runtime directly. It parks a pending action, the daemon picks it up on its next heartbeat, does the work, and reports back to a result endpoint the web app polls.</div>
+            <div>That is exactly how runtime local-skill discovery already works, so a hooks read is a clone of a shipped pipeline rather than a new mechanism — which is also why a read is cheap and a <em>write</em> is not.</div>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="border-color:color-mix(in oklab, var(--warning) 30%, var(--border))">
+        <div class="card-head" style="background:color-mix(in oklab, var(--warning) 8%, transparent)">
+          <span class="t-label medium">${ic('alert', 14)} Not built yet</span>
+        </div>
+        <div class="card-body tight">
+          <div class="t-caption muted stack">
+            <div>${ic('x', 11)} Discovery today reads a fixed set of skill directories and one MCP config file. Paths are compiled in per provider — there is no parameter for another path, so a hooks read needs a new pending action and daemon handler.</div>
+            <div>${ic('x', 11)} No <code class="cmd">hooks-v1</code> capability flag, so there is nothing to gate the tab on for older daemons.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function discoveryBody() {
+  const step = state.discoveryStep;
+  return `
+  <div class="card">
+    <div class="card-head">
+      <span class="t-label medium">${ic('refresh', 14)} Reading hooks from cc-claudesp</span>
+      <span class="badge b-brand">polling</span>
+      <span class="spacer"></span>
+      <span class="t-caption muted mono">500 ms interval · 3.2 s elapsed · 30 s timeout</span>
+      <button class="btn sm" data-act="stepDiscovery">${ic('play', 13)}Advance</button>
+    </div>
+    <div class="card-body">
+      <div class="stack" style="gap:8px">
+      ${DISCOVERY_STEPS.map((s, i) => `
+        <div class="inline" style="align-items:flex-start">
+          <span class="runorder ${i < step ? '' : 'off'}" style="margin-top:1px">${i < step ? ic('check', 12) : i === step ? ic('refresh', 12) : ic('clock', 12)}</span>
+          <div style="min-width:0">
+            <div class="t-label ${i <= step ? '' : 'faint'}">${esc(s.label)}${i === step && i < DISCOVERY_STEPS.length - 1 ? '…' : ''}</div>
+            <div class="cmd t-micro faint">${esc(s.detail)}</div>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="t-label medium">Hooks</span><span class="spacer"></span>
+      <span class="sk" style="display:inline-block;width:72px;height:14px"></span></div>
+    ${[0, 1, 2].map(() => `
+      <div style="padding:12px;border-bottom:1px solid var(--border)">
+        <div class="inline" style="margin-bottom:8px">
+          <span class="sk" style="width:110px;height:14px"></span>
+          <span class="sk" style="width:54px;height:14px"></span>
+          <span class="sk" style="width:68px;height:14px"></span>
+        </div>
+        <div class="sk" style="width:64%;height:12px;margin-bottom:6px"></div>
+        <div class="sk" style="width:38%;height:12px"></div>
+      </div>`).join('')}
+    <div class="card-body tight"><span class="t-caption faint">Skeleton rows while the runtime is read — same treatment as the local-skills import panel.</span></div>
+  </div>`;
+}
+
+function emptyCard(r) {
+  return `
+  <div class="card">
+    <div class="empty">
+      <div class="media">${ic('webhook', 20)}</div>
+      <div class="t-title-sm medium">No lifecycle hooks on ${esc(r.name)}</div>
+      <div class="t-caption muted" style="max-width:460px">
+        Multica read <code class="cmd">~/.claude/settings.json</code> on ${esc(machineOf(r).title)} and found no <code class="cmd">hooks</code> key.
+        Project and local scopes were not read — they live in the task worktree, not on this host.
+      </div>
+      <div class="actions">
+        <button class="btn primary" data-add="1">${ic('plus', 14)}Add a hook</button>
+        <button class="btn" data-screen="gallery">${ic('pkg', 14)}Browse starter hooks</button>
+      </div>
+      <div class="t-caption faint" style="margin-top:4px">Last read ${esc(r.scanned)}</div>
+    </div>
+  </div>`;
+}
+function emptyBody(r) {
+  return `<div class="two-col"><div class="col-main">${runtimePicker()}${behaviorStrip(r.provider)}${emptyCard(r)}</div>
+    <div class="col-rail">${railCards(r, [])}</div></div>`;
+}
+
+function offlineCard(r) {
+  return `
+  <div class="card">
+    <div class="empty">
+      <div class="media" style="background:color-mix(in oklab, var(--destructive) 16%, transparent);color:var(--destructive)">${ic('wifiOff', 20)}</div>
+      <div class="t-title-sm medium">${esc(r.name)} is offline</div>
+      <div class="t-caption muted" style="max-width:480px">
+        The ${esc(machineOf(r).title)} daemon last checked in ${esc(r.scanned)}. Hooks cannot be read or written while it is offline —
+        the write would sit in a pending action and apply whenever the machine came back, which is worse than refusing.
+      </div>
+      <div class="actions">
+        <button class="btn" data-act="rescan">${ic('refresh', 14)}Retry</button>
+        <button class="btn" data-act="viewCached">${ic('eye', 14)}View last known hooks</button>
+      </div>
+      <div class="t-caption faint" style="margin-top:4px">Editing is disabled until the runtime reconnects.</div>
+    </div>
+  </div>`;
+}
+function offlineBody(r) {
+  return `<div class="two-col"><div class="col-main">${runtimePicker()}${offlineCard(r)}</div>
+    <div class="col-rail">
+      <div class="card"><div class="card-head"><span class="t-label medium">${ic('wifiOff', 14)} Last known state</span></div>
+      <div class="card-body tight"><div class="t-caption muted">Cached from ${esc(r.scanned)}. Shown read-only; a stale read is labelled rather than silently served as current.</div></div></div>
+    </div></div>`;
+}
+</script>
+
+<script>
+/* ==================================================================== *
+ * DIALOGS — Dialog for the editor (matching McpServerDialog and
+ * runtime-profiles-dialog), AlertDialog for the delete confirm.
+ * ==================================================================== */
+let ed = null;      // editor draft
+let modal = null;   // 'editor' | 'delete' | 'diff' | 'trust' | 'park'
+let pending = null;  // payload for delete / trust / park
+
+function openEditor(hookId) {
+  const r = rt();
+  const h = hookId ? hooksOf(r.id).find((x) => x.id === hookId) : null;
+  const writable = layersOf(r.provider).filter((l) => l.writable);
+  ed = {
+    mode: h ? 'edit' : 'add',
+    id: h ? h.id : null,
+    provider: r.provider,
+    event: h ? h.event : '',
+    matcher: h ? (h.matcher || '') : '',
+    type: h ? h.type : 'command',
+    command: h ? (h.command || '') : '',
+    args: h && h.args ? h.args.join(' ') : '',
+    timeout: h && h.timeout != null ? String(h.timeout) : '',
+    async: h ? !!h.async : false,
+    shell: h && h.shell ? h.shell : 'bash',
+    scope: h && layerMeta(r.provider, h.scope).writable ? h.scope : writable[0].id,
+    commandWindows: h ? (h.commandWindows || '') : '',
+    statusMessage: h ? (h.statusMessage || '') : '',
+    additionalContextLimit: h && h.additionalContextLimit ? String(h.additionalContextLimit) : '',
+    url: h ? (h.url || '') : '',
+    mcpTool: h ? (h.mcpTool || '') : '',
+    comboOpen: false,
+    comboQuery: '',
+    dirty: false,
+  };
+  modal = 'editor';
+  renderModal();
+}
+
+function editorProblems() {
+  const out = [];
+  const types = HANDLER_TYPES[ed.provider];
+  const t = types.find((x) => x.v === ed.type);
+  if (!ed.event) out.push({ level: 'error', field: 'event', text: 'Pick an event.' });
+  if (t && !t.effective) out.push({ level: 'error', field: 'type',
+    text: 'Codex parses type: ' + ed.type + ' and then skips it. Saving this would store a hook that can never run — the silent failure this screen exists to prevent.' });
+  if (ed.type === 'command') {
+    const c = validateCommand(ed.command);
+    if (c) out.push({ level: c.level, field: 'command', text: c.text });
+  }
+  if (ed.type === 'http' && !/^https?:\/\//.test(ed.url)) out.push({ level: 'error', field: 'url', text: 'An http handler needs an absolute URL.' });
+  if (ed.type === 'mcp_tool' && !ed.mcpTool.trim()) out.push({ level: 'error', field: 'mcpTool', text: 'Name the MCP tool to invoke.' });
+  const mi = interpretMatcher(ed.matcher);
+  if (mi.kind === 'regex') out.push({ level: 'warn', field: 'matcher', text: mi.text });
+  if (ed.event === 'FileChanged' && mi.kind === 'regex') out.push({ level: 'error', field: 'matcher',
+    text: 'FileChanged only accepts the narrow exact set (letters, digits, _ and |). A regex here never matches anything.' });
+  if (ed.event === 'Stop' && ed.provider === 'codex') out.push({ level: 'warn', field: 'event',
+    text: 'On Codex, a Stop hook returning decision:"block" CONTINUES the turn. On Claude the same JSON rejects it. Check which one your script means.' });
+  if (ed.async) out.push({ level: 'warn', field: 'async',
+    text: 'async detaches the process. Neither CLI checks its exit status, so a failure will never appear anywhere — including in the fire log.' });
+  if (ed.provider === 'codex') out.push({ level: 'warn', field: 'trust',
+    text: 'Saving rewrites a Codex hooks file, which invalidates the trust hashes in [hooks.state]. Affected hooks stop running until they are re-trusted on the host.' });
+  return out;
+}
+
+function eventOptions() {
+  const all = ed.provider === 'claude' ? CLAUDE_EVENTS : CODEX_EVENTS;
+  const q = ed.comboQuery.trim().toLowerCase();
+  const hit = all.filter((e) => e.toLowerCase().includes(q));
+  const common = ed.provider === 'claude' ? CLAUDE_COMMON : CODEX_EVENTS.slice(0, 6);
+  return {
+    total: all.length,
+    common: hit.filter((e) => common.includes(e)),
+    rest: hit.filter((e) => !common.includes(e)),
+  };
+}
+
+function editorDialog() {
+  const problems = editorProblems();
+  const perField = (f) => problems.filter((p) => p.field === f);
+  const blocking = problems.filter((p) => p.level === 'error');
+  const types = HANDLER_TYPES[ed.provider];
+  const opts = eventOptions();
+  const mi = interpretMatcher(ed.matcher);
+  const allLayers = layersOf(ed.provider);
+
+  return `
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="edTitle">
+    <div class="dialog-head">
+      <div>
+        <div class="t-title-lg" id="edTitle">${ed.mode === 'add' ? 'Add lifecycle hook' : 'Edit lifecycle hook'}</div>
+        <div class="t-caption muted" style="margin-top:2px">
+          ${esc(rt().name)} · <span class="badge ${ed.provider === 'claude' ? 'b-claude' : 'b-codex'}">${esc(providerLabel(ed.provider))}</span>
+        </div>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn ghost icon" data-close="1" aria-label="Close">${ic('x', 16)}</button>
+    </div>
+
+    <div class="dialog-body">
+      <!-- Event: searchable combobox, not a 33-item dropdown. -->
+      <div class="field">
+        <label for="edEvent">Event</label>
+        <div class="combo">
+          <div class="select-wrap">
+            <input class="input" id="edEvent" autocomplete="off"
+              placeholder="Search ${opts.total} ${esc(providerLabel(ed.provider))} events"
+              value="${esc(ed.comboOpen ? ed.comboQuery : ed.event)}" data-combo="1"
+              aria-expanded="${ed.comboOpen}" aria-invalid="${perField('event').some((p) => p.level === 'error')}" />
+            ${ic('search', 14)}
+          </div>
+          <div class="combo-list" ${ed.comboOpen ? '' : 'hidden'}>
+            ${opts.common.length ? `<div class="combo-group">Common</div>` +
+              opts.common.map((e) => comboOpt(e)).join('') : ''}
+            ${opts.rest.length ? `<div class="combo-group">All ${opts.total} events</div>` +
+              opts.rest.map((e) => comboOpt(e)).join('') : ''}
+            ${!opts.common.length && !opts.rest.length ? `<div class="combo-empty">
+              No ${esc(providerLabel(ed.provider))} event matches “${esc(ed.comboQuery)}”.
+              ${ed.provider === 'codex' && CLAUDE_EVENTS.some((e) => e.toLowerCase().includes(ed.comboQuery.trim().toLowerCase()))
+                ? ' It exists on Claude but not on Codex.' : ''}</div>` : ''}
+          </div>
+        </div>
+        <div class="hint">${esc(providerLabel(ed.provider))} has ${opts.total} events. ${ed.provider === 'codex'
+          ? 'Interrupt is Codex-only; FileChanged, TeammateIdle and ConfigChange do not exist here.'
+          : 'Nine are common; the other 24 are reachable by typing.'}</div>
+        ${perField('event').map((p) => `<div class="${p.level === 'error' ? 'err' : 'warn'}">${ic('alert', 12)}<span>${p.text}</span></div>`).join('')}
+      </div>
+
+      <!-- Matcher: live interpretation of the non-obvious rule. -->
+      <div class="field">
+        <label for="edMatcher">Matcher</label>
+        <input class="input mono" id="edMatcher" data-f="matcher" value="${esc(ed.matcher)}" placeholder="* — every tool"
+          aria-invalid="${perField('matcher').some((p) => p.level === 'error')}" />
+        <div class="hint">
+          <code class="cmd">*</code> or empty matches everything. Only <code class="cmd">[A-Za-z0-9_-,| ]</code> means an exact string or a
+          <code class="cmd">|</code>/<code class="cmd">,</code>-separated exact list. <strong class="semibold">Any other character makes it an
+          unanchored JavaScript regex.</strong>
+        </div>
+        <div class="notice ${mi.kind === 'regex' ? 'warn' : 'ok'} t-caption" style="padding:7px 10px">
+          ${ic(mi.kind === 'regex' ? 'alert' : 'check', 13, 'ico')}
+          <div><strong class="semibold">${mi.kind === 'regex' ? 'Regex' : mi.kind === 'all' ? 'Matches all' : 'Exact'}</strong> — ${esc(mi.text)}</div>
+        </div>
+        ${perField('matcher').filter((p) => p.level === 'error').map((p) => `<div class="err">${ic('alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
+      </div>
+
+      <!-- Handler type: gated per provider. -->
+      <div class="field">
+        <label for="edType">Handler type</label>
+        <div class="select-wrap">
+          <select class="select" id="edType" data-f="type">
+            ${types.map((t) => `<option value="${t.v}" ${t.v === ed.type ? 'selected' : ''} ${t.effective ? '' : 'disabled'}>
+              ${esc(t.label)}${t.effective ? '' : ' — skipped by Codex'}</option>`).join('')}
+          </select>
+          ${ic('chevronDown', 14)}
+        </div>
+        <div class="hint">${esc((types.find((t) => t.v === ed.type) || {}).note || '')}</div>
+        ${ed.provider === 'codex' ? `<div class="hint">Codex implements <code class="cmd">command</code> and <code class="cmd">mcp_tool</code>.
+          <code class="cmd">http</code>, <code class="cmd">prompt</code> and <code class="cmd">agent</code> are disabled above because Codex parses them and then drops them without a word.</div>` : ''}
+        ${perField('type').map((p) => `<div class="err">${ic('circleAlert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
+      </div>
+
+      ${ed.type === 'command' ? `
+      <div class="field">
+        <label for="edCommand">Command</label>
+        <input class="input mono" id="edCommand" data-f="command" value="${esc(ed.command)}" placeholder="~/.claude/hooks/guard.py"
+          aria-invalid="${perField('command').some((p) => p.level === 'error')}" />
+        <div class="hint">Runs through <code class="cmd">${esc(ed.shell)}</code> unless <code class="cmd">args</code> is set, which switches to exec form with no shell.</div>
+        ${perField('command').map((p) => `<div class="${p.level === 'error' ? 'err' : 'warn'}">${ic(p.level === 'error' ? 'circleAlert' : 'alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
+      </div>
+      <div class="row-3">
+        <div class="field">
+          <label for="edArgs">Args <span class="faint">optional</span></label>
+          <input class="input mono" id="edArgs" data-f="args" value="${esc(ed.args)}" placeholder="--strict --json" />
+        </div>
+        <div class="field">
+          <label for="edTimeout">Timeout <span class="faint">seconds</span></label>
+          <input class="input" id="edTimeout" data-f="timeout" value="${esc(ed.timeout)}" placeholder="600" inputmode="numeric" />
+        </div>
+        <div class="field">
+          <label for="edShell">Shell</label>
+          <div class="select-wrap">
+            <select class="select" id="edShell" data-f="shell" ${ed.provider === 'codex' ? 'disabled' : ''}>
+              <option ${ed.shell === 'bash' ? 'selected' : ''}>bash</option>
+              <option ${ed.shell === 'powershell' ? 'selected' : ''}>powershell</option>
+            </select>
+            ${ic('chevronDown', 14)}
+          </div>
+          ${ed.provider === 'codex' ? '<div class="hint">Codex has no shell field — use commandWindows below.</div>' : ''}
+        </div>
+      </div>` : ''}
+
+      ${ed.type === 'http' ? `
+      <div class="field">
+        <label for="edUrl">URL</label>
+        <input class="input mono" id="edUrl" data-f="url" value="${esc(ed.url)}" placeholder="https://example.com/hook" />
+        <div class="hint">Headers support <code class="cmd">$VAR</code> interpolation limited to <code class="cmd">allowedEnvVars</code>.</div>
+        ${perField('url').map((p) => `<div class="err">${ic('circleAlert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
+      </div>` : ''}
+
+      ${ed.type === 'mcp_tool' ? `
+      <div class="field">
+        <label for="edMcp">MCP tool</label>
+        <input class="input mono" id="edMcp" data-f="mcpTool" value="${esc(ed.mcpTool)}" placeholder="server__tool_name" />
+        ${perField('mcpTool').map((p) => `<div class="err">${ic('circleAlert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
+      </div>` : ''}
+
+      ${ed.provider === 'codex' && ed.type === 'command' ? `
+      <div class="card" style="background:color-mix(in oklab, var(--info) 6%, transparent);border-color:color-mix(in oklab, var(--info) 26%, transparent)">
+        <div class="card-body tight">
+          <div class="inline" style="margin-bottom:10px">
+            <span class="badge b-codex">${ic('cpu', 11)}Codex-only fields</span>
+            <span class="t-caption muted">These three have no Claude equivalent.</span>
+          </div>
+          <div class="stack">
+            <div class="field">
+              <label for="edCw">commandWindows</label>
+              <input class="input mono" id="edCw" data-f="commandWindows" value="${esc(ed.commandWindows)}" placeholder="powershell -File %USERPROFILE%\\.codex\\hooks\\guard.ps1" />
+              <div class="hint">Used instead of <code class="cmd">command</code> on Windows hosts. Written as <code class="cmd">command_windows</code> in TOML.</div>
+            </div>
+            <div class="row-2">
+              <div class="field">
+                <label for="edSm">statusMessage</label>
+                <input class="input" id="edSm" data-f="statusMessage" value="${esc(ed.statusMessage)}" placeholder="Checking shell policy…" />
+              </div>
+              <div class="field">
+                <label for="edAcl">additionalContextLimit</label>
+                <input class="input" id="edAcl" data-f="additionalContextLimit" value="${esc(ed.additionalContextLimit)}" placeholder="4096" inputmode="numeric" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>` : ''}
+
+      <div class="field">
+        <div class="inline">
+          <input class="switch" type="checkbox" id="edAsync" data-f="async" ${ed.async ? 'checked' : ''} />
+          <label for="edAsync" style="margin:0">Run detached (<code class="cmd">async</code>)</label>
+        </div>
+        ${perField('async').map((p) => `<div class="warn">${ic('alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
+      </div>
+
+      <!-- Scope: user is the only writable layer, and the others say why. -->
+      <div class="field">
+        <label for="edScope">Write to</label>
+        <div class="select-wrap">
+          <select class="select" id="edScope" data-f="scope">
+            ${allLayers.map((l) => `<option value="${l.id}" ${l.id === ed.scope ? 'selected' : ''} ${l.writable ? '' : 'disabled'}>
+              ${esc(l.label)} — ${esc(l.file)}${l.writable ? '' : ' (read-only)'}</option>`).join('')}
+          </select>
+          ${ic('chevronDown', 14)}
+        </div>
+        <div class="hint">${ic('lock', 11)} ${esc(allLayers.filter((l) => !l.writable).length)} of ${allLayers.length} scopes are read-only:
+          project and local live in the task worktree, not on the daemon host, and managed or plugin layers are not ours to touch.</div>
+      </div>
+    </div>
+
+    <div class="dialog-foot">
+      <div class="t-caption ${blocking.length ? '' : 'muted'}" style="${blocking.length ? 'color:var(--destructive)' : ''}">
+        ${blocking.length
+          ? ic('circleAlert', 13) + ' ' + blocking.length + ' problem' + (blocking.length > 1 ? 's' : '') + ' must be fixed before this can be written'
+          : problems.length
+            ? ic('alert', 13) + ' ' + problems.length + ' warning' + (problems.length > 1 ? 's' : '') + ' — you can still write it'
+            : 'Ready to write'}
+      </div>
+      <span class="spacer"></span>
+      <button class="btn" data-close="1">Cancel</button>
+      <button class="btn primary" data-review="1" ${blocking.length ? 'disabled' : ''}>${ic('eye', 13)}Review write</button>
+    </div>
+  </div>`;
+}
+function comboOpt(e) {
+  return `<button class="combo-opt" data-pick="${esc(e)}">
+    <span class="mono">${esc(e)}</span>
+    ${CODEX_ONLY.includes(e) ? '<span class="badge b-codex">Codex-only</span>' : ''}
+    <span class="spacer"></span>
+    ${e === ed.event ? ic('check', 13) : ''}
+  </button>`;
+}
+
+/* Dry-run diff. LOCO-79 documented managers blanking settings.json to {};
+   the answer is to show the exact patch and to tag ownership so an
+   uninstall can remove precisely what was added. */
+function diffDialog() {
+  const l = layerMeta(ed.provider, ed.scope);
+  const isCodex = ed.provider === 'codex';
+  const lines = isCodex ? [
+    ['ctx', '{'],
+    ['ctx', '  "hooks": {'],
+    ['ctx', '    "' + (ed.event || 'PreToolUse') + '": ['],
+    ['ctx', '      { "matcher": "shell", "hooks": [ … ] },'],
+    ['add', '      {'],
+    ['add', '        "matcher": ' + JSON.stringify(ed.matcher || '*') + ','],
+    ['add', '        "hooks": [{'],
+    ['add', '          "type": "' + ed.type + '",'],
+    ['add', '          "command": ' + JSON.stringify(ed.command || '') + ','],
+    ['add', '          "timeout": ' + (ed.timeout || 600) + (ed.async ? ',' : '')],
+    ['add', ed.async ? '          "async": true' : ''],
+    ['add', '        }]'],
+    ['add', '      }'],
+    ['ctx', '    ]'],
+    ['ctx', '  },'],
+    ['add', '  "_multica": { "owned": ["' + (ed.id || 'hk_8f21c4') + '"], "writtenAt": "2026-09-11T19:58:00Z" }'],
+    ['ctx', '}'],
+  ] : [
+    ['ctx', '{'],
+    ['ctx', '  "permissions": { … },          // untouched'],
+    ['ctx', '  "env": { … },                  // untouched'],
+    ['ctx', '  "hooks": {'],
+    ['ctx', '    "PostToolUse": [ … ],        // untouched'],
+    ['ctx', '    "' + (ed.event || 'PreToolUse') + '": ['],
+    ...(ed.mode === 'edit' ? [
+      ['del', '      { "matcher": "manual", "hooks": [{ "type": "command",'],
+      ['del', '        "command": "C:\\\\Users\\\\Marty Kelly\\\\bin\\\\snapshot.sh", "timeout": 30 }] }'],
+    ] : []),
+    ['add', '      { "matcher": ' + JSON.stringify(ed.matcher || '*') + ', "hooks": [{'],
+    ['add', '          "type": "' + ed.type + '",'],
+    ['add', '          "command": ' + JSON.stringify(ed.command || '') + ','],
+    ['add', '          "timeout": ' + (ed.timeout || 600) + (ed.async ? ', "async": true' : '')],
+    ['add', '      }] }'],
+    ['ctx', '    ]'],
+    ['ctx', '  },'],
+    ['add', '  "_multica": { "owned": ["' + (ed.id || 'hk_8f21c4') + '"], "writtenAt": "2026-09-11T19:58:00Z" }'],
+    ['ctx', '}'],
+  ];
+
+  return `
+  <div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="dfTitle">
+    <div class="dialog-head">
+      <div>
+        <div class="t-title-lg" id="dfTitle">Review write</div>
+        <div class="t-caption muted" style="margin-top:2px">Nothing has been written. This is what would change.</div>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn ghost icon" data-close="1" aria-label="Close">${ic('x', 16)}</button>
+    </div>
+    <div class="dialog-body">
+      <div class="inline">
+        <span class="badge b-brand">${ic('pencil', 11)}${esc(l.label)}</span>
+        <span class="cmd t-caption">${esc(l.file)}</span>
+        <span class="spacer"></span>
+        <span class="badge">on ${esc(machineOf(rt()).title)}</span>
+      </div>
+      <div class="diff">
+        <div class="diff-head">
+          <span class="cmd t-caption">${esc(l.file)}</span>
+          <span class="spacer"></span>
+          <span class="t-micro faint">${lines.filter((x) => x[0] === 'add' && x[1]).length} added · ${lines.filter((x) => x[0] === 'del').length} removed</span>
+        </div>
+        <pre>${lines.filter((x) => x[1]).map(([k, v]) => `<span class="ln ${k}">${k === 'add' ? '+' : k === 'del' ? '-' : ' '} ${esc(v)}</span>`).join('')}</pre>
+      </div>
+      <div class="notice ok t-caption">
+        ${ic('shield', 13, 'ico')}
+        <div><strong class="semibold">Surgical and ownership-tagged.</strong> Only the highlighted lines are touched; every other key is
+        re-serialised byte-for-byte. The <code class="cmd">_multica</code> block records what Multica added so an uninstall can remove exactly
+        that and nothing else. The failure mode this guards against is real — a manager blanking <code class="cmd">.claude/settings.json</code> to
+        <code class="cmd">{}</code> is a documented incident.</div>
+      </div>
+      ${ed.provider === 'codex' ? `
+      <div class="notice warn t-caption">
+        ${ic('key', 13, 'ico')}
+        <div><strong class="semibold">This write will un-trust 2 hooks.</strong> Codex records trust against a hook's hash. After this write,
+        <code class="cmd">secret-firewall.js</code> and the new entry will not run until they are trusted again with <code class="cmd">/hooks</code>
+        on ${esc(machineOf(rt()).title)}. Multica cannot grant trust remotely.</div>
+      </div>` : ''}
+      <div class="notice warn t-caption">
+        ${ic('alert', 13, 'ico')}
+        <div><strong class="semibold">No write path exists today.</strong> Multica has no mechanism of any kind for writing a file on a runtime
+        host — no RPC, no pending action, no endpoint. This dialog is the sketch of one, not a preview of one that works.</div>
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn" data-act="copyDiff">${ic('copy', 13)}Copy patch</button>
+      <span class="spacer"></span>
+      <button class="btn" data-back="editor">Back</button>
+      <button class="btn primary" data-act="apply">${ic('check', 13)}Write to ${esc(l.label)} scope</button>
+    </div>
+  </div>`;
+}
+
+/* AlertDialog — destructive confirm, same as mcp-config-tab. */
+function deleteDialog() {
+  const r = rt();
+  const h = hooksOf(r.id).find((x) => x.id === pending);
+  if (!h) return '';
+  const l = layerMeta(r.provider, h.scope);
+  const st = runState(h, r);
+  return `
+  <div class="dialog narrow" role="alertdialog" aria-modal="true" aria-labelledby="delTitle" aria-describedby="delDesc">
+    <div class="dialog-head">
+      <div>
+        <div class="t-title-lg" id="delTitle">Delete this hook?</div>
+        <div class="t-caption muted" style="margin-top:2px">The entry is removed from the file. It is not recoverable from Multica.</div>
+      </div>
+    </div>
+    <div class="dialog-body" id="delDesc">
+      <div class="card"><div class="card-body tight">
+        <div class="inline"><span class="mono t-label medium">${esc(h.event)}</span>
+          <span class="cmd t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
+          <span class="badge">${esc(h.type)}</span>
+          <span class="badge ${st.cls}">${esc(st.label)}</span></div>
+        <div class="cmd t-caption" style="margin-top:6px">${esc(h.command || h.url || h.mcpTool || '')}</div>
+        <div class="cmd t-micro faint" style="margin-top:4px">${esc(l.file)}</div>
+      </div></div>
+      ${h.owner !== 'multica' ? `
+      <div class="notice warn t-caption">${ic('alert', 13, 'ico')}
+        <div>Multica did not write this entry. Deleting it removes something you or another tool put there.</div></div>` : ''}
+      ${r.provider === 'claude' && h._shadowed ? `
+      <div class="notice info t-caption">${ic('layers', 13, 'ico')}
+        <div>This entry is currently shadowed, so deleting it changes nothing at runtime — until the higher layer that shadows it goes away.</div></div>` : ''}
+      ${r.provider === 'claude' && !h._shadowed && hooksOf(r.id).some((x) => x.event === h.event && x._shadowed) ? `
+      <div class="notice warn t-caption">${ic('alert', 13, 'ico')}
+        <div><strong class="semibold">Deleting this will un-shadow other hooks.</strong> It is the last live <code class="cmd">${esc(h.event)}</code>
+        entry in ${esc(l.label)} scope, so the next layer down starts loading — and its hooks begin firing.</div></div>` : ''}
+      ${r.provider === 'codex' ? `
+      <div class="notice warn t-caption">${ic('key', 13, 'ico')}
+        <div>Rewriting this file invalidates the Codex trust hashes in <code class="cmd">[hooks.state]</code>. Remaining hooks in it will need re-trusting.</div></div>` : ''}
+      <div class="t-caption muted">Prefer <strong class="semibold">Park</strong> if you only want it to stop running — parking keeps the configuration.</div>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn" data-act="parkInstead">${ic('archive', 13)}Park instead</button>
+      <span class="spacer"></span>
+      <button class="btn" data-close="1">Cancel</button>
+      <button class="btn danger" data-act="confirmDelete">${ic('trash', 13)}Delete hook</button>
+    </div>
+  </div>`;
+}
+
+/* Codex trust. Multica cannot grant trust, so the dialog says so and
+   hands over the command instead of faking a button that works. */
+function trustDialog() {
+  const r = rt();
+  const h = hooksOf(r.id).find((x) => x.id === pending);
+  if (!h) return '';
+  return `
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="trTitle">
+    <div class="dialog-head">
+      <div>
+        <div class="t-title-lg" id="trTitle">Re-trust this Codex hook</div>
+        <div class="t-caption muted" style="margin-top:2px">It has not run since it was edited.</div>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn ghost icon" data-close="1" aria-label="Close">${ic('x', 16)}</button>
+    </div>
+    <div class="dialog-body">
+      <div class="card"><div class="card-body tight">
+        <div class="inline"><span class="mono t-label medium">${esc(h.event)}</span>
+          <span class="cmd t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
+          <span class="badge b-bad">${ic('key', 11)}not trusted</span></div>
+        <div class="cmd t-caption" style="margin-top:6px">${esc(h.command || '')}</div>
+        <dl class="kv" style="margin-top:10px">
+          <dt>Trusted hash</dt><dd class="cmd">${esc(h.trustedHash || '')}</dd>
+          <dt>Current hash</dt><dd class="cmd" style="color:var(--destructive)">${esc(h.currentHash || '')}</dd>
+          <dt>Edited</dt><dd>${esc(h.editedAt || '')}</dd>
+          <dt>Fires missed</dt><dd>7 since the edit</dd>
+        </dl>
+      </div></div>
+      <div class="notice bad t-caption">
+        ${ic('circleAlert', 13, 'ico')}
+        <div><strong class="semibold">This is what makes a Codex hooks manager awkward.</strong> Codex only runs a hook while its hash matches
+        <code class="cmd">[hooks.state].trusted_hash</code> in <code class="cmd">~/.codex/config.toml</code>. Any edit — including one Multica
+        makes on your behalf — breaks the match, and Codex then skips the hook without saying anything. Writing Codex hooks from a web app
+        therefore breaks them by definition, and re-trust has to be part of the flow rather than an afterthought.</div>
+      </div>
+      <div class="field">
+        <label>Run this on ${esc(machineOf(r).title)}</label>
+        <div class="diff"><pre><span class="ln ctx">codex</span><span class="ln ctx">&gt; /hooks        # review the diff, then trust</span></pre></div>
+        <div class="hint">Trust is granted interactively, by a human, in a Codex session on the host. There is no non-interactive flag except
+        <code class="cmd">--dangerously-bypass-hook-trust</code>, which skips trust for a single run and is not a fix.</div>
+      </div>
+      <div class="notice warn t-caption">
+        ${ic('alert', 13, 'ico')}
+        <div><strong class="semibold">Not built yet.</strong> "Request trust on host" below assumes a notification path to the machine owner
+        that does not exist. The honest v1 is the copyable command above.</div>
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn" data-act="copyTrust">${ic('copy', 13)}Copy command</button>
+      <span class="spacer"></span>
+      <button class="btn" data-close="1">Close</button>
+      <button class="btn primary" data-act="requestTrust">${ic('key', 13)}Request trust on host</button>
+    </div>
+  </div>`;
+}
+
+/* The "enabled toggle" answer, spelled out at the point of use. */
+function parkDialog() {
+  const r = rt();
+  const h = hooksOf(r.id).find((x) => x.id === pending);
+  if (!h) return '';
+  const c = PARK_COPY[r.provider];
+  const parking = !h.parked;
+  return `
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pkTitle">
+    <div class="dialog-head">
+      <div>
+        <div class="t-title-lg" id="pkTitle">${parking ? 'Park' : 'Unpark'} this hook</div>
+        <div class="t-caption muted" style="margin-top:2px">Neither provider has a per-hook disable, so this is worth reading once.</div>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn ghost icon" data-close="1" aria-label="Close">${ic('x', 16)}</button>
+    </div>
+    <div class="dialog-body">
+      <div class="card"><div class="card-body tight">
+        <div class="inline"><span class="mono t-label medium">${esc(h.event)}</span>
+          <span class="cmd t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span></div>
+        <div class="cmd t-caption" style="margin-top:6px">${esc(h.command || h.url || h.mcpTool || '')}</div>
+      </div></div>
+      <div class="notice info t-caption">
+        ${ic('archive', 13, 'ico')}
+        <div><strong class="semibold">What the switch does.</strong> ${c.what} ${c.why}</div>
+      </div>
+      <div class="notice warn t-caption">
+        ${ic('alert', 13, 'ico')}
+        <div><strong class="semibold">What it is not.</strong> ${c.caveat}</div>
+      </div>
+      <div class="t-caption muted">
+        The alternative approaches both leak: renaming the script and leaving a stub still spawns a process on every matching event, and a
+        plain on/off switch that silently deletes the entry loses the configuration. Parking is the only option that stops the process
+        <em>and</em> keeps the hook — so that is what the switch does, and the label says <strong class="semibold">parked</strong> rather than
+        <strong class="semibold">disabled</strong> because "disabled" would imply a provider feature that does not exist.
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-close="1">Cancel</button>
+      <button class="btn primary" data-act="confirmPark">${ic('archive', 13)}${parking ? 'Park hook' : 'Unpark hook'}</button>
+    </div>
+  </div>`;
+}
+</script>
+
+<script>
+/* ==================================================================== *
+ * RENDER + WIRING
+ * ==================================================================== */
+function renderModal() {
+  const o = document.getElementById('overlay');
+  if (!modal) { o.hidden = true; o.innerHTML = ''; return; }
+  o.hidden = false;
+  o.innerHTML = modal === 'editor' ? editorDialog()
+    : modal === 'diff' ? diffDialog()
+    : modal === 'delete' ? deleteDialog()
+    : modal === 'trust' ? trustDialog()
+    : modal === 'park' ? parkDialog() : '';
+  const first = o.querySelector('input, select, button');
+  if (first) first.focus();
+}
+function closeModal() { modal = null; pending = null; renderModal(); }
+
+function render() {
+  renderHeader();
+  renderTabs();
+  const body = state.screen === 'hooks' ? screenHooks()
+    : state.screen === 'precedence' ? screenPrecedence()
+    : state.screen === 'log' ? screenLog()
+    : state.screen === 'gallery' ? screenGallery()
+    : screenStates();
+  document.getElementById('screen').innerHTML = body;
+}
+
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast t-caption';
+  const icon = kind === 'error' ? 'circleAlert' : kind === 'warn' ? 'alert' : 'checkCircle';
+  const color = kind === 'error' ? 'var(--destructive)' : kind === 'warn' ? 'var(--warning)' : 'var(--success)';
+  el.innerHTML = `<span class="ico" style="color:${color}">${ic(icon, 15)}</span><div>${msg}</div>`;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+/* Nothing here mutates a runtime. Every "write" action reports what it
+   would have done, so the sketch cannot be mistaken for a working build. */
+function wouldWrite(what) {
+  toast('<strong class="semibold">Preview only — nothing was written.</strong><br>' + what +
+    '<br><span class="muted">Multica has no write path to a runtime host yet.</span>', 'warn');
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-screen],[data-toggle-event],[data-add],[data-edit],[data-del],[data-retrust],[data-park],[data-close],[data-review],[data-back],[data-act],[data-log],[data-demo],[data-install],[data-src],[data-pick]');
+  if (!t) {
+    if (ed && ed.comboOpen && !e.target.closest('.combo')) { ed.comboOpen = false; renderModal(); }
+    return;
+  }
+  const d = t.dataset;
+
+  if (d.screen)        { state.screen = d.screen; render(); document.getElementById('scroll').scrollTop = 0; return; }
+  if (d.toggleEvent)   { state.collapsed[d.toggleEvent] = !state.collapsed[d.toggleEvent]; render(); return; }
+  if (d.add)           { openEditor(null); return; }
+  if (d.edit)          { openEditor(d.edit); return; }
+  if (d.del)           { pending = d.del; modal = 'delete'; renderModal(); return; }
+  if (d.retrust)       { pending = d.retrust; modal = 'trust'; renderModal(); return; }
+  if (d.park)          { e.preventDefault(); pending = d.park; modal = 'park'; renderModal(); return; }
+  if (d.close)         { closeModal(); return; }
+  if (d.review)        { modal = 'diff'; renderModal(); return; }
+  if (d.back)          { modal = d.back; renderModal(); return; }
+  if (d.log)           { state.logFilter = d.log; render(); return; }
+  if (d.demo)          { state.stateDemo = d.demo; render(); return; }
+  if (d.pick)          { ed.event = d.pick; ed.comboOpen = false; ed.comboQuery = ''; renderModal(); return; }
+
+  if (d.install) {
+    const g = GALLERY.find((x) => x.id === d.install);
+    wouldWrite('Would install <strong class="semibold">' + esc(g.name) + '</strong> — copy the hook script to the host and add a <span class="mono">' +
+      esc(g.event.split(' ')[0]) + '</span> entry to ' + esc(layersOf(rt().provider).find((l) => l.writable).file) + '.');
+    return;
+  }
+  if (d.src) {
+    const g = GALLERY.find((x) => x.id === d.src);
+    toast('Source: <span class="mono">' + esc(g.src) + '</span><br><span class="muted">A real build would link out to the repo.</span>');
+    return;
+  }
+
+  switch (d.act) {
+    case 'rescan':
+      state.screen = 'states'; state.stateDemo = 'discovery'; state.discoveryStep = 0; render();
+      toast('Discovery queued for the next daemon heartbeat.');
+      break;
+    case 'stepDiscovery':
+      state.discoveryStep = (state.discoveryStep + 1) % (DISCOVERY_STEPS.length + 1); render();
+      if (state.discoveryStep === DISCOVERY_STEPS.length) toast('Read 16 hooks across 4 files on cc-claudesp.');
+      break;
+    case 'viewCached':
+      toast('Would show the 2026-09-09 cached read, labelled stale and read-only.', 'warn');
+      break;
+    case 'copyDiff':
+      toast('Patch copied.'); break;
+    case 'copyTrust':
+      toast('<span class="mono">codex</span> then <span class="mono">/hooks</span> copied.'); break;
+    case 'apply':
+      closeModal();
+      wouldWrite('Would write the reviewed patch to <span class="mono">' + esc(layerMeta(rt().provider, ed.scope).file) + '</span> on ' + esc(machineOf(rt()).title) + '.');
+      break;
+    case 'confirmDelete': {
+      const h = hooksOf(rt().id).find((x) => x.id === pending);
+      closeModal();
+      wouldWrite('Would remove the <span class="mono">' + esc(h.event) + '</span> entry from <span class="mono">' + esc(layerMeta(rt().provider, h.scope).file) + '</span>.');
+      break;
+    }
+    case 'parkInstead':
+      modal = 'park'; renderModal(); break;
+    case 'confirmPark': {
+      const h = hooksOf(rt().id).find((x) => x.id === pending);
+      const parking = !h.parked;
+      closeModal();
+      wouldWrite('Would ' + (parking ? 'move' : 'restore') + ' the entry ' + (parking ? 'into' : 'out of') +
+        ' <span class="mono">_disabledHooks</span> in <span class="mono">' + esc(layerMeta(rt().provider, h.scope).file) + '</span>.');
+      break;
+    }
+    case 'requestTrust':
+      closeModal();
+      wouldWrite('Would notify the owner of cc-claudesp to run <span class="mono">/hooks</span> and trust the new hash.');
+      break;
+  }
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'rtSel') {
+    state.runtimeId = e.target.value;
+    state.collapsed = {}; state.query = '';
+    if (rt().status === 'offline' && state.screen === 'log') state.screen = 'hooks';
+    render();
+    return;
+  }
+  if (e.target.dataset.f && ed) {
+    const f = e.target.dataset.f;
+    ed[f] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    ed.dirty = true;
+    renderModal();
+  }
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'hookSearch') {
+    state.query = e.target.value;
+    const pos = e.target.selectionStart;
+    render();
+    const el = document.getElementById('hookSearch');
+    if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    return;
+  }
+  if (e.target.dataset.combo && ed) {
+    ed.comboQuery = e.target.value; ed.comboOpen = true;
+    const pos = e.target.selectionStart;
+    renderModal();
+    const el = document.getElementById('edEvent');
+    if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    return;
+  }
+  if (e.target.dataset.f && ed && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') {
+    const f = e.target.dataset.f, pos = e.target.selectionStart, id = e.target.id;
+    ed[f] = e.target.value; ed.dirty = true;
+    renderModal();
+    const el = document.getElementById(id);
+    if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {} }
+  }
+});
+
+document.addEventListener('focusin', (e) => {
+  if (e.target.dataset.combo && ed && !ed.comboOpen) { ed.comboOpen = true; ed.comboQuery = ''; renderModal(); }
+});
+
+/* Keyboard: Escape closes the topmost surface, and the tab bar is
+   arrow-navigable like a real Tabs primitive. */
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (ed && ed.comboOpen) { ed.comboOpen = false; renderModal(); return; }
+    if (modal === 'diff') { modal = 'editor'; renderModal(); return; }
+    if (modal) { closeModal(); return; }
+  }
+  if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && e.target.classList.contains('tab')) {
+    const i = SCREENS.findIndex((s) => s.id === state.screen);
+    const n = (i + (e.key === 'ArrowRight' ? 1 : SCREENS.length - 1)) % SCREENS.length;
+    state.screen = SCREENS[n].id; render();
+    const tabs = document.querySelectorAll('.tab');
+    if (tabs[n]) tabs[n].focus();
+    e.preventDefault();
+  }
+});
+
+document.getElementById('themeToggle').addEventListener('click', () => {
+  document.documentElement.classList.toggle('dark');
+});
+
+/* Clicking the overlay backdrop dismisses a Dialog but not an AlertDialog,
+   which is the shadcn default and the right behaviour for a destructive
+   confirm. */
+document.getElementById('overlay').addEventListener('mousedown', (e) => {
+  if (e.target.id === 'overlay' && modal !== 'delete') closeModal();
+});
+
+render();
+</script>
+</body>
+</html>
