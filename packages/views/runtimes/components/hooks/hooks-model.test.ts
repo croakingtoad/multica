@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { RuntimeHookResolutionSchema } from "@multica/core/api/schemas";
 import type {
   RuntimeHookEntry,
   RuntimeHookReadRequest,
   RuntimeHookSource,
 } from "@multica/core/types";
+import type { HookEntryCoverage } from "./hooks-model";
 import {
   HOOK_OBSERVATION_STALE_AFTER_MS,
   entryWillRun,
@@ -160,11 +162,20 @@ describe("hookScopeRows", () => {
     expect(rows[0]?.entryCount).toBe(0);
   });
 
-  // LOCO-408 AC1, partial half: Project() carries its error alongside the
-  // entries it could resolve, so a source that contributed entries
-  // demonstrably parsed and keeps its real count. Only the found source that
-  // contributed none is ambiguous — it may be the one that failed.
-  it("keeps the counts it has when only some sources resolved", () => {
+  // LOCO-581 / PL-033, replacing LOCO-408 AC1's "partial half". That test
+  // passed `[entry()]` next to a resolution error and expected the first row
+  // to keep a count of 1 — a projection `Project` does not emit, because a
+  // source it cannot parse is fatal to the whole projection. What the row
+  // shape really has to say under an error is kept here: a found source states
+  // no number even though it is the scope entries would have come from, and an
+  // absent source's zero is arithmetic and stays.
+  it("states no number for any found source when resolution failed", () => {
+    const projection = RuntimeHookResolutionSchema.parse({
+      provider: "claude",
+      entries: [],
+      error: "decode hooks from settings (project/json): json: cannot unmarshal array",
+    });
+
     const rows = hookScopeRows(
       "claude",
       [
@@ -172,11 +183,11 @@ describe("hookScopeRows", () => {
         source({ scope: "project", source_path: "/w/.claude/settings.json" }),
         source({ scope: "local", state: "absent", source_path: null, content_hash: null }),
       ],
-      [entry()],
-      "parse /w/.claude/settings.json: invalid character '}'",
+      projection.entries as RuntimeHookEntry[],
+      projection.error ?? null,
     );
 
-    expect(rows.map((row) => row.entryCount)).toEqual([1, null, 0]);
+    expect(rows.map((row) => row.entryCount)).toEqual([null, null, 0]);
   });
 });
 
@@ -302,21 +313,56 @@ describe("hookTotals", () => {
     expect(totals.notCheckedSources).toBe(1);
   });
 
-  // LOCO-408 AC2, second half: a partial failure keeps the counts it
-  // legitimately has and is not allowed to present them as a complete total.
-  it("marks a partly resolved read as a floor rather than a total", () => {
-    const error = "parse /w/.claude/settings.json: invalid character '}'";
+  // LOCO-581 / PL-033, replacing LOCO-408 AC2's second half. That test chose
+  // its two arguments independently — entries from one place, the error from
+  // another — and so could assert a pair no projection carries. The invariant
+  // is the chain, not the impossible middle: an error implies no entries
+  // implies no entry total was established.
+  //
+  // Both inputs come from one projection object here, parsed through the same
+  // wire schema the client parses a response with, so this test cannot restate
+  // the impossible pair even by accident — a payload it could construct is a
+  // payload the server could send. The producer's half of the contract lives
+  // on `Projection` in `server/internal/runtimehooks/projection.go`.
+  it("establishes no entry total for a projection that reports an error", () => {
+    const projection = RuntimeHookResolutionSchema.parse({
+      provider: "claude",
+      entries: [],
+      error: "decode hooks from settings (project/json): json: cannot unmarshal array",
+    });
+    const entries = projection.entries as RuntimeHookEntry[];
+    const error = projection.error ?? null;
+
+    // The premise, asserted rather than assumed: an error arrives with nothing.
+    expect(error).not.toBeNull();
+    expect(entries).toHaveLength(0);
+
     const scopes = hookScopeRows(
       "claude",
       [source(), source({ scope: "project" })],
-      [entry()],
+      entries,
       error,
     );
+    const totals = hookTotals(entries, scopes, error);
 
-    const totals = hookTotals([entry()], scopes, error);
+    expect(totals.entryCoverage).toBe("unestablished");
+    expect(totals.configured).toBe(0);
+    // The source states are a different measurement and survive the failure.
+    expect(totals.foundSources).toBe(2);
+  });
 
-    expect(totals.entryCoverage).toBe("partial");
-    expect(totals.configured).toBe(1);
+  // LOCO-581 / PL-033. The union's arity is the thing a runtime assertion
+  // cannot reach, so it is pinned at the type level: the Record below must
+  // name every member and nothing else, so re-adding a third state stops
+  // compiling here — before it grows consumers again — and removing one does
+  // too. This is the guard that keeps "partial" from coming back.
+  it("models exactly the two coverage states the producer can emit", () => {
+    const members: Record<HookEntryCoverage, true> = {
+      complete: true,
+      unestablished: true,
+    };
+
+    expect(Object.keys(members).sort()).toEqual(["complete", "unestablished"]);
   });
 });
 

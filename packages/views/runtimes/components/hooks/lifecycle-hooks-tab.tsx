@@ -326,8 +326,11 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
                     empty card rather than only its body: HookEmptyCard's
                     headline makes a claim about what was read too, and a
                     guard that swapped only the body would leave the stronger
-                    sentence on screen. A partly-resolved read (error plus
-                    entries) is not this branch and still renders its list. */}
+                    sentence on screen. The guard is on the entry count rather
+                    than on the error because the empty card is what has to be
+                    replaced; the producer never sends entries alongside an
+                    error, so the list below is only ever a read that
+                    resolved. */}
                 {entries.length === 0 ? (
                   view.resolutionError ? (
                     <Empty className="border border-dashed">

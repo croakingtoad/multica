@@ -78,6 +78,10 @@ function baseKey(key: string): string {
   return key.replace(/_(zero|one|two|few|many|other)$/, "");
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 describe("hooks captions", () => {
   const sources = runtimeSources();
 
@@ -93,7 +97,10 @@ describe("hooks captions", () => {
     it(`${locale}: declares no hooks caption the components never read`, () => {
       const declared = [...new Set(leafPaths(bundle.hooks).map(baseKey))];
       expect(declared.length).toBeGreaterThan(0);
-      const unread = declared.filter((key) => !sources.includes(`$.hooks.${key}`));
+      const unread = declared.filter(
+        (key) =>
+          !new RegExp(`${escapeRegex(`$.hooks.${key}`)}(?![A-Za-z0-9_])`).test(sources),
+      );
       expect(unread).toEqual([]);
     });
   }

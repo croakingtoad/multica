@@ -9,9 +9,9 @@ import type { hookTotals } from "./hooks-model";
  * Runtime-level totals, in two blocks that are established by different
  * things. The source-state rows come from the host's diff of expected against
  * observed and survive a parse failure untouched. The entry-derived rows come
- * from the projection, so when resolution failed they are either a floor or
- * nothing at all — `entryCoverage` says which, and a number is only printed
- * for a count Multica actually established.
+ * from the projection, so when resolution failed there is nothing to print at
+ * all: a failed read is fatal to the whole projection, so no entry total was
+ * established and a number is only printed for a count Multica does hold.
  */
 export function HookSummaryCard({
   totals,
@@ -86,13 +86,11 @@ export function HookSummaryCard({
           </div>
         ))}
       </dl>
-      {totals.entryCoverage !== "complete" ? (
+      {totals.entryCoverage === "unestablished" ? (
         <>
           <Separator />
           <p className="px-4 py-3 text-caption text-muted-foreground">
-            {totals.entryCoverage === "partial"
-              ? t(($) => $.hooks.summary.partial_note)
-              : t(($) => $.hooks.summary.unestablished_note)}
+            {t(($) => $.hooks.summary.unestablished_note)}
           </p>
         </>
       ) : null}

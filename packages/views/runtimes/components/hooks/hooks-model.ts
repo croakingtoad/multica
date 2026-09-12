@@ -128,19 +128,20 @@ export function hookScopeRows(
 
 /**
  * Zero has two causes once resolution failed, and only one of them is "this
- * file held nothing". The projection carries its error alongside whatever
- * entries it could resolve, so per-source is the only place the difference
- * survives:
+ * file held nothing". Per-source is the only place the difference survives:
  *
- * - A source that contributed entries demonstrably parsed. Its count stands,
- *   error or not — a blanket "counts are unavailable when any error is
- *   present" would throw away truth Multica does hold.
- * - A *found* source that contributed none under an error is the ambiguous
- *   cell: it may be the source that failed. Multica established that it could
- *   not interpret the snapshot, not that this file was empty, so there is no
- *   number to show.
- * - An absent or unchecked source contributes nothing whatever else failed,
- *   so its zero is arithmetic rather than a claim. Neither renders a count.
+ * - A *found* source under an error has no number to show. Multica established
+ *   that it could not interpret the snapshot, not that this file was empty,
+ *   and a failed read is fatal to the whole projection — `Error` and `entries`
+ *   are exclusive, so no found source has a count to stand on.
+ * - An absent or unchecked source contributes nothing whatever else failed, so
+ *   its zero is arithmetic rather than a claim. It still renders no count.
+ *
+ * There used to be a third case here — a source that contributed entries keeps
+ * its count under an error — and it was unreachable. It described a projection
+ * carrying an error alongside resolved entries, which `Project` does not emit;
+ * see the contract on `Projection` in
+ * `server/internal/runtimehooks/projection.go`.
  */
 function hookSourceEntryCount(
   state: string,
@@ -148,7 +149,6 @@ function hookSourceEntryCount(
   resolutionError: string | null,
 ): number | null {
   if (!resolutionError) return counted;
-  if (counted > 0) return counted;
   return state === "found" ? null : counted;
 }
 
@@ -219,21 +219,23 @@ export function entryWillRun(entry: RuntimeHookEntry): boolean {
  * How much of the entry-derived block of `HookTotals` Multica established.
  * The source-state counts are not covered by this: they come from the host's
  * own diff of expected against observed, which a parse failure does not touch.
+ *
+ * Two states, because the producer has two outcomes. A third — "partial", for
+ * an error carrying entries anyway — was modelled here and is not emittable:
+ * `Project` treats a source it cannot parse as fatal to the whole projection,
+ * so an error always arrives with no entries. Whether it *should* is a product
+ * question about partial resolution, not a gap this union can paper over; the
+ * contract it has to match is on `Projection` in
+ * `server/internal/runtimehooks/projection.go`.
  */
 export type HookEntryCoverage =
   /** Every source resolved. The entry totals are the whole picture. */
   | "complete"
   /**
-   * Resolution failed and produced no entries at all, so no entry total was
-   * established. Every one of them would be the "no hooks" claim restated as
-   * a number.
+   * Resolution failed, so no entry total was established. Every one of them
+   * would be the "no hooks" claim restated as a number.
    */
-  | "unestablished"
-  /**
-   * Resolution failed but some entries resolved. The entry totals are real
-   * for the sources that parsed and are a floor, not a total.
-   */
-  | "partial";
+  | "unestablished";
 
 export interface HookTotals {
   configured: number;
@@ -265,11 +267,7 @@ export function hookTotals(
   resolutionError: string | null,
 ): HookTotals {
   return {
-    entryCoverage: !resolutionError
-      ? "complete"
-      : entries.length > 0
-        ? "partial"
-        : "unestablished",
+    entryCoverage: resolutionError ? "unestablished" : "complete",
     configured: entries.length,
     willRun: entries.filter(entryWillRun).length,
     inactive: entries.filter((entry) => entry.configuration !== "live").length,
