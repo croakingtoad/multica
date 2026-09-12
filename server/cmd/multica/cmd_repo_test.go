@@ -110,6 +110,7 @@ func TestRunRepoAddUpdatesDescriptionForExistingRepo(t *testing.T) {
 }
 
 func TestRunRepoAddRejectsDescriptionForMultipleRepos(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	cmd := newRepoRegistryTestCmd("http://127.0.0.1:0")
 	if err := cmd.Flags().Set("description", "shared"); err != nil {
 		t.Fatal(err)

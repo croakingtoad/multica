@@ -21,8 +21,7 @@ import (
 func mkProfiles(t *testing.T, names ...string) string {
 	t.Helper()
 	t.Chdir(t.TempDir())
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	for _, name := range names {
 		dir := filepath.Join(home, ".multica", "profiles", filepath.FromSlash(name))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
