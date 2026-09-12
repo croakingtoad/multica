@@ -59,8 +59,13 @@ import {
 //     set of handlers that fire.
 //  2. "Multica cannot answer" is never rendered as "nothing runs". The
 //     unanswerable state shows no counts and no sets at all — only what the
-//     answer itself carries: an unevaluable matcher and its message when there
-//     is one, and otherwise the raw error with no cause named for it.
+//     answer itself carries. The raw error is one of those things and is
+//     rendered whenever the answer has one, on both branches of this state.
+//     What the branch selects is additive to it, not instead of it: only
+//     which cause sentence precedes the error — the regular-expression one
+//     when there is an unevaluable matcher to attribute it to, plus that
+//     matcher and its compiler message, and a sentence naming no cause at all
+//     when there is not.
 //  3. Nothing is ordered. Every set is a `<ul>`, nothing is numbered, and the
 //     panel says in words that Multica does not know the order the provider
 //     runs them in. Neither provider publishes one.

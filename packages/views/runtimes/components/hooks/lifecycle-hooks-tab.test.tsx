@@ -895,6 +895,18 @@ describe("LifecycleHooksTab — what actually runs", () => {
     return rendered;
   }
 
+  // The unanswerable panel's own subtree, never the whole tab. The configured
+  // list below the panel legitimately captions matchers, so a tab-scoped
+  // assertion on matcher vocabulary can pass on text the panel never wrote.
+  // The heading is asserted present so a layout change fails here rather than
+  // silently narrowing every assertion to an empty string.
+  function unanswerablePanelText(): string {
+    const title = screen.getByText(/^Multica cannot answer for /);
+    const panel = title.closest("div")?.parentElement;
+    expect(panel).toBeTruthy();
+    return panel?.textContent ?? "";
+  }
+
   // The value field is captioned from the projection's per-event role, so it
   // is right before any answer exists. Asking in order to learn what to type
   // would be backwards.
@@ -1014,7 +1026,16 @@ describe("LifecycleHooksTab — what actually runs", () => {
         matched: [answerEntry()],
       }),
     );
-    const text = container.textContent ?? "";
+    // The positive claims are scoped to the panel by the same route its
+    // neutral twin below uses, and for the same reason: the configured list
+    // further down the tab legitimately captions matchers, so a tab-scoped
+    // assertion on matcher vocabulary is one copy change away from passing on
+    // text the panel never wrote.
+    const text = unanswerablePanelText();
+    // The two absence claims stay tab-wide, where they are stronger: "no
+    // count anywhere" is a statement about the whole screen, and narrowing it
+    // to the panel would only weaken it.
+    const tabText = container.textContent ?? "";
 
     expect(text).toMatch(/Multica cannot answer for PreToolUse/);
     expect(text).toMatch(/\^\(\?!Notebook\)\.\*/);
@@ -1028,8 +1049,8 @@ describe("LifecycleHooksTab — what actually runs", () => {
     );
     expect(text).toMatch(/including the handlers whose matchers are perfectly ordinary/);
     // No headline count anywhere, and no matched set heading.
-    expect(text).not.toMatch(/handlers configured on this event run/);
-    expect(text).not.toMatch(/Matched by this value/);
+    expect(tabText).not.toMatch(/handlers configured on this event run/);
+    expect(tabText).not.toMatch(/Matched by this value/);
   });
 
   // LOCO-476 / LOCO-547. `answerable !== true` has five routes into it and
@@ -1044,19 +1065,18 @@ describe("LifecycleHooksTab — what actually runs", () => {
     mountWithAnswer(
       answerResult({
         answerable: false,
-        // One of the four real non-matcher routes: the hook-state envelope
-        // did not decode, so nothing was evaluated at all.
-        error: 'decode codex "[hooks.state]": toml: expected a table',
+        // One of the four non-matcher routes, quoted verbatim from the site
+        // that emits it: server/internal/runtimehooks/runstate.go:296 formats
+        // "decode Codex hook state from %s: envelope must be an object", and
+        // describeSource (resolution.go:365) renders an unnamed user-scoped
+        // JSON settings source as "settings (user/json)". The hook-state
+        // envelope did not decode, so nothing was evaluated at all.
+        error:
+          "decode Codex hook state from settings (user/json): envelope must be an object",
         unevaluable: [],
       }),
     );
-    // Scoped to the panel rather than the whole tab, because the configured
-    // list below it legitimately captions matchers. Asserted so a layout
-    // change fails here instead of passing on an empty string.
-    const title = screen.getByText("Multica cannot answer for PreToolUse");
-    const panel = title.closest("div")?.parentElement;
-    expect(panel).toBeTruthy();
-    const text = panel?.textContent ?? "";
+    const text = unanswerablePanelText();
     expect(text).toContain("Multica cannot answer for PreToolUse");
 
     // The limit is stated, without a cause the answer does not carry.
@@ -1073,7 +1093,92 @@ describe("LifecycleHooksTab — what actually runs", () => {
     // And no invented origin for the error: it did not come from evaluation.
     expect(text).not.toMatch(/The evaluator reported/);
     expect(text).toMatch(/The answer carried this error, for the whole event:/);
-    expect(text).toContain('decode codex "[hooks.state]": toml: expected a table');
+    expect(text).toContain(
+      "decode Codex hook state from settings (user/json): envelope must be an object",
+    );
+  });
+
+  // LOCO-564 / LOCO-571 item 3. The neutral branch is selected by
+  // `view.answer?.unevaluable ?? []` (hook-answer-panel.tsx:334), and the
+  // case above only ever drives the `[]` shape. The two shapes the `?? []`
+  // actually saves from a TypeError are the absent field — what the server
+  // sends today, since `Unevaluable` carries `json:"unevaluable,omitempty"`
+  // (answer.go:126) and a nil slice is omitted rather than nulled — and an
+  // explicit `null`, which any producer without omitempty would emit. All
+  // three must reach the same neutral body: the guard exists so the shape of
+  // the field never changes what the screen says.
+  const neutralShapes: ReadonlyArray<
+    readonly [string, Partial<RuntimeHookEventAnswer>]
+  > = [
+    ["an empty list", { unevaluable: [] }],
+    ["an absent field", {}],
+    // `null` is off the declared type (`unevaluable?: ...[]`), which is
+    // exactly why it has to be forced here: the guard defends a runtime shape
+    // the compiler already rules out.
+    ["a null field", { unevaluable: null as unknown as undefined }],
+  ];
+
+  it.each(neutralShapes)(
+    "renders the same neutral body when unevaluable is %s",
+    (_label, shape) => {
+      mountWithAnswer(
+        answerResult({
+          answerable: false,
+          error:
+            "decode Codex hook state from settings (user/json): envelope must be an object",
+          ...shape,
+        }),
+      );
+      const text = unanswerablePanelText();
+
+      // The neutral body, identically on all three shapes.
+      expect(text).toContain("Multica cannot answer for PreToolUse");
+      expect(text).toMatch(/the answer does not identify which step failed/);
+      expect(text).toMatch(/not to any one hook/);
+      expect(text).toMatch(
+        /Nothing is claimed to run and nothing is claimed not to run/,
+      );
+      expect(text).toMatch(/for any handler configured on this event/);
+      // And still no cause the answer does not carry.
+      expect(text).not.toMatch(/regular-expression/);
+      expect(text).not.toMatch(/matcher/i);
+    },
+  );
+
+  it("renders the three unevaluable shapes byte-identically", () => {
+    const rendered = neutralShapes.map(([label, shape]) => {
+      const { unmount } = mountWithAnswer(
+        answerResult({
+          answerable: false,
+          error:
+            "decode Codex hook state from settings (user/json): envelope must be an object",
+          ...shape,
+        }),
+      );
+      const text = unanswerablePanelText();
+      unmount();
+      return [label, text] as const;
+    });
+
+    // Non-empty first, so an equality that held on "" could not pass.
+    for (const [label, text] of rendered) {
+      expect(text.length, label).toBeGreaterThan(0);
+    }
+    // The observation mock stamps each render with the wall clock, so the
+    // entries' own timestamp differs by milliseconds between the three
+    // mounts. That is the harness, not the panel: normalise only the ISO
+    // instants and every remaining byte is the panel's own copy.
+    const stable = (text: string) =>
+      text.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<instant>");
+    const [firstEntry, ...rest] = rendered;
+    const first = firstEntry?.[1] ?? "";
+    for (const [label, text] of rest) {
+      expect(stable(text), label).toBe(stable(first));
+    }
+    // And the normaliser did not erase the body it is meant to compare.
+    expect(stable(first)).toContain(
+      "Nothing is claimed to run and nothing is claimed not to run",
+    );
   });
 
   // An answerable event with an empty matched set is a real answer about the
