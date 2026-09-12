@@ -358,33 +358,29 @@ func TestOpenclawActiveConfigPathFallbackSources(t *testing.T) {
 		},
 		"default_home": {
 			setup: func(t *testing.T) string {
-				home := t.TempDir()
+				home := cli.IsolateConfigRoot(t)
 				path := filepath.Join(home, ".openclaw", "openclaw.json")
-				t.Setenv("HOME", home)
 				return path
 			},
 		},
 		"legacy_default_clawdbot": {
 			setup: func(t *testing.T) string {
-				home := t.TempDir()
+				home := cli.IsolateConfigRoot(t)
 				path := filepath.Join(home, ".clawdbot", "clawdbot.json")
-				t.Setenv("HOME", home)
 				return path
 			},
 		},
 		"legacy_default_moltbot": {
 			setup: func(t *testing.T) string {
-				home := t.TempDir()
+				home := cli.IsolateConfigRoot(t)
 				path := filepath.Join(home, ".moltbot", "moltbot.json")
-				t.Setenv("HOME", home)
 				return path
 			},
 		},
 		"legacy_default_moldbot": {
 			setup: func(t *testing.T) string {
-				home := t.TempDir()
+				home := cli.IsolateConfigRoot(t)
 				path := filepath.Join(home, ".moldbot", "moldbot.json")
-				t.Setenv("HOME", home)
 				return path
 			},
 		},
@@ -420,8 +416,7 @@ func TestOpenclawActiveConfigPathFallbackSources(t *testing.T) {
 
 func TestOpenclawActiveConfigPathFallbackFreshInstallUsesCanonicalPath(t *testing.T) {
 	clearOpenclawPathEnv(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	stub := installOpenclawStub(t, map[string]openclawResponse{
 		"config file": {err: openclawConfigFileUnsupportedErr()},
 	})
@@ -441,8 +436,7 @@ func TestOpenclawActiveConfigPathFallbackFreshInstallUsesCanonicalPath(t *testin
 
 func TestOpenclawActiveConfigPathFallbackOpenclawConfigPathHardOverride(t *testing.T) {
 	clearOpenclawPathEnv(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	explicitPath := filepath.Join(t.TempDir(), "missing-openclaw.json")
 	t.Setenv("OPENCLAW_CONFIG_PATH", explicitPath)
 	legacyPath := filepath.Join(home, ".clawdbot", "clawdbot.json")
@@ -655,8 +649,7 @@ func TestPrepareOpenclawConfigExpandsTilde(t *testing.T) {
 		t.Fatalf("mkdir workdir: %v", err)
 	}
 
-	fakeHome := t.TempDir()
-	t.Setenv("HOME", fakeHome)
+	fakeHome := cli.IsolateConfigRoot(t)
 	if err := os.MkdirAll(filepath.Join(fakeHome, ".openclaw"), 0o755); err != nil {
 		t.Fatalf("mkdir home/.openclaw: %v", err)
 	}
@@ -2131,9 +2124,7 @@ func TestPrepareOpenclawConfigNewSchemaEmptyRegistry(t *testing.T) {
 // user's $include and every task lost its model providers and auth profiles
 // (issue #6630).
 func TestExpandOpenclawPathTildeSeparators(t *testing.T) {
-	fakeHome := t.TempDir()
-	t.Setenv("HOME", fakeHome)
-	t.Setenv("USERPROFILE", fakeHome)
+	fakeHome := cli.IsolateConfigRoot(t)
 
 	cases := []struct {
 		name string
@@ -2273,9 +2264,7 @@ func TestPrepareOpenclawConfigExpandsOpenclawHome(t *testing.T) {
 // again reported as a fresh install — the failure this whole branch removes,
 // reached through the branch itself.
 func TestExpandOpenclawPathOpenclawHomeIsItselfATilde(t *testing.T) {
-	osHome := t.TempDir()
-	t.Setenv("HOME", osHome)
-	t.Setenv("USERPROFILE", osHome)
+	osHome := cli.IsolateConfigRoot(t)
 
 	cases := []struct {
 		name string
@@ -2373,9 +2362,7 @@ func TestPrepareOpenclawConfigExpandsTildeValuedOpenclawHome(t *testing.T) {
 		t.Fatalf("mkdir workdir: %v", err)
 	}
 
-	osHome := t.TempDir()
-	t.Setenv("HOME", osHome)
-	t.Setenv("USERPROFILE", osHome)
+	osHome := cli.IsolateConfigRoot(t)
 	t.Setenv("OPENCLAW_HOME", "~/svc")
 
 	wantPath := filepath.Join(osHome, "svc", ".openclaw", "openclaw.json")
@@ -2419,9 +2406,7 @@ func TestPrepareOpenclawConfigExpandsWindowsTilde(t *testing.T) {
 		t.Fatalf("mkdir workdir: %v", err)
 	}
 
-	fakeHome := t.TempDir()
-	t.Setenv("HOME", fakeHome)
-	t.Setenv("USERPROFILE", fakeHome)
+	fakeHome := cli.IsolateConfigRoot(t)
 
 	// filepath.Join normalizes the reported remainder to the host separator,
 	// so build the expected target the same way the production path does and

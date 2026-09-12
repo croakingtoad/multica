@@ -7,7 +7,7 @@ import (
 )
 
 func TestRunConfigSetPersistsValues(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	cli.IsolateConfigRoot(t)
 	cmd := testCmd()
 
 	if err := runConfigSet(cmd, []string{"server_url", "http://example.com"}); err != nil {
