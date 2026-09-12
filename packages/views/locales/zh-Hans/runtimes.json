@@ -571,7 +571,6 @@
       "state_absent": "已检查，不存在",
       "state_not_checked": "未检查",
       "state_unknown": "无法识别的来源状态：{{value}}",
-      "found_hint": "已从下面的路径读取。",
       "absent_hint": "Multica 查找过此文件，它不存在。",
       "not_checked_hint": "没有人查看过这里。hook 读取由运行时心跳发起，心跳不携带项目身份，因此 Multica 还无法定位项目来源。这与查到它为空不是一回事。",
       "expected_path": "将从 {{path}} 读取",
@@ -652,7 +651,6 @@
       "parked": "已暂存",
       "disabled": "已停用",
       "unknown": "无法识别的配置：{{value}}",
-      "live_hint": "作为活跃条目存在于来源中。",
       "parked_at": "暂存于 {{stamp}}",
       "parked_hint": "保存在 Multica 自有的附属文件中，而不是活跃的 hooks 块里，因为 Claude 本身没有单个 hook 的停用开关。",
       "disabled_hint": "在 Codex 自己的 /hooks 浏览器中按 hook 关闭。条目仍留在文件中。"
@@ -663,7 +661,6 @@
       "never_runs": "永不运行",
       "trust_unknown": "信任未确认",
       "unknown": "无法识别的判定：{{value}}",
-      "will_run_hint": "提供方会在此事件上求值这个 handler。",
       "reason_matcher_ineligible": "无论 matcher 写了什么，提供方都不会在此事件上求值这个 handler。",
       "reason_handler_unsupported_provider": "提供方不支持 handler 类型 {{type}}。它会解析该条目然后跳过。",
       "reason_handler_unsupported_event": "提供方在此事件上不支持 handler 类型 {{type}}。它会解析该条目然后跳过。",
@@ -672,8 +669,6 @@
       "independent_note": "配置和判定是两回事。改变其中一个不会回答另一个。"
     },
     "trust": {
-      "label": "信任",
-      "not_applicable": "不适用",
       "pending_review": "从未审阅",
       "trusted_as_of_snapshot": "上次审阅时受信任",
       "disabled": "已关闭",
@@ -686,7 +681,6 @@
       "title": "{{event}} hook",
       "description": "Multica 观测到的关于此条目的全部信息。此视图为只读。",
       "close": "关闭",
-      "identity": "标识",
       "hook_id": "hook id",
       "occurrence": "出现序号",
       "event": "事件",

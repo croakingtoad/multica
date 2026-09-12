@@ -589,7 +589,6 @@
       "state_absent": "Checked, absent",
       "state_not_checked": "Not checked",
       "state_unknown": "Unrecognised source state: {{value}}",
-      "found_hint": "Read at the path below.",
       "absent_hint": "Multica looked for this file and it is not there.",
       "not_checked_hint": "Nobody looked here. A hook read runs from a runtime heartbeat, which carries no project identity, so Multica cannot locate a project source yet. This is not the same as finding it empty.",
       "expected_path": "Would be read from {{path}}",
@@ -670,7 +669,6 @@
       "parked": "Parked",
       "disabled": "Disabled",
       "unknown": "Unrecognised configuration: {{value}}",
-      "live_hint": "Present in the source as an active entry.",
       "parked_at": "Parked at {{stamp}}",
       "parked_hint": "Held in a Multica-owned sidecar instead of the active hooks block, because Claude has no per-hook disable of its own.",
       "disabled_hint": "Switched off per hook in Codex's own /hooks browser. The entry stays in the file."
@@ -681,7 +679,6 @@
       "never_runs": "Will never run",
       "trust_unknown": "Trust unconfirmed",
       "unknown": "Unrecognised verdict: {{value}}",
-      "will_run_hint": "The provider evaluates this handler on this event.",
       "reason_matcher_ineligible": "The provider does not evaluate this handler on this event, whatever its matcher says.",
       "reason_handler_unsupported_provider": "The provider does not support the handler type {{type}}. It parses the entry and skips it.",
       "reason_handler_unsupported_event": "The provider does not support the handler type {{type}} on this event. It parses the entry and skips it.",
@@ -690,8 +687,6 @@
       "independent_note": "Configuration and verdict are separate. Changing one does not answer the other."
     },
     "trust": {
-      "label": "Trust",
-      "not_applicable": "Not applicable",
       "pending_review": "Never reviewed",
       "trusted_as_of_snapshot": "Trusted when last reviewed",
       "disabled": "Switched off",
@@ -704,7 +699,6 @@
       "title": "{{event}} hook",
       "description": "Everything Multica observed about this entry. This view is read-only.",
       "close": "Close",
-      "identity": "Identity",
       "hook_id": "Hook id",
       "occurrence": "Occurrence",
       "event": "Event",
