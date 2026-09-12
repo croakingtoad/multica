@@ -1717,7 +1717,7 @@ func TestLoadConfig_AppliesBackendOverridesFromConfigFile(t *testing.T) {
 func TestLoadConfig_BackendOverrides_BackwardCompat_NoConfigFile(t *testing.T) {
 	stageFakeAgent(t)
 
-	// Point HOME at an empty dir — no config.json present.
+	// Use a fresh isolated config root with no config.json present.
 	cli.IsolateConfigRoot(t)
 	os.Unsetenv("MULTICA_OPENCLAW_PATH")
 	os.Unsetenv("OPENCLAW_STATE_DIR")

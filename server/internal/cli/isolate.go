@@ -9,10 +9,10 @@ import (
 // IsolateConfigRoot redirects the Multica config root to a fresh per-test
 // directory for the duration of t and returns that directory.
 //
-// Tests in cmd/multica get package-wide isolation from TestMain in
-// cmd_auth_test.go, which unsets MULTICA_TASK_CONFIG_ROOT; internal/daemon,
-// internal/daemon/execenv, and internal/cli have no TestMain and use this
-// helper per test instead.
+// TestMain in cmd/multica/cmd_auth_test.go unsets MULTICA_TASK_CONFIG_ROOT but
+// does not pin HOME, so config resolution can still fall through to the
+// ambient home directory. internal/daemon, internal/daemon/execenv, and
+// internal/cli have no TestMain and use this helper per test instead.
 //
 // This is the single entry point any test in this repository should use when
 // it wants to read or write the CLI config (CLIConfig, LoadCLIConfig,
