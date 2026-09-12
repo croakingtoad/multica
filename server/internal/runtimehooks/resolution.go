@@ -4,8 +4,10 @@ package runtimehooks
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 type Provider string
@@ -67,17 +69,31 @@ type ResolvedSource struct {
 // settings handler across files. The source slice carries provenance, not an
 // execution sequence.
 type ResolvedHook struct {
-	Event   string
-	Matcher string
-	Handler json.RawMessage
-	Sources []SourceRef
+	HookID     string
+	Occurrence int
+	Event      string
+	Matcher    string
+	Handler    json.RawMessage
+	Sources    []SourceRef
+
+	groupIndex   int
+	handlerIndex int
+}
+
+// UnrecognizedHookKey records a source key whose value was not an event's
+// matcher-group array. Resolution remains available for every recognized key.
+type UnrecognizedHookKey struct {
+	Source SourceRef
+	Key    string
+	Reason string
 }
 
 // Resolution is the merged, unordered view of every expected source.
 type Resolution struct {
-	Provider Provider
-	Sources  []ResolvedSource
-	entries  []ResolvedHook
+	Provider         Provider
+	Sources          []ResolvedSource
+	UnrecognizedKeys []UnrecognizedHookKey
+	entries          []ResolvedHook
 }
 
 type matcherGroup struct {
@@ -126,11 +142,12 @@ func Resolve(provider Provider, expected []SourceRef, observed []ObservedSource)
 		}
 		if observedSource.SourcePath != nil {
 			resolved.State = SourceFound
-			entries, err := parseEntries(ref, observedSource.Hooks)
+			entries, unrecognized, err := parseEntries(ref, observedSource.Hooks)
 			if err != nil {
 				return Resolution{}, err
 			}
 			resolution.entries = append(resolution.entries, entries...)
+			resolution.UnrecognizedKeys = append(resolution.UnrecognizedKeys, unrecognized...)
 		}
 		resolution.Sources = append(resolution.Sources, resolved)
 	}
@@ -189,33 +206,66 @@ func (r Resolution) MergeMatched(matched []ResolvedHook) []ResolvedHook {
 	return merged
 }
 
-func parseEntries(source SourceRef, raw json.RawMessage) ([]ResolvedHook, error) {
+func parseEntries(source SourceRef, raw json.RawMessage) ([]ResolvedHook, []UnrecognizedHookKey, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
 	var events map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &events); err != nil {
-		return nil, fmt.Errorf("decode hooks from %s: %w", describeSource(source), err)
+		return nil, nil, fmt.Errorf("decode hooks from %s: %w", describeSource(source), err)
 	}
 	var entries []ResolvedHook
+	var unrecognized []UnrecognizedHookKey
 	for event, groupsRaw := range events {
 		var groups []matcherGroup
 		if err := json.Unmarshal(groupsRaw, &groups); err != nil {
-			return nil, fmt.Errorf("decode %s hook groups from %s: %w", event, describeSource(source), err)
+			unrecognized = append(unrecognized, UnrecognizedHookKey{
+				Source: source,
+				Key:    event,
+				Reason: err.Error(),
+			})
+			continue
 		}
-		for _, group := range groups {
-			for _, handler := range group.Hooks {
+		occurrences := make(map[string]int)
+		for groupIndex, group := range groups {
+			for handlerIndex, handler := range group.Hooks {
 				canonical, err := canonicalJSON(handler)
 				if err != nil {
-					return nil, fmt.Errorf("decode %s handler from %s: %w", event, describeSource(source), err)
+					return nil, nil, fmt.Errorf("decode %s handler from %s: %w", event, describeSource(source), err)
 				}
+				canonicalKey := string(canonical)
+				occurrence := occurrences[canonicalKey]
+				occurrences[canonicalKey]++
 				entries = append(entries, ResolvedHook{
+					HookID: hookID(source, event, canonical, occurrence), Occurrence: occurrence,
 					Event: event, Matcher: group.Matcher, Handler: canonical, Sources: []SourceRef{source},
+					groupIndex: groupIndex, handlerIndex: handlerIndex,
 				})
 			}
 		}
 	}
-	return entries, nil
+	return entries, unrecognized, nil
+}
+
+func hookID(source SourceRef, event string, handler json.RawMessage, occurrence int) string {
+	source = normalizeRef(source)
+	canonicalSource, _ := json.Marshal(struct {
+		Scope  string     `json:"scope"`
+		Format string     `json:"format"`
+		Kind   SourceKind `json:"kind"`
+		Name   string     `json:"name"`
+	}{source.Scope, source.Format, source.Kind, source.Name})
+
+	// NUL-delimited canonical components make the identity unambiguous.
+	// Occurrence is the same-handler ordinal in the flattened group/handler
+	// sequence: distinct handlers remain stable when reordered, while duplicate
+	// byte-identical handlers still receive different IDs.
+	hash := sha256.New()
+	for _, part := range [][]byte{canonicalSource, []byte(event), handler, []byte(strconv.Itoa(occurrence))} {
+		_, _ = hash.Write(part)
+		_, _ = hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("sha256:%x", hash.Sum(nil))
 }
 
 func canonicalJSON(raw json.RawMessage) (json.RawMessage, error) {
