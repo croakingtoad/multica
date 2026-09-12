@@ -181,6 +181,23 @@ func (q *Queries) DeleteAgentRuntime(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const deleteRuntimeHookData = `-- name: DeleteRuntimeHookData :exec
+WITH deleted_snapshots AS (
+    DELETE FROM hook_state_snapshot
+    WHERE hook_state_snapshot.runtime_id = $1
+)
+DELETE FROM hook_fire_history
+WHERE hook_fire_history.runtime_id = $1
+`
+
+// Application-layer cascade: hook tables deliberately carry no foreign keys,
+// so every runtime-delete path removes both dependents before agent_runtime in
+// the same application transaction.
+func (q *Queries) DeleteRuntimeHookData(ctx context.Context, targetRuntimeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRuntimeHookData, targetRuntimeID)
+	return err
+}
+
 const deleteSystemAgentsByRuntime = `-- name: DeleteSystemAgentsByRuntime :exec
 DELETE FROM agent WHERE runtime_id = $1 AND kind = 'system'
 `

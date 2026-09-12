@@ -43,9 +43,8 @@
 -- not now.
 --
 -- Locks: CREATE TABLE plus one index on a new empty relation; no existing
--- table is scanned or rewritten. The REFERENCES clause takes a brief SHARE
--- lock on agent_runtime (no row scan). Expected duration at production
--- scale: <1 second excluding lock-queue time.
+-- table is scanned or rewritten. Expected duration at production scale: <1
+-- second excluding lock-queue time.
 --
 -- Reversibility: schema-reversible by 481_hook_fire_history.down.sql. The
 -- down destroys fire history, which is UNRECOVERABLE -- at stage 1 no rows
@@ -54,10 +53,10 @@
 
 CREATE TABLE hook_fire_history (
     id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-    -- History dies with its runtime, matching the workspace model
-    -- (agent_task_queue ON DELETE CASCADE). Retention for live runtimes is
-    -- stage 7's job, not this FK's.
-    runtime_id UUID NOT NULL REFERENCES agent_runtime(id) ON DELETE CASCADE,
+    -- The application deletes a runtime's history explicitly inside the
+    -- transaction that deletes agent_runtime. Retention for live runtimes is
+    -- stage 7's separate responsibility.
+    runtime_id UUID NOT NULL,
     -- Denormalized observed identity (see block above): self-contained so a
     -- later edit/delete of the hook cannot touch these rows.
     provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
@@ -88,7 +87,7 @@ CREATE TABLE hook_fire_history (
 
 -- THE feed index (mandated): per-runtime, time-ordered. Also serves the
 -- filtered feed (runtime + time-range spine) and retention scans (backward
--- scan covers fired_at < cutoff within a runtime). FK enforcement for
--- runtime_id rides this leading prefix -- no separate index.
+-- scan covers fired_at < cutoff within a runtime). Runtime cleanup also uses
+-- this leading prefix -- no separate index.
 CREATE INDEX hook_fire_history_runtime_id_fired_at_idx
     ON hook_fire_history (runtime_id, fired_at DESC);

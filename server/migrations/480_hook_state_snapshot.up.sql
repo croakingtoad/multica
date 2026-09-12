@@ -39,19 +39,16 @@
 -- would encode a falsehood.
 --
 -- Locks: CREATE TABLE plus inline unique index on a new empty relation; no
--- existing table is scanned or rewritten. The REFERENCES clause takes a
--- brief SHARE lock on agent_runtime for the FK catalog entry (no row scan).
--- Expected duration at production scale: <1 second excluding lock-queue
--- time.
+-- existing table is scanned or rewritten. Expected duration at production
+-- scale: <1 second excluding lock-queue time.
 --
 -- Reversibility: fully reversible by 480_hook_state_snapshot.down.sql. The
 -- down destroys only cache; a host refetch rebuilds it at zero cost.
 
 CREATE TABLE hook_state_snapshot (
-    -- Outgoing FK only: invariant 4 forbids foreign keys TO this table, not
-    -- references to agent_runtime. CASCADE keeps the cache bounded and
-    -- orphan-free when a runtime is deleted.
-    runtime_id UUID NOT NULL REFERENCES agent_runtime(id) ON DELETE CASCADE,
+    -- Runtime relationships and dependent cleanup are enforced explicitly by
+    -- the application inside the transaction that deletes agent_runtime.
+    runtime_id UUID NOT NULL,
     -- Approved hook-capable providers. A third is a new migration that
     -- widens the check, never a data fix.
     provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
@@ -84,8 +81,8 @@ CREATE TABLE hook_state_snapshot (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- The widened lookup key gives each source file its own row. Its
     -- (runtime_id, provider, scope) leading prefix still lets one index serve
-    -- offline-view lookup, the refresh-upsert arbiter, and FK enforcement on
-    -- runtime_id. The disjoint-index rationale for splitting state from fire
+    -- offline-view lookup and the refresh-upsert arbiter. The disjoint-index
+    -- rationale for splitting state from fire
     -- history therefore survives unchanged.
     CONSTRAINT hook_state_snapshot_runtime_id_provider_scope_format_key
         UNIQUE (runtime_id, provider, scope, format),

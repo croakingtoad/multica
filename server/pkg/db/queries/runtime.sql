@@ -395,6 +395,17 @@ RETURNING *;
 -- name: DeleteAgentRuntime :exec
 DELETE FROM agent_runtime WHERE id = $1;
 
+-- name: DeleteRuntimeHookData :exec
+-- Application-layer cascade: hook tables deliberately carry no foreign keys,
+-- so every runtime-delete path removes both dependents before agent_runtime in
+-- the same application transaction.
+WITH deleted_snapshots AS (
+    DELETE FROM hook_state_snapshot
+    WHERE hook_state_snapshot.runtime_id = @target_runtime_id
+)
+DELETE FROM hook_fire_history
+WHERE hook_fire_history.runtime_id = @target_runtime_id;
+
 -- name: DeleteSystemAgentsByRuntime :exec
 -- System agents are invisible execution infrastructure (for example the Agent
 -- Builder). Remove them before deleting their runtime so the RESTRICT runtime

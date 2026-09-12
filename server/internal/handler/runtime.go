@@ -954,6 +954,10 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := qtx.DeleteRuntimeHookData(r.Context(), rt.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clean up runtime hook data")
+		return
+	}
 	if err := qtx.DeleteAgentRuntime(r.Context(), rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return
@@ -1166,7 +1170,11 @@ func (h *Handler) UnbindAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Finally delete the runtime row itself.
+	// Finally delete the runtime's hook data and the runtime row itself.
+	if err := qtx.DeleteRuntimeHookData(r.Context(), rt.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clean up runtime hook data")
+		return
+	}
 	if err := qtx.DeleteAgentRuntime(r.Context(), rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return
