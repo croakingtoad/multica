@@ -572,6 +572,7 @@
       "expected_path": "将从 {{path}} 读取",
       "content_hash": "内容哈希 {{hash}}",
       "entry_count": "条目：{{count}}",
+      "entry_count_unknown": "条目：未能确定",
       "write_note": "user 作用域是守护进程主机上唯一的来源，因此也是 Multica 唯一可能写入的来源。project 和 local 属于此运行时没有身份信息的代码检出。此标签页不写入任何内容。"
     },
     "summary": {
@@ -585,6 +586,9 @@
       "events": "事件",
       "sources_found": "已找到的来源",
       "sources_not_checked": "未检查的来源",
+      "not_established": "未能确定",
+      "unestablished_note": "Multica 无法解释此运行时的 hook 来源，因此上面的任何计数都未能确定。显示 0 就是在断言这些文件的内容，而读取根本没有走到那一步。下面的来源状态仍然是实际观测到的。",
+      "partial_note": "至少有一个来源无法解释。上面的计数只涵盖成功解析的来源，应当读作下限而非总数。",
       "no_order_note": "这里没有任何编号。两个提供方都不为 hooks 指定执行顺序，显示顺序就等于编造顺序。"
     },
     "events": {

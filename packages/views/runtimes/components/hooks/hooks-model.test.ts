@@ -100,6 +100,7 @@ describe("hookScopeRows", () => {
         source({ scope: "local", state: "not_checked", source_path: null, content_hash: null }),
       ],
       [entry()],
+      null,
     );
 
     expect(rows.map((row) => row.state)).toEqual(["found", "absent", "not_checked"]);
@@ -123,13 +124,57 @@ describe("hookScopeRows", () => {
           ],
         }),
       ],
+      null,
     );
 
     expect(rows.map((row) => row.entryCount)).toEqual([1, 1]);
   });
 
   it("returns no rows when the read carried no sources", () => {
-    expect(hookScopeRows("claude", undefined, [])).toEqual([]);
+    expect(hookScopeRows("claude", undefined, [], null)).toEqual([]);
+  });
+
+  // LOCO-408 AC1: a source whose entries could not be resolved has no entry
+  // count. Zero would be the "no hooks" claim restated as a number, and
+  // server/internal/runtimehooks/projection.go states the opposite rule: the
+  // honest report of an unreadable snapshot is that it could not be resolved.
+  it("states no entry count for a found source whose resolution failed", () => {
+    const rows = hookScopeRows(
+      "claude",
+      [source()],
+      [],
+      "parse ~/.claude/settings.json: unexpected end of JSON input",
+    );
+
+    expect(rows[0]?.state).toBe("found");
+    expect(rows[0]?.entryCount).toBeNull();
+  });
+
+  // LOCO-408 AC3: the fix is not "suppress zeros". A source that resolved
+  // cleanly and genuinely holds nothing still says so.
+  it("still states zero for a source that resolved cleanly and holds nothing", () => {
+    const rows = hookScopeRows("claude", [source()], [], null);
+
+    expect(rows[0]?.entryCount).toBe(0);
+  });
+
+  // LOCO-408 AC1, partial half: Project() carries its error alongside the
+  // entries it could resolve, so a source that contributed entries
+  // demonstrably parsed and keeps its real count. Only the found source that
+  // contributed none is ambiguous — it may be the one that failed.
+  it("keeps the counts it has when only some sources resolved", () => {
+    const rows = hookScopeRows(
+      "claude",
+      [
+        source(),
+        source({ scope: "project", source_path: "/w/.claude/settings.json" }),
+        source({ scope: "local", state: "absent", source_path: null, content_hash: null }),
+      ],
+      [entry()],
+      "parse /w/.claude/settings.json: invalid character '}'",
+    );
+
+    expect(rows.map((row) => row.entryCount)).toEqual([1, null, 0]);
   });
 });
 
@@ -213,13 +258,16 @@ describe("hookTotals", () => {
         source({ scope: "local", state: "absent", source_path: null, content_hash: null }),
       ],
       [],
+      null,
     );
     const totals = hookTotals(
       [entry(), entry({ hook_id: "b", configuration: "parked" })],
       scopes,
+      null,
     );
 
     expect(totals).toMatchObject({
+      entryCoverage: "complete",
       configured: 2,
       willRun: 1,
       inactive: 1,
@@ -228,6 +276,45 @@ describe("hookTotals", () => {
       absentSources: 1,
       notCheckedSources: 1,
     });
+  });
+
+  // LOCO-408 AC2: the runtime rail has to separate "zero" from "not
+  // established" too. With nothing resolved there is no entry total to state
+  // — but the source states came from the host's own diff of expected against
+  // observed, which a parse failure does not touch, so those stay.
+  it("establishes no entry total when resolution produced nothing", () => {
+    const scopes = hookScopeRows(
+      "claude",
+      [
+        source(),
+        source({ scope: "project", state: "not_checked", source_path: null, content_hash: null }),
+      ],
+      [],
+      "parse ~/.claude/settings.json: unexpected end of JSON input",
+    );
+
+    const totals = hookTotals([], scopes, "parse ~/.claude/settings.json: unexpected end of JSON input");
+
+    expect(totals.entryCoverage).toBe("unestablished");
+    expect(totals.foundSources).toBe(1);
+    expect(totals.notCheckedSources).toBe(1);
+  });
+
+  // LOCO-408 AC2, second half: a partial failure keeps the counts it
+  // legitimately has and is not allowed to present them as a complete total.
+  it("marks a partly resolved read as a floor rather than a total", () => {
+    const error = "parse /w/.claude/settings.json: invalid character '}'";
+    const scopes = hookScopeRows(
+      "claude",
+      [source(), source({ scope: "project" })],
+      [entry()],
+      error,
+    );
+
+    const totals = hookTotals([entry()], scopes, error);
+
+    expect(totals.entryCoverage).toBe("partial");
+    expect(totals.configured).toBe(1);
   });
 });
 
@@ -244,6 +331,7 @@ describe("hookEmptySummary", () => {
         source({ scope: "local", state: "not_checked" }),
       ],
       [],
+      null,
     );
 
     const summary = hookEmptySummary(scopes);
@@ -262,6 +350,7 @@ describe("hookEmptySummary", () => {
         source({ scope: "project", state: "not_checked" }),
       ],
       [],
+      null,
     );
 
     const summary = hookEmptySummary(scopes);
@@ -275,6 +364,7 @@ describe("hookEmptySummary", () => {
       "claude",
       [source({ scope: "user", source_path: null })],
       [],
+      null,
     );
 
     expect(hookEmptySummary(scopes).readPaths).toEqual([

@@ -23,7 +23,11 @@ import {
   hookToneClass,
   useNeverRunsReason,
 } from "./hook-state-badges";
-import { type HookEventGroup, entryWillRun } from "./hooks-model";
+import {
+  type HookEventGroup,
+  entryWillRun,
+  hookScopeIsWritable,
+} from "./hooks-model";
 
 /**
  * The handler's most identifying field. Each provider names it differently and
@@ -212,7 +216,7 @@ function HookRow({
               <ScopeBadge
                 scope={source.scope}
                 format={source.format}
-                writable={source.scope === "user"}
+                writable={hookScopeIsWritable(source.scope)}
               />
             </div>
           ))}

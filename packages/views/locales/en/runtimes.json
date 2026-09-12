@@ -589,6 +589,7 @@
       "expected_path": "Would be read from {{path}}",
       "content_hash": "Content hash {{hash}}",
       "entry_count": "Entries: {{count}}",
+      "entry_count_unknown": "Entries: not established",
       "write_note": "The user scope is the only source on the daemon host, so it is the only one Multica could ever write. Project and local belong to a checkout this runtime has no identity for. Nothing on this tab writes anything."
     },
     "summary": {
@@ -602,6 +603,9 @@
       "events": "Events",
       "sources_found": "Sources found",
       "sources_not_checked": "Sources not checked",
+      "not_established": "Not established",
+      "unestablished_note": "Multica could not interpret this runtime's hook sources, so none of the counts above were established. Zero would be a claim about what the files hold, and the read never got that far. The source states below were still observed.",
+      "partial_note": "At least one source could not be interpreted. The counts above cover only the sources that resolved, so read them as a floor rather than a total.",
       "no_order_note": "Nothing here is numbered. Neither provider assigns hooks an execution order, so an order shown would be an invented one."
     },
     "events": {
