@@ -625,6 +625,8 @@
     "pipeline": {
       "stat_percent": "complete",
       "stat_tasks": "tasks",
+      "part_tasks_one": "task",
+      "part_tasks_other": "tasks",
       "stat_gaps": "parts not decomposed",
       "gate_covered": "Gate: {{covered}} of {{total}} parts covered",
       "blocked_on_phase": "Blocked on {{title}}",
