@@ -461,6 +461,7 @@ func stageFakeAgent(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell not available on Windows")
 	}
+	cli.IsolateConfigRoot(t)
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "claude")
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -1524,7 +1525,7 @@ func pinNonCodexAgentsToMissingPaths(t *testing.T) {
 
 // writeCLIConfigForProfile is a minimal helper for the override tests:
 // stages a HOME, writes a config.json under the given profile (empty profile
-// = default), and returns the resolved path so tests can assert against it.
+// = default).
 func writeCLIConfigForProfile(t *testing.T, profile string, cfg cli.CLIConfig) {
 	t.Helper()
 	cli.IsolateConfigRoot(t)
