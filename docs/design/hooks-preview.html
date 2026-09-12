@@ -679,7 +679,7 @@ const HOOKS = {
     { id: 'c5', event: 'PostToolUse', matcher: 'Write|Edit', scope: 'user', type: 'command',
       command: '~/.claude/hooks/format-changed.sh', timeout: 30, async: true, shell: 'bash',
       owner: 'multica', parked: false, installedFrom: 'auto-format',
-      desc: 'Formats whatever the turn touched. async, so its exit status is never read.' },
+      desc: 'Formats whatever the turn touched. async, so its exit status is not acted on.' },
     { id: 'c6', event: 'PostToolUse', matcher: 'Edit.*', scope: 'user', type: 'command',
       command: '~/.claude/hooks/no-mock-code.py', timeout: 15, async: false, shell: 'bash',
       owner: 'user', parked: false, overmatch: true,
@@ -715,6 +715,17 @@ const HOOKS = {
       owner: 'multica', parked: false, installedFrom: 'context-cost', stopFeedback: true,
       desc: 'Hands Claude the turn cost as hookSpecificOutput.additionalContext — non-error feedback, so the turn continues and the transcript labels it "Stop hook feedback" with no hook error. Claude-only on this event: Codex Stop has no additionalContext. It takes decision/reason plus the shared continue, stopReason and systemMessage fields (suppressOutput is parsed but not yet implemented).' },
 
+    /* Both HTTP allowlists below are documented, not inferred. Claude hooks
+       reference, "Hook locations", verbatim: "The HTTP hook allowlists apply to
+       hooks from every source, including managed policy settings:
+       `allowedHttpHookUrls`: when defined at any settings level, Claude Code
+       runs an HTTP hook handler only if its URL matches the merged allowlist.
+       `httpHookAllowedEnvVars`: when defined, Claude Code interpolates only the
+       environment variables on that list into hook headers."
+       — https://code.claude.com/docs/en/hooks#hook-locations
+       Checked by name on 2026-09-12 because allowedEnvVars, the same shape of
+       claim on the Codex side, turned out fabricated (LOCO-480). These two are
+       real. Codex has no http handler at all, hence "Claude only". */
     { id: 'c12', event: 'Notification', matcher: '', scope: 'user', type: 'http',
       url: 'https://hooks.slack.com/services/T0…/B0…/xxxx', timeout: 10, async: true,
       owner: 'multica', parked: false, installedFrom: 'slack-notify',
@@ -829,7 +840,7 @@ const FIRE_LOG = {
       { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'branch-guard.sh', ms: null, verdict: 'neverran', task: 'LOCO-82',
         note: 'Has an if condition, and if is only evaluated on tool events. On UserPromptSubmit the handler is loaded and never invoked — no error, no log line of its own. This row is inferred from its absence.' },
       { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
-        note: 'async:true — spawned and detached. Claude records the spawn, never the outcome.' },
+        note: 'async:true — spawned and detached. No structured record of the run is kept, so this row carries no duration or verdict. The exit status is not acted on, but completion is not hidden: notices show under --verbose or Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' },
       { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
         note: 'The same formatter again, from the plugin layer. A plugin copy is not deduped against the settings-file copy, so the repo formatter really did run twice on one edit.' },
       { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'rm-rf-guard.py', ms: 51, verdict: 'deduped', task: 'LOCO-81',
@@ -1082,7 +1093,7 @@ function runState(h, runtime) {
   if (h.broken === 'path') return { runs: true, label: 'Failing',  cls: 'b-bad',  icon: 'circleAlert',
     why: 'Registered and fires, but the command cannot be found. Claude treats that as non-blocking \u2014 the action proceeds and Claude never sees the failure. The transcript does get a hook-error notice with the first line of stderr; what nothing keeps is a record of it.' };
   if (h.async)       return { runs: true,  label: 'Active · async', cls: 'b-ok', icon: 'zap',
-    why: 'Runs detached. Its exit status is never checked, so a failure is invisible.' };
+    why: 'Runs detached. Its exit status is not acted on and no structured record of the run is kept, so a failure drives nothing. It is not invisible, though: completion notices show under --verbose or Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' };
   return { runs: true, label: 'Active', cls: 'b-ok', icon: 'check', why: 'Registered and running.' };
 }
 
@@ -1652,7 +1663,13 @@ function accumulationTable(r, byEvent) {
 
 /* Kill switches — the only mechanism on either provider that resembles
    precedence, and it is global rather than per-entry. Rendered as live
-   what-if toggles so the blast radius is visible instead of described. */
+   what-if toggles so the blast radius is visible instead of described.
+
+   The Claude-side caption names allowedHttpHookUrls and httpHookAllowedEnvVars.
+   Both are documented, and so is the merge-across-levels and every-source
+   behaviour the caption asserts: "The HTTP hook allowlists apply to hooks from
+   every source, including managed policy settings" — see the fuller quote at
+   the c12 seed entry. — https://code.claude.com/docs/en/hooks#hook-locations */
 function killSwitchCard(r, hooks) {
   const prov = r.provider;
   const names = prov === 'claude'
@@ -1703,7 +1720,7 @@ function killSwitchCard(r, hooks) {
         <hr class="sep" />
         <div class="t-caption muted">${ic('key', 11)} Codex has a third lever with no Claude equivalent: <code class="cmd">--dangerously-bypass-hook-trust</code> runs enabled hooks for one invocation without persisted trust.</div>` : `
         <hr class="sep" />
-        <div class="t-caption muted">${ic('info', 11)} Claude also gates <code class="cmd">http</code> handlers through <code class="cmd">allowedHttpHookUrls</code> and <code class="cmd">httpHookAllowedEnvVars</code>. Those allowlists <em>merge</em> across levels too, and apply to hooks from every source including managed policy.</div>`}
+        <div class="t-caption muted">${ic('info', 11)} Claude has two allowlists for <code class="cmd">http</code> handlers: <code class="cmd">allowedHttpHookUrls</code> decides whether the handler runs at all, and <code class="cmd">httpHookAllowedEnvVars</code> decides which environment variables get interpolated into its headers. Both <em>merge</em> across levels too, and apply to hooks from every source including managed policy.</div>`}
       </div>
     </div>
     ${(state.killAll || state.killManagedOnly) ? `
@@ -2740,7 +2757,7 @@ function trustDialog() {
         <div><strong class="semibold">This is what makes a Codex hooks manager awkward.</strong> Codex only runs a hook while its hash matches
         <code class="cmd">[hooks.state].trusted_hash</code> in <code class="cmd">~/.codex/config.toml</code>. Any edit — including one Multica
         makes on your behalf — breaks the match, and Codex then marks the hook for review and skips it until it is trusted again. You do get a
-        warning at startup telling you to open <code class="cmd">/hooks</code>, but nothing at the moment of the missed fire. Writing Codex hooks from a web app
+        warning at startup telling you to open <code class="cmd">/hooks</code>. Writing Codex hooks from a web app
         therefore breaks them by definition, and re-trust has to be part of the flow rather than an afterthought.</div>
       </div>
       <div class="field">
