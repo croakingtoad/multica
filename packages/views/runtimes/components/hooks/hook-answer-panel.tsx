@@ -58,8 +58,9 @@ import {
 //     conditions — "these run if their matcher is satisfied" — and never a
 //     set of handlers that fire.
 //  2. "Multica cannot answer" is never rendered as "nothing runs". The
-//     unanswerable state shows no counts and no sets at all, only the matcher
-//     it could not evaluate and the engine's own message.
+//     unanswerable state shows no counts and no sets at all — only what the
+//     answer itself carries: an unevaluable matcher and its message when there
+//     is one, and otherwise the raw error with no cause named for it.
 //  3. Nothing is ordered. Every set is a `<ul>`, nothing is numbered, and the
 //     panel says in words that Multica does not know the order the provider
 //     runs them in. Neither provider publishes one.
@@ -314,6 +315,18 @@ function AnswerBody({
     // No counts, no sets, nothing partitioned. "Nothing runs" is a statement
     // about the host; this state is a statement about Multica's engine, and
     // the two are not interchangeable.
+    //
+    // LOCO-476 / LOCO-547. `answerable !== true` is reached by five routes, and
+    // an unevaluable matcher is only one of them — a malformed Codex hook-state
+    // envelope, a missing state object, a Claude parked sidecar without
+    // `parked_at`, and an unparsable hooks payload all land here with
+    // `unevaluable` empty. So the matcher sentence is read off the one field
+    // that distinguishes them rather than asserted for the whole state: it is
+    // accurate exactly when there is an unevaluable matcher to attribute it to,
+    // and naming a regex cause on the other four routes would tell the reader a
+    // cause that did not occur. The neutral body names no cause at all; neither
+    // branch weakens the verdict-level refusal below it.
+    const unevaluable = view.answer?.unevaluable ?? [];
     return (
       <div className="space-y-3">
         <div className="rounded-md border border-warning/40 bg-warning/5 p-3">
@@ -330,14 +343,23 @@ function AnswerBody({
             })}
           </p>
           <p className="mt-1 text-caption text-muted-foreground">
-            {t(($) => $.hooks.answer.unanswerable_body)}
+            {unevaluable.length > 0
+              ? t(($) => $.hooks.answer.unanswerable_body)
+              : t(($) => $.hooks.answer.unanswerable_body_unattributed)}
           </p>
           <p className="mt-1 text-caption text-muted-foreground">
-            {t(($) => $.hooks.answer.unanswerable_not_empty)}
+            {/* The refusal is the same on both routes; only its closing
+                clause is not. "including the handlers whose matchers are
+                perfectly ordinary" earns its reference to matchers from the
+                unevaluable one beside it, and has nothing to contrast with
+                when no matcher is named. */}
+            {unevaluable.length > 0
+              ? t(($) => $.hooks.answer.unanswerable_not_empty)
+              : t(($) => $.hooks.answer.unanswerable_not_empty_unattributed)}
           </p>
         </div>
         <ul className="space-y-2">
-          {(view.answer?.unevaluable ?? []).map((item) => (
+          {unevaluable.map((item) => (
             <li
               key={item.hook_id}
               className="rounded-md border bg-muted/30 p-3"

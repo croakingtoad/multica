@@ -1020,9 +1020,60 @@ describe("LifecycleHooksTab — what actually runs", () => {
     expect(text).toMatch(/\^\(\?!Notebook\)\.\*/);
     expect(text).toMatch(/invalid or unsupported Perl syntax/);
     expect(text).toMatch(/Nothing is claimed to run and nothing is claimed not to run/);
+    // LOCO-547's positive control: there IS an unevaluable matcher on this
+    // answer, so the matcher cause is the one thing the panel may attribute,
+    // and the closing clause may contrast against ordinary matchers.
+    expect(text).toMatch(
+      /the provider permits regular-expression syntax Multica's engine does not compile/,
+    );
+    expect(text).toMatch(/including the handlers whose matchers are perfectly ordinary/);
     // No headline count anywhere, and no matched set heading.
     expect(text).not.toMatch(/handlers configured on this event run/);
     expect(text).not.toMatch(/Matched by this value/);
+  });
+
+  // LOCO-476 / LOCO-547. `answerable !== true` has five routes into it and
+  // only one is an unevaluable matcher; the audit drove the other four —
+  // a malformed Codex hook-state envelope, a missing state object, a Claude
+  // parked sidecar without `parked_at`, and an unparsable hooks payload —
+  // through the production resolution layer and each arrived with
+  // `unevaluable` empty. The panel stated a regular-expression cause for all
+  // of them, and captioned the raw error as the evaluator's when it came from
+  // decoding a settings file. Both are cause claims the payload cannot support.
+  it("names no cause when an unanswerable answer carries no unevaluable matcher", () => {
+    mountWithAnswer(
+      answerResult({
+        answerable: false,
+        // One of the four real non-matcher routes: the hook-state envelope
+        // did not decode, so nothing was evaluated at all.
+        error: 'decode codex "[hooks.state]": toml: expected a table',
+        unevaluable: [],
+      }),
+    );
+    // Scoped to the panel rather than the whole tab, because the configured
+    // list below it legitimately captions matchers. Asserted so a layout
+    // change fails here instead of passing on an empty string.
+    const title = screen.getByText("Multica cannot answer for PreToolUse");
+    const panel = title.closest("div")?.parentElement;
+    expect(panel).toBeTruthy();
+    const text = panel?.textContent ?? "";
+    expect(text).toContain("Multica cannot answer for PreToolUse");
+
+    // The limit is stated, without a cause the answer does not carry.
+    expect(text).toMatch(/the answer does not identify which step failed/);
+    // Scope is unchanged: still the whole event, not one hook.
+    expect(text).toMatch(/not to any one hook/);
+    // And the verdict-level refusal is intact — this is still not a claim
+    // that something runs or does not run.
+    expect(text).toMatch(/Nothing is claimed to run and nothing is claimed not to run/);
+
+    // No invented cause anywhere in the panel body.
+    expect(text).not.toMatch(/regular-expression/);
+    expect(text).not.toMatch(/matcher/i);
+    // And no invented origin for the error: it did not come from evaluation.
+    expect(text).not.toMatch(/The evaluator reported/);
+    expect(text).toMatch(/The answer carried this error, for the whole event:/);
+    expect(text).toContain('decode codex "[hooks.state]": toml: expected a table');
   });
 
   // An answerable event with an empty matched set is a real answer about the
