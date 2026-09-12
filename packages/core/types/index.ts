@@ -86,6 +86,10 @@ export type {
   RuntimeHookSourceState,
   RuntimeHookSource,
   RuntimeHookReadRequest,
+  RuntimeHookFireProvenance,
+  RuntimeHookFireOutcome,
+  RuntimeHookFire,
+  RuntimeHookFireFeed,
   IssueUsageSummary,
   MikaBootstrapResponse,
 } from "./agent";
