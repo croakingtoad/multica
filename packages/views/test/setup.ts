@@ -1,22 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 
 function createMemoryStorage(): Storage {
-  const values = new Map<string, string>();
-
-  return {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key: string) => values.get(key) ?? null,
-    key: (index: number) => Array.from(values.keys())[index] ?? null,
-    removeItem: (key: string) => {
-      values.delete(key);
-    },
-    setItem: (key: string, value: string) => {
-      values.set(key, value);
-    },
-  };
+  // A same-origin frame still exposes jsdom's real in-memory Storage when
+  // Node's broken global shadows the top-level one.
+  const frame = document.createElement("iframe");
+  document.documentElement.append(frame);
+  const storage = frame.contentWindow!.localStorage;
+  Object.setPrototypeOf(storage, Storage.prototype);
+  frame.remove();
+  return storage;
 }
 
 // Everything below patches gaps in jsdom. Pure-logic suites opt out of jsdom
