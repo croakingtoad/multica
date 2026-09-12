@@ -1324,6 +1324,79 @@ export interface RuntimeHookSource {
   observed_at?: string;
 }
 
+// Configuration and effectiveness are two independent axes. A hook can be
+// parked *and* matcher-ineligible, so a consumer that collapses them into one
+// state loses the fact that unparking it still would not make it run.
+export type RuntimeHookConfiguration = "live" | "parked" | "disabled";
+
+export type RuntimeHookEffectiveness =
+  | "will_run"
+  | "never_runs"
+  | "trust_unknown";
+
+export type RuntimeHookNeverRunsReason =
+  | "matcher_ineligible"
+  | "handler_type_unsupported_by_provider"
+  | "handler_type_unsupported_for_event";
+
+export type RuntimeHookTrust =
+  | "not_applicable"
+  | "pending_review"
+  | "trusted_as_of_snapshot"
+  | "disabled"
+  | "managed_by_policy";
+
+// `unevaluable` is Multica's own limit, not a provider verdict: Go's RE2
+// rejects regex constructs the Claude doc permits. It must never be rendered
+// as a normal matcher, nor as a reason the hook does not run.
+export type RuntimeHookMatcherKind =
+  | "all"
+  | "exact"
+  | "regex"
+  | "ignored"
+  | "unevaluable";
+
+export interface RuntimeHookSourceRef {
+  scope: string;
+  format: string;
+  kind: string;
+  name?: string;
+}
+
+export interface RuntimeHookEntry {
+  hook_id: string;
+  event: string;
+  matcher: string;
+  matcher_kind: RuntimeHookMatcherKind;
+  matcher_error?: string;
+  handler: Record<string, unknown>;
+  handler_type: string;
+  // More than one source means the providers' own cross-file deduplication
+  // matched the handler. It is provenance, never an execution order.
+  sources: RuntimeHookSourceRef[];
+  configuration: RuntimeHookConfiguration;
+  parked_at?: string;
+  effectiveness: RuntimeHookEffectiveness;
+  never_runs_reason?: RuntimeHookNeverRunsReason;
+  trust: RuntimeHookTrust;
+  trust_caveat?: string;
+}
+
+export interface RuntimeHookUnrecognizedKey {
+  source: RuntimeHookSourceRef;
+  key: string;
+  reason: string;
+}
+
+// `error` means the snapshot could not be resolved — which is not the same
+// answer as an empty `entries`, and must never be rendered as "no hooks".
+export interface RuntimeHookResolution {
+  provider: string;
+  entries: RuntimeHookEntry[];
+  unrecognized_keys?: RuntimeHookUnrecognizedKey[];
+  error?: string;
+}
+
 export interface RuntimeHookReadRequest {
   id?: string;
   runtime_id: string;
@@ -1331,6 +1404,7 @@ export interface RuntimeHookReadRequest {
   cached: boolean;
   observed_at?: string;
   sources?: RuntimeHookSource[];
+  resolved?: RuntimeHookResolution;
   error?: string;
   created_at?: string;
   updated_at?: string;

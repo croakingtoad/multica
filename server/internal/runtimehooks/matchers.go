@@ -80,27 +80,23 @@ func matchEventEntries(provider Provider, event, value string, entries []Resolve
 	return result, nil
 }
 
+// providerMatcherMatches evaluates matcher against value on the path
+// EvaluateMatcher classifies. Sharing that classifier is deliberate: the
+// matcher kind a reader is shown and the rule a match is decided by are then
+// the same rule, and cannot drift apart.
 func providerMatcherMatches(provider Provider, event, matcher, value string) (bool, error) {
-	if matcher == "" || matcher == "*" {
+	switch EvaluateMatcher(provider, event, matcher).Kind {
+	case MatcherAll, MatcherIgnored:
 		return true, nil
-	}
-	if provider == ProviderCodex {
-		if codexIgnoresMatcher(event) {
-			return true, nil
-		}
+	case MatcherExact:
+		// Only Claude reaches the exact path, and only its wider set admits
+		// the comma separator that the narrow-matcher events exclude.
+		return exactMatcherMatches(matcher, value, !isClaudeNarrowMatcherEvent(event)), nil
+	default:
+		// MatcherRegex and MatcherUnevaluable alike: regexMatches returns the
+		// compiler's error for the latter rather than a silent false.
 		return regexMatches(provider, matcher, value)
 	}
-	if claudeIgnoresMatcher(event) {
-		return true, nil
-	}
-	if isClaudeNarrowMatcherEvent(event) {
-		if claudeNarrowExactMatcher.MatchString(matcher) {
-			return exactMatcherMatches(matcher, value, false), nil
-		}
-	} else if claudeExactMatcher.MatchString(matcher) {
-		return exactMatcherMatches(matcher, value, true), nil
-	}
-	return regexMatches(provider, matcher, value)
 }
 
 func exactMatcherMatches(matcher, value string, splitCommas bool) bool {

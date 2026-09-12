@@ -2967,3 +2967,155 @@ describe("ApiClient session expiry", () => {
     expect(storage.getItem("multica_token")).toBeNull();
   });
 });
+
+/**
+ * Lifecycle hook reads (LOCO-126).
+ *
+ * The hooks tab renders three distinct source states and two independent
+ * per-entry axes, so a drifted body must not be able to turn any of them into
+ * a confident wrong answer. Two failure modes matter here: an unparseable body
+ * has to become an explicit failed read rather than an empty hook list, and an
+ * unknown enum value has to survive parsing so the UI's default branch — not
+ * the fallback — decides how to render it.
+ */
+describe("ApiClient lifecycle hook reads", () => {
+  function stubHookJSON(body: unknown) {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("degrades a malformed initiate body to an explicit failed read", async () => {
+    stubHookJSON("not-an-object");
+
+    const result = await new ApiClient("https://api.example.test")
+      .initiateHookRead("rt-1");
+
+    expect(result.status).toBe("failed");
+    expect(result.runtime_id).toBe("rt-1");
+    expect(result.cached).toBe(false);
+    // Not an empty array: "we could not read this" must stay distinguishable
+    // from "every expected scope was checked and held nothing".
+    expect(result.sources).toBeUndefined();
+    expect(result.resolved).toBeUndefined();
+  });
+
+  it("degrades a malformed poll body to an explicit failed read", async () => {
+    stubHookJSON({ sources: "nope" });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-9");
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/did not match/i);
+  });
+
+  it("keeps the resolved projection and its two axes intact", async () => {
+    stubHookJSON({
+      id: "req-1",
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      sources: [
+        {
+          provider: "claude",
+          scope: "user",
+          format: "json",
+          state: "found",
+          source_path: "/home/u/.claude/settings.json",
+          content_hash: "abc",
+        },
+      ],
+      resolved: {
+        provider: "claude",
+        entries: [
+          {
+            hook_id: "sha256:1",
+            event: "Notification",
+            matcher: "",
+            matcher_kind: "all",
+            handler: { type: "command", command: "ping" },
+            handler_type: "command",
+            sources: [{ scope: "user", format: "json", kind: "settings" }],
+            configuration: "parked",
+            parked_at: "2026-09-10T10:00:00Z",
+            effectiveness: "never_runs",
+            never_runs_reason: "matcher_ineligible",
+            trust: "not_applicable",
+          },
+        ],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-1");
+
+    expect(result.status).toBe("completed");
+    const entry = result.resolved?.entries[0];
+    expect(entry?.configuration).toBe("parked");
+    expect(entry?.parked_at).toBe("2026-09-10T10:00:00Z");
+    expect(entry?.effectiveness).toBe("never_runs");
+    expect(entry?.never_runs_reason).toBe("matcher_ineligible");
+    expect(entry?.sources[0]?.scope).toBe("user");
+  });
+
+  it("passes an unknown provider state through instead of discarding the read", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: true,
+      observed_at: "2026-09-12T11:00:00Z",
+      resolved: {
+        provider: "codex",
+        entries: [
+          {
+            hook_id: "sha256:2",
+            event: "PreToolUse",
+            matcher: "Bash",
+            matcher_kind: "regex",
+            handler: { type: "command", command: "guard" },
+            handler_type: "command",
+            sources: [{ scope: "user", format: "toml", kind: "settings" }],
+            configuration: "quarantined",
+            effectiveness: "trust_unknown",
+            trust: "some_future_state",
+          },
+        ],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-2");
+
+    expect(result.status).toBe("completed");
+    expect(result.resolved?.entries[0]?.configuration).toBe("quarantined");
+    expect(result.resolved?.entries[0]?.trust).toBe("some_future_state");
+  });
+
+  it("keeps a resolution failure distinct from an empty hook list", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: true,
+      observed_at: "2026-09-12T11:00:00Z",
+      sources: [],
+      resolved: {
+        provider: "claude",
+        entries: [],
+        error: "decode parked hooks from settings (user/json): unexpected end of JSON input",
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-3");
+
+    expect(result.resolved?.entries).toEqual([]);
+    expect(result.resolved?.error).toMatch(/decode parked hooks/);
+  });
+});

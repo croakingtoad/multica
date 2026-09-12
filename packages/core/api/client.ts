@@ -323,6 +323,8 @@ import {
   SourceContextPreviewSchema,
   CommentSubIssueTaskResponseSchema,
   ListWebhookDeliveriesResponseSchema,
+  RuntimeHookReadRequestSchema,
+  failedRuntimeHookRead,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
@@ -2390,14 +2392,30 @@ export class ApiClient {
   }
 
   async initiateHookRead(runtimeId: string): Promise<RuntimeHookReadRequest> {
-    return this.fetch(`/api/runtimes/${runtimeId}/hooks`, { method: "POST" });
+    const raw = await this.fetch<unknown>(`/api/runtimes/${runtimeId}/hooks`, {
+      method: "POST",
+    });
+    return parseWithFallback(
+      raw,
+      RuntimeHookReadRequestSchema,
+      failedRuntimeHookRead(runtimeId),
+      { endpoint: "POST /api/runtimes/{id}/hooks" },
+    );
   }
 
   async getHookReadResult(
     runtimeId: string,
     requestId: string,
   ): Promise<RuntimeHookReadRequest> {
-    return this.fetch(`/api/runtimes/${runtimeId}/hooks/${requestId}`);
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/hooks/${requestId}`,
+    );
+    return parseWithFallback(
+      raw,
+      RuntimeHookReadRequestSchema,
+      failedRuntimeHookRead(runtimeId),
+      { endpoint: "GET /api/runtimes/{id}/hooks/{requestId}" },
+    );
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {

@@ -74,6 +74,7 @@ import type {
   PluginPreview,
   PluginSurfaceLaunch,
   ResourceLabelsResponse,
+  RuntimeHookReadRequest,
   RuntimeModelListRequest,
   SearchIssuesResponse,
   SearchProjectsResponse,
@@ -3468,3 +3469,79 @@ export const EMPTY_JOIN_SHARE_LINK_RESPONSE: {
   workspace_id: "",
   workspace_slug: "",
 };
+
+// Lifecycle hooks. Every enum stays `z.string()` so an unknown provider state
+// still parses and reaches a `default`-bearing switch rather than collapsing
+// the whole observation to the fallback. The fallback itself is a failed read,
+// not an empty one: "we could not parse this" and "this runtime has no hooks"
+// are different answers and the UI renders them differently.
+export const RuntimeHookSourceRefSchema = z.object({
+  scope: z.string().default(""),
+  format: z.string().default(""),
+  kind: z.string().default("settings"),
+  name: z.string().optional(),
+}).loose();
+
+export const RuntimeHookEntrySchema = z.object({
+  hook_id: z.string(),
+  event: z.string().default(""),
+  matcher: z.string().default(""),
+  matcher_kind: z.string().default("all"),
+  matcher_error: z.string().optional(),
+  handler: z.record(z.string(), z.unknown()).default({}),
+  handler_type: z.string().default(""),
+  sources: z.array(RuntimeHookSourceRefSchema).default([]),
+  configuration: z.string().default("live"),
+  parked_at: z.string().optional(),
+  effectiveness: z.string().default("will_run"),
+  never_runs_reason: z.string().optional(),
+  trust: z.string().default("not_applicable"),
+  trust_caveat: z.string().optional(),
+}).loose();
+
+export const RuntimeHookResolutionSchema = z.object({
+  provider: z.string().default(""),
+  entries: z.array(RuntimeHookEntrySchema).default([]),
+  unrecognized_keys: z.array(z.object({
+    source: RuntimeHookSourceRefSchema,
+    key: z.string().default(""),
+    reason: z.string().default(""),
+  }).loose()).optional(),
+  error: z.string().optional(),
+}).loose();
+
+export const RuntimeHookSourceSchema = z.object({
+  provider: z.string().default(""),
+  scope: z.string().default(""),
+  format: z.string().default("json"),
+  state: z.string().default("not_checked"),
+  // Both null together is the server's "checked and absent" signal, so these
+  // stay nullable rather than defaulting to an empty string.
+  source_path: z.string().nullable().default(null),
+  content_hash: z.string().nullable().default(null),
+  hooks: z.unknown().optional(),
+  disabled_hooks: z.unknown().optional(),
+  observed_at: z.string().optional(),
+}).loose();
+
+export const RuntimeHookReadRequestSchema = z.object({
+  id: z.string().optional(),
+  runtime_id: z.string().default(""),
+  status: z.string().default("failed"),
+  cached: z.boolean().default(false),
+  observed_at: z.string().optional(),
+  // Absent `sources` is meaningful: a queued read has no observation yet, and
+  // an empty array would claim every expected scope was checked and empty.
+  sources: z.array(RuntimeHookSourceSchema).optional(),
+  resolved: RuntimeHookResolutionSchema.optional(),
+  error: z.string().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+}).loose();
+
+export const failedRuntimeHookRead = (runtimeId: string): RuntimeHookReadRequest => ({
+  runtime_id: runtimeId,
+  status: "failed",
+  cached: false,
+  error: "hook read response did not match the expected shape",
+});

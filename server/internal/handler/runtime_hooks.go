@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/runtimehooks"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -196,15 +197,26 @@ type hookSourceResponse struct {
 }
 
 type hookReadResponse struct {
-	ID         string               `json:"id,omitempty"`
-	RuntimeID  string               `json:"runtime_id"`
-	Status     HookReadStatus       `json:"status"`
-	Cached     bool                 `json:"cached"`
-	ObservedAt *time.Time           `json:"observed_at,omitempty"`
-	Sources    []hookSourceResponse `json:"sources,omitempty"`
-	Error      string               `json:"error,omitempty"`
-	CreatedAt  *time.Time           `json:"created_at,omitempty"`
-	UpdatedAt  *time.Time           `json:"updated_at,omitempty"`
+	ID         string                   `json:"id,omitempty"`
+	RuntimeID  string                   `json:"runtime_id"`
+	Status     HookReadStatus           `json:"status"`
+	Cached     bool                     `json:"cached"`
+	ObservedAt *time.Time               `json:"observed_at,omitempty"`
+	Sources    []hookSourceResponse     `json:"sources,omitempty"`
+	Resolved   *runtimehooks.Projection `json:"resolved,omitempty"`
+	Error      string                   `json:"error,omitempty"`
+	CreatedAt  *time.Time               `json:"created_at,omitempty"`
+	UpdatedAt  *time.Time               `json:"updated_at,omitempty"`
+}
+
+// hookObservation is one read of the snapshot: the per-source states, the
+// observation time that dates them, and the resolved per-entry projection.
+// They travel together because rendering any one of them without the other
+// two loses either the date or the not-checked scopes.
+type hookObservation struct {
+	Sources    []hookSourceResponse
+	ObservedAt *time.Time
+	Resolved   *runtimehooks.Projection
 }
 
 func nullableString(value pgtype.Text) *string {
@@ -254,29 +266,35 @@ func hookSourceResponses(provider string, rows []db.HookStateSnapshot) ([]hookSo
 	return sources, latest, nil
 }
 
-func (h *Handler) loadHookSnapshotResponse(ctx context.Context, runtimeID pgtype.UUID, provider string) ([]hookSourceResponse, *time.Time, error) {
+func (h *Handler) loadHookSnapshotResponse(ctx context.Context, runtimeID pgtype.UUID, provider string) (hookObservation, error) {
 	rows, err := h.Queries.ListHookStateSnapshot(ctx, db.ListHookStateSnapshotParams{RuntimeID: runtimeID, Provider: provider})
 	if err != nil {
-		return nil, nil, fmt.Errorf("list hook snapshot: %w", err)
+		return hookObservation{}, fmt.Errorf("list hook snapshot: %w", err)
 	}
-	return hookSourceResponses(provider, rows)
+	sources, observedAt, err := hookSourceResponses(provider, rows)
+	if err != nil {
+		return hookObservation{}, err
+	}
+	resolved := hookResolution(provider, rows)
+	return hookObservation{Sources: sources, ObservedAt: observedAt, Resolved: &resolved}, nil
 }
 
 func (h *Handler) writeOfflineHookSnapshot(w http.ResponseWriter, r *http.Request, rt db.AgentRuntime) {
-	sources, observedAt, err := h.loadHookSnapshotResponse(r.Context(), rt.ID, rt.Provider)
+	observation, err := h.loadHookSnapshotResponse(r.Context(), rt.ID, rt.Provider)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load hook snapshot")
 		return
 	}
 	status := HookReadCompleted
 	errorMessage := ""
-	if observedAt == nil {
+	if observation.ObservedAt == nil {
 		status = HookReadFailed
 		errorMessage = "runtime is offline and has no last known hook observation"
 	}
 	writeJSON(w, http.StatusOK, hookReadResponse{
-		RuntimeID: uuidToString(rt.ID), Status: status, Cached: observedAt != nil,
-		ObservedAt: observedAt, Sources: sources, Error: errorMessage,
+		RuntimeID: uuidToString(rt.ID), Status: status, Cached: observation.ObservedAt != nil,
+		ObservedAt: observation.ObservedAt, Sources: observation.Sources,
+		Resolved: observation.Resolved, Error: errorMessage,
 	})
 }
 
@@ -337,15 +355,18 @@ func (h *Handler) GetHookReadRequest(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: &req.CreatedAt, UpdatedAt: &req.UpdatedAt,
 	}
 	if req.Status == HookReadCompleted {
-		response.Sources, response.ObservedAt, err = h.loadHookSnapshotResponse(r.Context(), rt.ID, rt.Provider)
-		if err != nil {
+		observation, loadErr := h.loadHookSnapshotResponse(r.Context(), rt.ID, rt.Provider)
+		if loadErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load hook observation")
 			return
 		}
-		if response.ObservedAt == nil {
+		if observation.ObservedAt == nil {
 			writeError(w, http.StatusInternalServerError, "completed hook read has no dated observation")
 			return
 		}
+		response.Sources = observation.Sources
+		response.ObservedAt = observation.ObservedAt
+		response.Resolved = observation.Resolved
 	}
 	writeJSON(w, http.StatusOK, response)
 }
