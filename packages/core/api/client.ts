@@ -80,6 +80,7 @@ import type {
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
+  RuntimeHookReadRequest,
   TimelineEntry,
   AssigneeFrequencyEntry,
   TaskMessagePayload,
@@ -2386,6 +2387,17 @@ export class ApiClient {
     requestId: string,
   ): Promise<RuntimeLocalSkillImportRequest> {
     return this.fetch(`/api/runtimes/${runtimeId}/local-skills/import/${requestId}`);
+  }
+
+  async initiateHookRead(runtimeId: string): Promise<RuntimeHookReadRequest> {
+    return this.fetch(`/api/runtimes/${runtimeId}/hooks`, { method: "POST" });
+  }
+
+  async getHookReadResult(
+    runtimeId: string,
+    requestId: string,
+  ): Promise<RuntimeHookReadRequest> {
+    return this.fetch(`/api/runtimes/${runtimeId}/hooks/${requestId}`);
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {

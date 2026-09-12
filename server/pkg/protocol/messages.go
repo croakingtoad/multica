@@ -145,6 +145,7 @@ const (
 	PendingWorkKindModelList        = "model_list"
 	PendingWorkKindLocalSkills      = "local_skills"
 	PendingWorkKindLocalSkillImport = "local_skill_import"
+	PendingWorkKindHookRead         = "hook_read"
 )
 
 // PendingWorkPayload is sent from server to daemon as a wakeup hint when a

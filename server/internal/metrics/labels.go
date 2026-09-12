@@ -249,6 +249,9 @@ const (
 	// RuntimeLookupSourceRuntimeLocalSkillImportPoll is the browser polling a
 	// local skill import, which the UI allows up to ten of concurrently.
 	RuntimeLookupSourceRuntimeLocalSkillImportPoll = "runtime_local_skill_import_poll"
+	// RuntimeLookupSourceRuntimeHookPoll is the browser polling host hook
+	// discovery while the daemon reads provider configuration.
+	RuntimeLookupSourceRuntimeHookPoll = "runtime_hook_poll"
 	// RuntimeLookupSourceRuntimeUpdatePoll is the browser polling CLI update
 	// progress.
 	RuntimeLookupSourceRuntimeUpdatePoll = "runtime_update_poll"
@@ -296,6 +299,7 @@ func AllRuntimeLookupSources() []string {
 		RuntimeLookupSourceRuntimeModelPoll,
 		RuntimeLookupSourceRuntimeLocalSkillPoll,
 		RuntimeLookupSourceRuntimeLocalSkillImportPoll,
+		RuntimeLookupSourceRuntimeHookPoll,
 		RuntimeLookupSourceRuntimeUpdatePoll,
 		RuntimeLookupSourceRuntimeAPI,
 		RuntimeLookupSourceIssue,

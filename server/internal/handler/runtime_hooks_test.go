@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,153 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func hookReadWebHandler(t *testing.T, provider string) (*Handler, string, *InMemoryHookReadStore, *runtimeLocalSkillPendingWorkRecorder) {
+	t.Helper()
+	runtimeID := createProviderRuntime(t, provider)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime
+		SET metadata = '{"capabilities":["hooks-v1"]}'::jsonb
+		WHERE id = $1`, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	store := NewInMemoryHookReadStore()
+	recorder := &runtimeLocalSkillPendingWorkRecorder{}
+	h := *testHandler
+	h.HookReadStore = store
+	h.DaemonPendingWork = recorder
+	return &h, runtimeID, store, recorder
+}
+
+func decodeHookReadResponse(t *testing.T, w *httptest.ResponseRecorder) hookReadResponse {
+	t.Helper()
+	var response hookReadResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func TestInitiateHookReadOnlineAlwaysQueuesLiveDiscovery(t *testing.T) {
+	h, runtimeID, store, recorder := hookReadWebHandler(t, "claude")
+	oldObservedAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Microsecond)
+	if err := h.Queries.UpsertHookStateSnapshot(context.Background(), db.UpsertHookStateSnapshotParams{
+		RuntimeID: parseUUID(runtimeID), Provider: "claude", Scope: "user", Format: "json",
+		Hooks: []byte(`{}`), DisabledHooks: []byte(`{}`),
+		ObservedAt: pgtype.Timestamptz{Time: oldObservedAt, Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := withURLParams(newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/hooks", nil), "runtimeId", runtimeID)
+	w := httptest.NewRecorder()
+	h.InitiateHookRead(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	response := decodeHookReadResponse(t, w)
+	if response.Status != HookReadPending || response.Cached || response.ObservedAt != nil || len(response.Sources) != 0 {
+		t.Fatalf("online initiation served snapshot: %#v", response)
+	}
+	stored, err := store.Get(context.Background(), response.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("stored request = %#v, %v", stored, err)
+	}
+	if len(recorder.hints) != 1 || recorder.hints[0] != runtimeID+":"+protocol.PendingWorkKindHookRead {
+		t.Fatalf("pending work hints = %#v", recorder.hints)
+	}
+
+	var observedAfter time.Time
+	if err := testPool.QueryRow(context.Background(), `SELECT observed_at FROM hook_state_snapshot WHERE runtime_id=$1 AND scope='user' AND format='json'`, runtimeID).Scan(&observedAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !observedAfter.Equal(oldObservedAt) {
+		t.Fatalf("initiate wrote snapshot observed_at = %s, want %s", observedAfter, oldObservedAt)
+	}
+}
+
+func TestInitiateHookReadOfflineReturnsDatedSnapshotWithThreeSourceStates(t *testing.T) {
+	h, runtimeID, _, _ := hookReadWebHandler(t, "codex")
+	observedAt := time.Now().UTC().Truncate(time.Microsecond)
+	path := "/home/test/.codex/hooks.json"
+	hash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, row := range []db.UpsertHookStateSnapshotParams{
+		{RuntimeID: parseUUID(runtimeID), Provider: "codex", Scope: "user", Format: "json", Hooks: []byte(`{"found":true}`), DisabledHooks: []byte(`{}`), SourcePath: pgtype.Text{String: path, Valid: true}, ContentHash: pgtype.Text{String: hash, Valid: true}, ObservedAt: pgtype.Timestamptz{Time: observedAt, Valid: true}},
+		{RuntimeID: parseUUID(runtimeID), Provider: "codex", Scope: "user", Format: "toml", Hooks: []byte(`{}`), DisabledHooks: []byte(`{}`), ObservedAt: pgtype.Timestamptz{Time: observedAt, Valid: true}},
+	} {
+		if err := h.Queries.UpsertHookStateSnapshot(context.Background(), row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET status='offline' WHERE id=$1`, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := withURLParams(newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/hooks", nil), "runtimeId", runtimeID)
+	w := httptest.NewRecorder()
+	h.InitiateHookRead(w, req)
+	response := decodeHookReadResponse(t, w)
+	if w.Code != http.StatusOK || response.Status != HookReadCompleted || !response.Cached || response.ObservedAt == nil || !response.ObservedAt.Equal(observedAt) {
+		t.Fatalf("offline response = %#v, HTTP %d", response, w.Code)
+	}
+	if len(response.Sources) != 4 {
+		t.Fatalf("sources = %#v, want four Codex source identities", response.Sources)
+	}
+	wantStates := []hookSourceState{hookSourceFound, hookSourceAbsent, hookSourceNotChecked, hookSourceNotChecked}
+	for i, want := range wantStates {
+		if response.Sources[i].State != want {
+			t.Errorf("source %d state = %q, want %q", i, response.Sources[i].State, want)
+		}
+	}
+	if response.Sources[0].SourcePath == nil || *response.Sources[0].SourcePath != path || response.Sources[1].SourcePath != nil {
+		t.Fatalf("source identities = %#v", response.Sources)
+	}
+}
+
+func TestGetHookReadRequestSurfacesProgressCompletionAndTimeout(t *testing.T) {
+	h, runtimeID, store, _ := hookReadWebHandler(t, "claude")
+	req, err := store.Create(context.Background(), runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll := func() hookReadResponse {
+		r := withURLParams(newRequestAsUser(testUserID, http.MethodGet, "/api/runtimes/"+runtimeID+"/hooks/"+req.ID, nil), "runtimeId", runtimeID, "requestId", req.ID)
+		w := httptest.NewRecorder()
+		h.GetHookReadRequest(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+		}
+		return decodeHookReadResponse(t, w)
+	}
+	if response := poll(); response.Status != HookReadPending || len(response.Sources) != 0 {
+		t.Fatalf("pending response = %#v", response)
+	}
+
+	observedAt := time.Now().UTC().Truncate(time.Microsecond)
+	if err := h.Queries.UpsertHookStateSnapshot(context.Background(), db.UpsertHookStateSnapshotParams{
+		RuntimeID: parseUUID(runtimeID), Provider: "claude", Scope: "user", Format: "json",
+		Hooks: []byte(`{}`), DisabledHooks: []byte(`{}`), ObservedAt: pgtype.Timestamptz{Time: observedAt, Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Complete(context.Background(), req.ID, observedAt); err != nil {
+		t.Fatal(err)
+	}
+	if response := poll(); response.Status != HookReadCompleted || response.Cached || response.ObservedAt == nil || len(response.Sources) != 3 {
+		t.Fatalf("completed response = %#v", response)
+	}
+
+	timedOut, err := store.Create(context.Background(), runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timedOut.CreatedAt = time.Now().Add(-hookReadPendingTimeout - time.Second)
+	req = timedOut
+	response := poll()
+	if response.Status != HookReadTimedOut || response.ObservedAt != nil || response.Error != "daemon did not answer within 30 seconds" {
+		t.Fatalf("timed-out response = %#v", response)
+	}
+}
 
 func TestHookReadLifecycleDistinguishesTimeoutFromEmptyObservation(t *testing.T) {
 	ctx := context.Background()

@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -168,6 +169,181 @@ func (s *InMemoryHookReadStore) Fail(_ context.Context, id, errMsg string) error
 type hookSourceKey struct {
 	Scope  string
 	Format string
+}
+
+type hookSourceState string
+
+const (
+	hookSourceFound      hookSourceState = "found"
+	hookSourceAbsent     hookSourceState = "absent"
+	hookSourceNotChecked hookSourceState = "not_checked"
+)
+
+type hookSourceResponse struct {
+	Provider      string          `json:"provider"`
+	Scope         string          `json:"scope"`
+	Format        string          `json:"format"`
+	State         hookSourceState `json:"state"`
+	SourcePath    *string         `json:"source_path"`
+	ContentHash   *string         `json:"content_hash"`
+	Hooks         json.RawMessage `json:"hooks,omitempty"`
+	DisabledHooks json.RawMessage `json:"disabled_hooks,omitempty"`
+	ObservedAt    *time.Time      `json:"observed_at,omitempty"`
+}
+
+type hookReadResponse struct {
+	ID         string               `json:"id,omitempty"`
+	RuntimeID  string               `json:"runtime_id"`
+	Status     HookReadStatus       `json:"status"`
+	Cached     bool                 `json:"cached"`
+	ObservedAt *time.Time           `json:"observed_at,omitempty"`
+	Sources    []hookSourceResponse `json:"sources,omitempty"`
+	Error      string               `json:"error,omitempty"`
+	CreatedAt  *time.Time           `json:"created_at,omitempty"`
+	UpdatedAt  *time.Time           `json:"updated_at,omitempty"`
+}
+
+func nullableString(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
+}
+
+func hookSourceResponses(provider string, rows []db.HookStateSnapshot) ([]hookSourceResponse, *time.Time, error) {
+	expected, err := expectedHookSources(provider)
+	if err != nil {
+		return nil, nil, err
+	}
+	byKey := make(map[hookSourceKey]db.HookStateSnapshot, len(rows))
+	var latest *time.Time
+	for _, row := range rows {
+		key := hookSourceKey{Scope: row.Scope, Format: row.Format}
+		byKey[key] = row
+		if row.ObservedAt.Valid && (latest == nil || row.ObservedAt.Time.After(*latest)) {
+			observedAt := row.ObservedAt.Time
+			latest = &observedAt
+		}
+	}
+	sources := make([]hookSourceResponse, 0, len(expected))
+	for _, key := range expected {
+		response := hookSourceResponse{
+			Provider: provider, Scope: key.Scope, Format: key.Format,
+			State: hookSourceNotChecked,
+		}
+		if row, ok := byKey[key]; ok {
+			response.State = hookSourceAbsent
+			if row.SourcePath.Valid {
+				response.State = hookSourceFound
+			}
+			response.SourcePath = nullableString(row.SourcePath)
+			response.ContentHash = nullableString(row.ContentHash)
+			response.Hooks = row.Hooks
+			response.DisabledHooks = row.DisabledHooks
+			if row.ObservedAt.Valid {
+				observedAt := row.ObservedAt.Time
+				response.ObservedAt = &observedAt
+			}
+		}
+		sources = append(sources, response)
+	}
+	return sources, latest, nil
+}
+
+func (h *Handler) loadHookSnapshotResponse(ctx context.Context, runtimeID pgtype.UUID, provider string) ([]hookSourceResponse, *time.Time, error) {
+	rows, err := h.Queries.ListHookStateSnapshot(ctx, db.ListHookStateSnapshotParams{RuntimeID: runtimeID, Provider: provider})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list hook snapshot: %w", err)
+	}
+	return hookSourceResponses(provider, rows)
+}
+
+func (h *Handler) writeOfflineHookSnapshot(w http.ResponseWriter, r *http.Request, rt db.AgentRuntime) {
+	sources, observedAt, err := h.loadHookSnapshotResponse(r.Context(), rt.ID, rt.Provider)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load hook snapshot")
+		return
+	}
+	status := HookReadCompleted
+	errorMessage := ""
+	if observedAt == nil {
+		status = HookReadFailed
+		errorMessage = "runtime is offline and has no last known hook observation"
+	}
+	writeJSON(w, http.StatusOK, hookReadResponse{
+		RuntimeID: uuidToString(rt.ID), Status: status, Cached: observedAt != nil,
+		ObservedAt: observedAt, Sources: sources, Error: errorMessage,
+	})
+}
+
+// InitiateHookRead always asks an online runtime to inspect its host. The
+// snapshot is only a last-known fallback for an offline runtime.
+func (h *Handler) InitiateHookRead(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	rt, _, ok := h.requireRuntimeReadAccess(w, r, obsmetrics.RuntimeLookupSourceRuntimeAPI, runtimeID)
+	if !ok {
+		return
+	}
+	if rt.Status != "online" {
+		h.writeOfflineHookSnapshot(w, r, rt)
+		return
+	}
+	if !runtimeHasCapability(rt.Metadata, protocol.DaemonCapabilityHooksV1) {
+		writeError(w, http.StatusUpgradeRequired, "runtime does not support hook discovery")
+		return
+	}
+	req, err := h.HookReadStore.Create(r.Context(), runtimeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to enqueue hook read")
+		return
+	}
+	h.requestDaemonPendingWork(runtimeID, protocol.PendingWorkKindHookRead)
+	writeJSON(w, http.StatusOK, hookReadResponse{
+		ID: req.ID, RuntimeID: req.RuntimeID, Status: req.Status,
+		CreatedAt: &req.CreatedAt, UpdatedAt: &req.UpdatedAt,
+	})
+}
+
+// GetHookReadRequest reports lifecycle state and attaches the observation only
+// after the daemon has completed the read. If the runtime went offline, the
+// only valid answer is the dated last-known snapshot.
+func (h *Handler) GetHookReadRequest(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	rt, _, ok := h.requireRuntimeReadAccess(w, r, obsmetrics.RuntimeLookupSourceRuntimeHookPoll, runtimeID)
+	if !ok {
+		return
+	}
+	if rt.Status != "online" {
+		h.writeOfflineHookSnapshot(w, r, rt)
+		return
+	}
+	requestID := chi.URLParam(r, "requestId")
+	req, err := h.HookReadStore.Get(r.Context(), requestID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load hook read request")
+		return
+	}
+	if req == nil || req.RuntimeID != runtimeID {
+		writeError(w, http.StatusNotFound, "request not found")
+		return
+	}
+	response := hookReadResponse{
+		ID: req.ID, RuntimeID: req.RuntimeID, Status: req.Status,
+		ObservedAt: req.ObservedAt, Error: req.Error,
+		CreatedAt: &req.CreatedAt, UpdatedAt: &req.UpdatedAt,
+	}
+	if req.Status == HookReadCompleted {
+		response.Sources, response.ObservedAt, err = h.loadHookSnapshotResponse(r.Context(), rt.ID, rt.Provider)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load hook observation")
+			return
+		}
+		if response.ObservedAt == nil {
+			writeError(w, http.StatusInternalServerError, "completed hook read has no dated observation")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func expectedHookSources(provider string) ([]hookSourceKey, error) {

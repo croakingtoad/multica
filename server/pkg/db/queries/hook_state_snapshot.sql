@@ -20,3 +20,11 @@ WHERE runtime_id = @runtime_id
   AND provider = @provider
   AND scope = @scope
   AND format = @format;
+
+-- name: ListHookStateSnapshot :many
+SELECT runtime_id, provider, scope, format, hooks, disabled_hooks,
+       source_path, content_hash, observed_at, created_at, updated_at
+FROM hook_state_snapshot
+WHERE runtime_id = @runtime_id
+  AND provider = @provider
+ORDER BY scope, format;

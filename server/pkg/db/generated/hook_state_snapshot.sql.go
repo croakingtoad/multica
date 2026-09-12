@@ -36,6 +36,52 @@ func (q *Queries) DeleteHookStateSnapshotSource(ctx context.Context, arg DeleteH
 	return err
 }
 
+const listHookStateSnapshot = `-- name: ListHookStateSnapshot :many
+SELECT runtime_id, provider, scope, format, hooks, disabled_hooks,
+       source_path, content_hash, observed_at, created_at, updated_at
+FROM hook_state_snapshot
+WHERE runtime_id = $1
+  AND provider = $2
+ORDER BY scope, format
+`
+
+type ListHookStateSnapshotParams struct {
+	RuntimeID pgtype.UUID `json:"runtime_id"`
+	Provider  string      `json:"provider"`
+}
+
+func (q *Queries) ListHookStateSnapshot(ctx context.Context, arg ListHookStateSnapshotParams) ([]HookStateSnapshot, error) {
+	rows, err := q.db.Query(ctx, listHookStateSnapshot, arg.RuntimeID, arg.Provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []HookStateSnapshot{}
+	for rows.Next() {
+		var i HookStateSnapshot
+		if err := rows.Scan(
+			&i.RuntimeID,
+			&i.Provider,
+			&i.Scope,
+			&i.Format,
+			&i.Hooks,
+			&i.DisabledHooks,
+			&i.SourcePath,
+			&i.ContentHash,
+			&i.ObservedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertHookStateSnapshot = `-- name: UpsertHookStateSnapshot :exec
 INSERT INTO hook_state_snapshot (
     runtime_id, provider, scope, format, hooks, disabled_hooks,
