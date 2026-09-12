@@ -2665,6 +2665,32 @@ func TestBacklogNoTriggerOnCreate(t *testing.T) {
 	testHandler.DeleteIssue(httptest.NewRecorder(), cleanupReq)
 }
 
+func TestActiveCreateTriggersAgent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Active Create Trigger Agent", nil)
+
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":         "Active create trigger",
+		"status":        "todo",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+	})
+	w := testutil.Call(t, testHandler.CreateIssue, req).Want(http.StatusCreated)
+	var created IssueResponse
+	w.JSON(&created)
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
+	})
+
+	if got := queuedTaskCountFor(t, created.ID, agentID); got != 1 {
+		t.Fatalf("active issue create queued %d agent runs, want 1", got)
+	}
+}
+
 // TestBacklogToTodoTriggersAgent verifies that moving an agent-assigned issue
 // from "backlog" to "todo" enqueues exactly one agent task (none on creation,
 // one on status transition).
@@ -2717,6 +2743,35 @@ func TestBacklogToTodoTriggersAgent(t *testing.T) {
 	cleanupReq := newRequest("DELETE", "/api/issues/"+created.ID, nil)
 	cleanupReq = withURLParam(cleanupReq, "id", created.ID)
 	testHandler.DeleteIssue(httptest.NewRecorder(), cleanupReq)
+}
+
+func TestNonBacklogToTodoDoesNotTriggerAgent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "Non Backlog Status Agent", nil)
+
+	for _, previousStatus := range []string{"blocked", "in_review"} {
+		t.Run(previousStatus, func(t *testing.T) {
+			issueID := dbfx.Issue(t, "non-backlog to todo stays silent", testutil.Cols{
+				"status":        previousStatus,
+				"assignee_type": "agent",
+				"assignee_id":   agentID,
+			})
+			t.Cleanup(func() {
+				testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+			})
+
+			req := withURLParam(newRequest("PUT", "/api/issues/"+issueID, map[string]any{
+				"status": "todo",
+			}), "id", issueID)
+			testutil.Call(t, testHandler.UpdateIssue, req).Want(http.StatusOK)
+
+			if got := queuedTaskCountFor(t, issueID, agentID); got != 0 {
+				t.Fatalf("%s -> todo queued %d runs, want silent no-op", previousStatus, got)
+			}
+		})
+	}
 }
 
 // TestBacklogToTodoByAgentTriggersDifferentAssignee verifies that the
