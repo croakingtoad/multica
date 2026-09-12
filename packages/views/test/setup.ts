@@ -8,6 +8,8 @@ function createMemoryStorage(name: StorageName): Storage {
   const frame = document.createElement("iframe");
   document.documentElement.append(frame);
   const storage = frame.contentWindow![name];
+  // The frame has its own Storage.prototype, so use the top realm's prototype
+  // for instanceof checks and Storage.prototype spies.
   Object.setPrototypeOf(storage, Storage.prototype);
   frame.remove();
   return storage;
