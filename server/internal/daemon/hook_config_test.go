@@ -28,7 +28,7 @@ func TestReadRuntimeHookConfigClaudeChecksAllScopes(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	writeHookTestFile(t, filepath.Join(home, ".claude", "settings.json"), `{"hooks":{"Stop":[{"hooks":[]}]}}`)
-	writeHookTestFile(t, filepath.Join(project, ".claude", "settings.local.json"), `{"hooks":{"PreToolUse":[]},"_disabledHooks":{"one":true}}`)
+	writeHookTestFile(t, filepath.Join(project, ".claude", "settings.local.json"), `{"hooks":{"PreToolUse":[]},"_disabledHooks":{"hook-id-1":{"event":"PreToolUse","matcher":"Bash","handler":{"type":"command","command":"./check.sh"},"parked_at":"2026-09-12T08:00:00Z"}}}`)
 
 	sources, err := readRuntimeHookConfig("claude", home, project)
 	if err != nil {
@@ -48,8 +48,23 @@ func TestReadRuntimeHookConfigClaudeChecksAllScopes(t *testing.T) {
 	if sources[1].SourcePath != nil || sources[1].ContentHash != nil {
 		t.Fatal("checked-absent project source must have nil source identity")
 	}
-	if got := string(sources[2].DisabledHooks); got != `{"one":true}` {
+	if got := string(sources[2].DisabledHooks); got != `{"hook-id-1":{"event":"PreToolUse","handler":{"command":"./check.sh","type":"command"},"matcher":"Bash","parked_at":"2026-09-12T08:00:00Z"}}` {
 		t.Fatalf("disabled hooks = %s", got)
+	}
+}
+
+func TestExtractHookConfigClaudePayloadIsUnchanged(t *testing.T) {
+	raw := []byte(`{"hooks":{"PreToolUse":[]},"_disabledHooks":{"hook-id-1":{"event":"PreToolUse","matcher":"Bash","handler":{"type":"command","command":"./check.sh"},"parked_at":"2026-09-12T08:00:00Z"}}}`)
+
+	hooks, disabled, err := extractHookConfig(raw, "claude", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(hooks), `{"PreToolUse":[]}`; got != want {
+		t.Fatalf("hooks = %s, want %s", got, want)
+	}
+	if got, want := string(disabled), `{"hook-id-1":{"event":"PreToolUse","handler":{"command":"./check.sh","type":"command"},"matcher":"Bash","parked_at":"2026-09-12T08:00:00Z"}}`; got != want {
+		t.Fatalf("disabled hooks = %s, want %s", got, want)
 	}
 }
 
@@ -89,8 +104,12 @@ func TestReadRuntimeHookConfigCodexChecksJSONAndInlineTOMLAtBothLayers(t *testin
 	home := t.TempDir()
 	project := t.TempDir()
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex-custom"))
-	writeHookTestFile(t, filepath.Join(home, ".codex-custom", "hooks.json"), `{"hooks":{"Stop":[]}}`)
-	writeHookTestFile(t, filepath.Join(home, ".codex-custom", "config.toml"), "[hooks]\nStop = []\n")
+	writeHookTestFile(t, filepath.Join(home, ".codex-custom", "hooks.json"), `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"if [ -f '/home/marty/.orca/agent-hooks/codex-hook.sh' ] && [ -r '/home/marty/.orca/agent-hooks/codex-hook.sh' ] && [ -x '/home/marty/.orca/agent-hooks/codex-hook.sh' ]; then /bin/sh '/home/marty/.orca/agent-hooks/codex-hook.sh'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi","timeout":10}]}]}}`)
+	writeHookTestFile(t, filepath.Join(home, ".codex-custom", "config.toml"), `[hooks.state]
+
+[hooks.state."/home/marty/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:adae0c83d982bb4230f29f0a038d225be681dae9467dc684b1f4ed220093a07b"
+`)
 	writeHookTestFile(t, filepath.Join(project, ".codex", "hooks.json"), `{"hooks":{"PreToolUse":[]}}`)
 	writeHookTestFile(t, filepath.Join(project, ".codex", "config.toml"), "[hooks]\nPostToolUse = []\n")
 
@@ -109,9 +128,41 @@ func TestReadRuntimeHookConfigCodexChecksJSONAndInlineTOMLAtBothLayers(t *testin
 		if sources[i].SourcePath == nil || sources[i].ContentHash == nil {
 			t.Errorf("source %d lacks source identity", i)
 		}
+	}
+	var codexHooks struct {
+		PreToolUse []struct {
+			Hooks []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+				Timeout int    `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"PreToolUse"`
+	}
+	if err := json.Unmarshal(sources[0].Hooks, &codexHooks); err != nil {
+		t.Fatalf("decode Codex hooks.json hooks: %v", err)
+	}
+	if len(codexHooks.PreToolUse) != 1 || len(codexHooks.PreToolUse[0].Hooks) != 1 {
+		t.Fatalf("Codex hooks.json hooks = %s, want the reviewed PreToolUse handler", sources[0].Hooks)
+	}
+	handler := codexHooks.PreToolUse[0].Hooks[0]
+	if wantCommand := "if [ -f '/home/marty/.orca/agent-hooks/codex-hook.sh' ] && [ -r '/home/marty/.orca/agent-hooks/codex-hook.sh' ] && [ -x '/home/marty/.orca/agent-hooks/codex-hook.sh' ]; then /bin/sh '/home/marty/.orca/agent-hooks/codex-hook.sh'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi"; handler.Type != "command" || handler.Command != wantCommand || handler.Timeout != 10 {
+		t.Fatalf("Codex hooks.json handler = %#v, want reviewed command fixture", handler)
+	}
+	if got, want := string(sources[1].Hooks), `{}`; got != want {
+		t.Fatalf("Codex config.toml hooks = %s, want event keys only: %s", got, want)
+	}
+	if got, want := string(sources[1].DisabledHooks), `{"state":{"/home/marty/.codex/hooks.json:pre_tool_use:0:0":{"trusted_hash":"sha256:adae0c83d982bb4230f29f0a038d225be681dae9467dc684b1f4ed220093a07b"}}}`; got != want {
+		t.Fatalf("Codex config.toml disabled hooks = %s, want lossless state envelope %s", got, want)
+	}
+	for _, i := range []int{0, 2, 3} {
+		if got, want := string(sources[i].DisabledHooks), `{}`; got != want {
+			t.Errorf("Codex source %d disabled hooks = %s, want %s without state", i, got, want)
+		}
+	}
+	for i, wantEvent := range map[int]string{0: "PreToolUse", 2: "PreToolUse", 3: "PostToolUse"} {
 		var hooks map[string]any
-		if err := json.Unmarshal(sources[i].Hooks, &hooks); err != nil || len(hooks) != 1 {
-			t.Errorf("source %d hooks = %s, err = %v", i, sources[i].Hooks, err)
+		if err := json.Unmarshal(sources[i].Hooks, &hooks); err != nil || len(hooks) != 1 || hooks[wantEvent] == nil {
+			t.Errorf("source %d hooks = %s, want only %s, err = %v", i, sources[i].Hooks, wantEvent, err)
 		}
 	}
 }
@@ -147,7 +198,7 @@ func TestHookConfigPathsRejectsRelativeCodexHome(t *testing.T) {
 }
 
 func TestExtractHookConfigRejectsTOMLValuesThatCannotEncodeAsJSON(t *testing.T) {
-	if _, _, err := extractHookConfig([]byte("[hooks]\nStop = nan\n"), "toml"); err == nil {
+	if _, _, err := extractHookConfig([]byte("[hooks]\nStop = nan\n"), "codex", "toml"); err == nil {
 		t.Fatal("expected TOML nan hook value to fail JSON encoding")
 	}
 }

@@ -405,6 +405,79 @@ RETURNING id
 	}
 }
 
+func TestMergeLegacyRuntime_DropsSnapshotAndPreservesFireHistory(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	f := newWorkspaceDeletePathFixture(t, "mergehooks")
+
+	var targetRuntime string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, owner_id)
+VALUES ($1, 'hook merge target', 'cloud', 'delete-test', 'offline', '', '{}'::jsonb, $2)
+RETURNING id
+`, f.victimID, testUserID).Scan(&targetRuntime); err != nil {
+		t.Fatalf("create merge target: %v", err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = testPool.Exec(bg, `DELETE FROM hook_state_snapshot WHERE runtime_id = ANY($1::uuid[])`, []string{f.victimRuntime, targetRuntime})
+		_, _ = testPool.Exec(bg, `DELETE FROM hook_fire_history WHERE runtime_id = ANY($1::uuid[])`, []string{f.victimRuntime, targetRuntime})
+	})
+
+	// The target already has the same snapshot identity. Re-pointing the old
+	// cache row would collide; the merge must drop it and retain the target's
+	// independently observed snapshot.
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO hook_state_snapshot (
+    runtime_id, provider, scope, format, hooks, disabled_hooks, observed_at
+)
+VALUES
+    ($1, 'codex', 'user', 'json', '{"source": "old"}'::jsonb, '{}'::jsonb, now()),
+    ($2, 'codex', 'user', 'json', '{"source": "target"}'::jsonb, '{}'::jsonb, now())
+`, f.victimRuntime, targetRuntime); err != nil {
+		t.Fatalf("seed runtime snapshots: %v", err)
+	}
+	var fireID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO hook_fire_history (
+    runtime_id, provider, event, hook_id, hook_spec, fired_at, provenance, outcome
+)
+VALUES ($1, 'codex', 'Stop', 'legacy-fire', '{"command": "true"}'::jsonb, now(), 'inferred', 'success')
+RETURNING id
+`, f.victimRuntime).Scan(&fireID); err != nil {
+		t.Fatalf("seed legacy fire history: %v", err)
+	}
+
+	if err := testHandler.mergeLegacyRuntime(ctx, parseUUID(targetRuntime), parseUUID(f.victimRuntime),
+		"legacy-daemon", "delete-test"); err != nil {
+		t.Fatalf("mergeLegacyRuntime: %v", err)
+	}
+
+	var oldSnapshots, targetSnapshots, oldFires, targetFires int
+	var targetSnapshotSource string
+	if err := testPool.QueryRow(ctx, `
+SELECT
+    (SELECT count(*) FROM hook_state_snapshot WHERE runtime_id = $1),
+    (SELECT count(*) FROM hook_state_snapshot WHERE runtime_id = $2),
+    (SELECT hooks->>'source' FROM hook_state_snapshot WHERE runtime_id = $2),
+    (SELECT count(*) FROM hook_fire_history WHERE runtime_id = $1),
+    (SELECT count(*) FROM hook_fire_history WHERE runtime_id = $2 AND id = $3)
+`, f.victimRuntime, targetRuntime, fireID).Scan(
+		&oldSnapshots, &targetSnapshots, &targetSnapshotSource, &oldFires, &targetFires,
+	); err != nil {
+		t.Fatalf("read merged hook data: %v", err)
+	}
+	if oldSnapshots != 0 || targetSnapshots != 1 || targetSnapshotSource != "target" {
+		t.Fatalf("snapshot rows old=%d target=%d source=%q, want old dropped and target retained",
+			oldSnapshots, targetSnapshots, targetSnapshotSource)
+	}
+	if oldFires != 0 || targetFires != 1 {
+		t.Fatalf("fire-history rows old=%d target=%d, want history re-pointed", oldFires, targetFires)
+	}
+}
+
 // TestMergeLegacyRuntime_RollsBackWhenAStepFails is the fault-injection half of the
 // merge contract: the four statements have to land together or not at all.
 //

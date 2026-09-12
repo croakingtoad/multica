@@ -123,7 +123,7 @@ func readHookConfigSource(candidate hookConfigPath) (protocol.HookConfigSource, 
 	if err != nil {
 		return source, err
 	}
-	hooks, disabled, err := extractHookConfig(raw, candidate.format)
+	hooks, disabled, err := extractHookConfig(raw, candidate.provider, candidate.format)
 	if err != nil {
 		return source, err
 	}
@@ -137,7 +137,7 @@ func readHookConfigSource(candidate hookConfigPath) (protocol.HookConfigSource, 
 	return source, nil
 }
 
-func extractHookConfig(raw []byte, format string) (json.RawMessage, json.RawMessage, error) {
+func extractHookConfig(raw []byte, provider, format string) (json.RawMessage, json.RawMessage, error) {
 	var document map[string]any
 	switch format {
 	case "json":
@@ -151,15 +151,40 @@ func extractHookConfig(raw []byte, format string) (json.RawMessage, json.RawMess
 	default:
 		return nil, nil, fmt.Errorf("unsupported format %q", format)
 	}
+	var codexState any
+	var hasCodexState bool
+	if provider == "codex" {
+		codexState, hasCodexState = liftCodexHookState(document)
+	}
 	hooks, err := marshalHookField(document, "hooks")
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode hooks: %w", err)
 	}
-	disabledHooks, err := marshalHookField(document, "_disabledHooks")
+	var disabledHooks json.RawMessage
+	if hasCodexState {
+		disabledHooks, err = json.Marshal(map[string]any{"state": codexState})
+	} else if provider == "codex" {
+		disabledHooks = json.RawMessage(`{}`)
+	} else {
+		disabledHooks, err = marshalHookField(document, "_disabledHooks")
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode disabled hooks: %w", err)
 	}
 	return hooks, disabledHooks, nil
+}
+
+func liftCodexHookState(document map[string]any) (any, bool) {
+	hooks, ok := document["hooks"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	state, ok := hooks["state"]
+	if !ok {
+		return nil, false
+	}
+	delete(hooks, "state")
+	return state, true
 }
 
 func marshalHookField(document map[string]any, key string) (json.RawMessage, error) {

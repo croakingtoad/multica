@@ -873,6 +873,12 @@ func (h *Handler) mergeLegacyRuntime(ctx context.Context, newRuntimeID, oldRunti
 	}); err != nil {
 		return fmt.Errorf("record legacy daemon_id: %w", err)
 	}
+	if err := qtx.MergeRuntimeHookData(ctx, db.MergeRuntimeHookDataParams{
+		OldRuntimeID: oldRuntimeID,
+		NewRuntimeID: newRuntimeID,
+	}); err != nil {
+		return fmt.Errorf("merge runtime hook data: %w", err)
+	}
 	if err := qtx.DeleteAgentRuntime(ctx, oldRuntimeID); err != nil {
 		return fmt.Errorf("delete old runtime: %w", err)
 	}

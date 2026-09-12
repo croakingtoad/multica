@@ -1322,6 +1322,10 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceAgents(ctx, requester.WorkspaceID) },
 		},
 		{
+			name: "delete runtime hook data",
+			run:  func() error { return qtx.DeleteWorkspaceRuntimeHookData(ctx, requester.WorkspaceID) },
+		},
+		{
 			name: "delete runtimes and projects",
 			run:  func() error { return qtx.DeleteWorkspaceRuntimesAndProjects(ctx, requester.WorkspaceID) },
 		},

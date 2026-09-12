@@ -630,6 +630,26 @@ func (q *Queries) DeleteWorkspacePullRequests(ctx context.Context, workspaceID p
 	return err
 }
 
+const deleteWorkspaceRuntimeHookData = `-- name: DeleteWorkspaceRuntimeHookData :exec
+WITH deleted_snapshots AS (
+    DELETE FROM hook_state_snapshot
+    USING agent_runtime
+    WHERE hook_state_snapshot.runtime_id = agent_runtime.id
+      AND agent_runtime.workspace_id = $1
+)
+DELETE FROM hook_fire_history
+USING agent_runtime
+WHERE hook_fire_history.runtime_id = agent_runtime.id
+  AND agent_runtime.workspace_id = $1
+`
+
+// Application-layer cascade: resolve the workspace's runtime dependents while
+// agent_runtime still exists, inside the workspace-delete transaction.
+func (q *Queries) DeleteWorkspaceRuntimeHookData(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceRuntimeHookData, workspaceID)
+	return err
+}
+
 const deleteWorkspaceRuntimesAndProjects = `-- name: DeleteWorkspaceRuntimesAndProjects :exec
 WITH
 deleted_runtimes AS (
