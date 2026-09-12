@@ -9,6 +9,19 @@ import {
 } from "@multica/ui/components/ui/sidebar";
 import { renderWithI18n } from "../test/i18n";
 
+// Spies on the storage the app actually writes to, wherever the test host
+// keeps it. On Node <= 24 the jsdom window's Storage survives, and it is a
+// Proxy whose defineProperty trap converts instance-level spies into storage
+// writes (Web Storage named-property semantics), so the spy must sit on
+// Storage.prototype. On Node >= 25 an inert Node localStorage global leaks
+// into the jsdom env and test/setup.ts installs a plain-object shim that does
+// not inherit from Storage.prototype, so the spy must sit on the object.
+function spyLocalStorageSetItem() {
+  return localStorage instanceof Storage
+    ? vi.spyOn(Storage.prototype, "setItem")
+    : vi.spyOn(localStorage, "setItem");
+}
+
 describe("left sidebar resizing", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -22,7 +35,7 @@ describe("left sidebar resizing", () => {
 
   it("previews width directly and commits only when the pointer is released", () => {
     const stableConsumerRender = vi.fn();
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const setItem = spyLocalStorageSetItem();
 
     function StableSidebarConsumer() {
       useSidebar();
@@ -100,7 +113,7 @@ describe("left sidebar resizing", () => {
   });
 
   it("restores the committed width and cursor state when pointer capture is cancelled", () => {
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const setItem = spyLocalStorageSetItem();
     const { container } = renderWithI18n(
       <SidebarProvider>
         <Sidebar>
