@@ -53,8 +53,14 @@ type ProjectedUnrecognizedKey struct {
 // source must not hide the sources that did resolve, and the honest report of
 // an unreadable snapshot is that it could not be resolved — not "no hooks".
 type Projection struct {
-	Provider         string                     `json:"provider"`
-	Entries          []ProjectedEntry           `json:"entries"`
+	Provider string           `json:"provider"`
+	Entries  []ProjectedEntry `json:"entries"`
+	// EventValueRoles carries EventValueRole for each event the projection
+	// holds an entry for. It travels with the projection rather than only
+	// with an answer so a client can caption the value field correctly before
+	// any value exists — the role is a property of the event, not of a
+	// particular answer, and asking for one to learn it would be backwards.
+	EventValueRoles  map[string]string          `json:"event_value_roles,omitempty"`
 	UnrecognizedKeys []ProjectedUnrecognizedKey `json:"unrecognized_keys,omitempty"`
 	Error            string                     `json:"error,omitempty"`
 }
@@ -65,19 +71,7 @@ type Projection struct {
 // must not cost the caller every readable scope.
 func Project(provider Provider, expected []SourceRef, observed []ObservedSource) Projection {
 	projection := Projection{Provider: string(provider), Entries: []ProjectedEntry{}}
-	allowed := make(map[SourceRef]struct{}, len(expected))
-	for _, ref := range normalizedRefs(expected) {
-		allowed[ref] = struct{}{}
-	}
-	placeable := make([]ObservedSource, 0, len(observed))
-	for _, source := range observed {
-		if _, ok := allowed[normalizeRef(source.Source)]; !ok {
-			continue
-		}
-		placeable = append(placeable, source)
-	}
-
-	resolution, err := Resolve(provider, expected, placeable)
+	resolution, err := resolveObserved(provider, expected, observed)
 	if err != nil {
 		projection.Error = err.Error()
 		return projection
@@ -92,12 +86,36 @@ func Project(provider Provider, expected []SourceRef, observed []ObservedSource)
 		projection.Entries = append(projection.Entries, projectEntry(provider, state))
 	}
 	sortProjectedEntries(projection.Entries)
+	projection.EventValueRoles = make(map[string]string, len(projection.Entries))
+	for _, entry := range projection.Entries {
+		projection.EventValueRoles[entry.Event] = string(EventValueRole(provider, entry.Event))
+	}
 	for _, key := range resolution.UnrecognizedKeys {
 		projection.UnrecognizedKeys = append(projection.UnrecognizedKeys, ProjectedUnrecognizedKey{
 			Source: projectSourceRef(key.Source), Key: key.Key, Reason: key.Reason,
 		})
 	}
 	return projection
+}
+
+// resolveObserved drops observations outside expected and then resolves what
+// is left. Resolve rejects an unexpected source outright, so filtering first
+// is what stops one stale row costing the caller every readable scope. Every
+// consumer of a snapshot goes through here, so the filter cannot be applied
+// one way for the projection and another way for an answer.
+func resolveObserved(provider Provider, expected []SourceRef, observed []ObservedSource) (Resolution, error) {
+	allowed := make(map[SourceRef]struct{}, len(expected))
+	for _, ref := range normalizedRefs(expected) {
+		allowed[ref] = struct{}{}
+	}
+	placeable := make([]ObservedSource, 0, len(observed))
+	for _, source := range observed {
+		if _, ok := allowed[normalizeRef(source.Source)]; !ok {
+			continue
+		}
+		placeable = append(placeable, source)
+	}
+	return Resolve(provider, expected, placeable)
 }
 
 func projectSourceRef(ref SourceRef) ProjectedSourceRef {

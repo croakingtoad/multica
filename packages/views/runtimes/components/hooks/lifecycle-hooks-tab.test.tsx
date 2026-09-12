@@ -3,7 +3,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
-import type { AgentRuntime, RuntimeHookReadRequest } from "@multica/core/types";
+import type {
+  AgentRuntime,
+  RuntimeHookEntry,
+  RuntimeHookEventAnswer,
+  RuntimeHookEventAnswerResult,
+  RuntimeHookReadRequest,
+} from "@multica/core/types";
 import enCommon from "../../../locales/en/common.json";
 import enRuntimes from "../../../locales/en/runtimes.json";
 
@@ -12,6 +18,11 @@ import enRuntimes from "../../../locales/en/runtimes.json";
 // is allowed to show for each observation state, and what it must never claim.
 
 const hookQuery = vi.fn();
+// The per-event answer is a second query on the same component, so the mock
+// routes by query key rather than returning one shape for both. A single
+// return value would let the observation's result stand in for the answer's,
+// which is the confusion the panel exists to prevent.
+const answerQuery = vi.fn();
 
 vi.mock("@tanstack/react-query", async () => {
   const actual =
@@ -20,7 +31,8 @@ vi.mock("@tanstack/react-query", async () => {
     );
   return {
     ...actual,
-    useQuery: () => hookQuery(),
+    useQuery: (options: { queryKey: readonly unknown[] }) =>
+      options.queryKey[2] === "answer" ? answerQuery() : hookQuery(),
     useQueryClient: () => ({ invalidateQueries: vi.fn() }),
   };
 });
@@ -33,6 +45,14 @@ vi.mock("@multica/core/runtimes", () => ({
   // server's `phase_timeout_seconds`, and this suite mocks useQuery, so the
   // card renders here with the tab's initial no-bound progress.
   HOOK_READ_POLL_INTERVAL_MS: 500,
+  runtimeHookAnswerKeys: {
+    forRuntime: (id: string) => ["runtimes", "hooks", "answer", id],
+  },
+  runtimeHookAnswerOptions: (
+    id: string | null,
+    event: string | null,
+    value: string,
+  ) => ({ queryKey: ["runtimes", "hooks", "answer", id, event, value] }),
 }));
 
 import { LifecycleHooksTab } from "./lifecycle-hooks-tab";
@@ -110,6 +130,7 @@ function observation(
     ],
     resolved: {
       provider: "claude",
+      event_value_roles: { PreToolUse: "tool_name", Notification: "unspecified" },
       entries: [
         {
           hook_id: "sha256:parked-and-ineligible",
@@ -145,6 +166,9 @@ function observation(
 
 beforeEach(() => {
   hookQuery.mockReset();
+  answerQuery.mockReset();
+  // Idle by default: no value has been given, so no answer exists.
+  answerQuery.mockReturnValue({ data: undefined, error: null, isFetching: false });
 });
 
 describe("LifecycleHooksTab", () => {
@@ -157,8 +181,10 @@ describe("LifecycleHooksTab", () => {
 
     mount();
 
-    expect(screen.getByText("PreToolUse")).toBeInTheDocument();
-    expect(screen.getByText("Notification")).toBeInTheDocument();
+    // Both event names now appear more than once: the answer panel's event
+    // picker names them alongside their configured group heading.
+    expect(screen.getAllByText("PreToolUse").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Notification").length).toBeGreaterThanOrEqual(1);
     // Source per entry.
     expect(screen.getAllByText("user/json").length).toBeGreaterThanOrEqual(2);
     // Configuration axis and provider-verdict axis, both rendered.
@@ -666,6 +692,51 @@ describe("LifecycleHooksTab", () => {
       screen.getByText(/could not be resolved/),
     ).toBeInTheDocument();
     expect(screen.getByText(/duplicate parked hook id/)).toBeInTheDocument();
+    // The banner reporting the failure is not enough on its own: the events
+    // region below it must not simultaneously claim the checked sources held
+    // nothing, which is a conclusion the failed resolution never reached.
+    expect(
+      screen.queryByText(
+        enRuntimes.hooks.events.empty_title.replace(
+          "{{name}}",
+          "claude (daemon-1)",
+        ),
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(enRuntimes.hooks.events.empty_read_body),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(enRuntimes.hooks.events.unresolved_title),
+    ).toBeInTheDocument();
+  });
+
+  // Positive control for the assertion above: without a resolution error the
+  // empty state is the honest answer and still renders, so the absence check
+  // cannot pass just because zero entries renders nothing at all.
+  it("still says no entries when zero entries resolved cleanly", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        resolved: { provider: "claude", entries: [] },
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    mount();
+
+    expect(
+      screen.getByText(
+        enRuntimes.hooks.events.empty_title.replace(
+          "{{name}}",
+          "claude (daemon-1)",
+        ),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(enRuntimes.hooks.events.unresolved_title),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be resolved/)).not.toBeInTheDocument();
   });
 
   it("says a provider without a hook surface has none", () => {
@@ -676,5 +747,360 @@ describe("LifecycleHooksTab", () => {
     expect(
       screen.getByText("This runtime has no lifecycle hooks"),
     ).toBeInTheDocument();
+  });
+});
+
+// The what-actually-runs panel. Canonical matrix for its derivations lives in
+// hook-answer-model.test.ts; these are the wiring and the named honesty
+// regressions — the statements this screen must never make.
+describe("LifecycleHooksTab — what actually runs", () => {
+  function answerEntry(
+    overrides: Partial<RuntimeHookEntry> = {},
+  ): RuntimeHookEntry {
+    return {
+      hook_id: "sha256:live",
+      event: "PreToolUse",
+      matcher: "Bash",
+      matcher_kind: "exact",
+      handler: { type: "command", command: "guard.sh" },
+      handler_type: "command",
+      sources: [{ scope: "user", format: "json", kind: "settings" }],
+      configuration: "live",
+      effectiveness: "will_run",
+      trust: "not_applicable",
+      ...overrides,
+    };
+  }
+
+  function answerResult(
+    overrides: Partial<RuntimeHookEventAnswer> = {},
+    envelope: Partial<RuntimeHookEventAnswerResult> = {},
+  ): RuntimeHookEventAnswerResult {
+    return {
+      runtime_id: "rt-1",
+      provider: "claude",
+      cached: false,
+      observed_at: "2026-09-12T12:00:00Z",
+      answer: {
+        provider: "claude",
+        event: "PreToolUse",
+        value: "Bash",
+        value_role: "tool_name",
+        answerable: true,
+        matched: [],
+        not_matched: [],
+        never_runs: [],
+        configuration_excluded: [],
+        ...overrides,
+      },
+      ...envelope,
+    };
+  }
+
+  function mountWithAnswer(
+    result: RuntimeHookEventAnswerResult | undefined,
+    provider = "claude",
+    fetching = false,
+  ) {
+    hookQuery.mockReturnValue({
+      data: observation(),
+      error: null,
+      isFetching: false,
+    });
+    answerQuery.mockReturnValue({
+      data: result,
+      error: null,
+      isFetching: fetching,
+    });
+    const rendered = mount(provider);
+    // A value has to be present for the panel to leave its idle state, the
+    // same rule the server enforces: a matcher is evaluated against a value.
+    // Addressed by id rather than by label, because the label is the selected
+    // event's role and changes with the picker.
+    if (result) {
+      const input = rendered.container.querySelector("#hook-answer-value");
+      if (!input) throw new Error("no value field");
+      fireEvent.change(input, { target: { value: "Bash" } });
+      fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    }
+    return rendered;
+  }
+
+  // The value field is captioned from the projection's per-event role, so it
+  // is right before any answer exists. Asking in order to learn what to type
+  // would be backwards.
+  it("captions the value field from the event's own role, before any answer", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        resolved: {
+          provider: "claude",
+          event_value_roles: { PreToolUse: "tool_name" },
+          entries: [
+            {
+              hook_id: "sha256:live",
+              event: "PreToolUse",
+              matcher: "Bash",
+              matcher_kind: "exact",
+              handler: { type: "command", command: "guard.sh" },
+              handler_type: "command",
+              sources: [{ scope: "user", format: "json", kind: "settings" }],
+              configuration: "live",
+              effectiveness: "will_run",
+              trust: "not_applicable",
+            },
+          ],
+        },
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    mount();
+
+    expect(
+      screen.getByLabelText("Tool name", { selector: "input" }),
+    ).toBeInTheDocument();
+  });
+
+  // An event whose matcher the provider discards says so, rather than leaving
+  // the reader to infer it from an answer that never changes.
+  it("says the value is inert where the provider discards the matcher", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        resolved: {
+          provider: "claude",
+          event_value_roles: { UserPromptSubmit: "ignored" },
+          entries: [
+            {
+              hook_id: "sha256:ignored",
+              event: "UserPromptSubmit",
+              matcher: "anything",
+              matcher_kind: "ignored",
+              handler: { type: "command", command: "log.sh" },
+              handler_type: "command",
+              sources: [{ scope: "user", format: "json", kind: "settings" }],
+              configuration: "live",
+              effectiveness: "will_run",
+              trust: "not_applicable",
+            },
+          ],
+        },
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount();
+
+    expect(container.textContent).toMatch(
+      /the value changes nothing: every registered handler is matched/,
+    );
+  });
+
+  it("claims no outcome before a value is given", () => {
+    hookQuery.mockReturnValue({
+      data: observation(),
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount();
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/No value given yet, so nothing here claims an outcome/);
+    // The prompt itself says it lists conditions, not outcomes.
+    expect(text).toMatch(/under what condition each one fires/);
+  });
+
+  it("answers with the matched set and states that it is unordered", () => {
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }),
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/1 of 1 handlers configured on this event run/);
+    expect(text).toMatch(/Multica does not know the order in which they run/);
+    // Nothing numbers the set, and the set is a real list element.
+    expect(
+      container.querySelectorAll("ol, [type='1'], [start]").length,
+    ).toBe(0);
+  });
+
+  // The defect class this view exists to avoid: "cannot answer" must never be
+  // rendered as "nothing runs".
+  it("renders an unevaluable matcher as unanswerable, with no counts and no sets", () => {
+    const { container } = mountWithAnswer(
+      answerResult({
+        answerable: false,
+        error: 'compile claude matcher "^(?!Notebook).*" failed',
+        unevaluable: [
+          {
+            hook_id: "sha256:bad",
+            matcher: "^(?!Notebook).*",
+            error: "error parsing regexp: invalid or unsupported Perl syntax: `(?!`",
+          },
+        ],
+        // Present in the payload and still not rendered: an unanswerable
+        // event partitions nothing.
+        matched: [answerEntry()],
+      }),
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/Multica cannot answer for PreToolUse/);
+    expect(text).toMatch(/\^\(\?!Notebook\)\.\*/);
+    expect(text).toMatch(/invalid or unsupported Perl syntax/);
+    expect(text).toMatch(/Nothing is claimed to run and nothing is claimed not to run/);
+    // No headline count anywhere, and no matched set heading.
+    expect(text).not.toMatch(/handlers configured on this event run/);
+    expect(text).not.toMatch(/Matched by this value/);
+  });
+
+  // An answerable event with an empty matched set is a real answer about the
+  // value — and must say so, rather than reading as a verdict on the event.
+  it("distinguishes nothing-matched-this-value from cannot-answer", () => {
+    const { container } = mountWithAnswer(answerResult());
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/That is an answer about this value, not about the event/);
+    expect(text).not.toMatch(/Multica cannot answer/);
+  });
+
+  it("keeps both axes on a matched entry the provider skips", () => {
+    const { container } = mountWithAnswer(
+      answerResult({
+        matched: [
+          answerEntry({
+            hook_id: "sha256:skipped",
+            effectiveness: "never_runs",
+            never_runs_reason: "handler_type_unsupported_by_provider",
+          }),
+        ],
+      }),
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/0 of 1 handlers configured on this event run/);
+    expect(text).toMatch(/1 matched but skipped by the provider/);
+    // Configuration and verdict both present on the row.
+    expect(screen.getAllByText("Registered").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Will never run").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders a cross-source collapse as one entry with both sources", () => {
+    const { container } = mountWithAnswer(
+      answerResult({
+        matched: [
+          answerEntry({
+            sources: [
+              { scope: "user", format: "json", kind: "settings" },
+              { scope: "project", format: "json", kind: "settings" },
+            ],
+          }),
+        ],
+      }),
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/1 of 1 handlers configured on this event run/);
+    expect(text).toMatch(/1 duplicate definition absorbed/);
+    expect(text).toMatch(/one definition seen twice and runs once/);
+    expect(text).toMatch(/neither displaces the other/);
+    expect(text).not.toMatch(/shadow|overrid|precedence|\bwins\b/i);
+    expect(screen.getAllByText("project/json").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("teaches Claude's absent per-hook disable and trust gate", () => {
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }),
+    );
+    expect(container.textContent).toMatch(
+      /Claude has no per-hook disable and no trust gate/,
+    );
+  });
+
+  it("teaches Codex's per-hook disable and its trust gate", () => {
+    const { container } = mountWithAnswer(
+      answerResult(
+        { provider: "codex", matched: [answerEntry({ effectiveness: "trust_unknown", trust: "pending_review" })] },
+        { provider: "codex" },
+      ),
+      "codex",
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/only while its exact definition is trusted on the host/);
+    expect(text).toMatch(/individual non-managed hooks can be switched off/);
+    expect(text).toMatch(/1 with trust Multica cannot confirm/);
+    expect(text).toMatch(/0 of 1 handlers configured on this event run/);
+  });
+
+  // Criterion: not-checked is never "nothing here". The fixture observation
+  // has two never-checked project scopes.
+  it("says the answer covers only the sources somebody read", () => {
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }),
+    );
+    expect(container.textContent).toMatch(
+      /2 expected sources were never checked/,
+    );
+  });
+
+  it("dates the answer and flags one computed from another observation", () => {
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }, { observed_at: "2026-09-11T09:00:00Z" }),
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/Observed at 2026-09-11T09:00:00Z/);
+    expect(text).toMatch(/They are two different reads/);
+  });
+
+  it("renders an answer with no observation date as a refusal, with no counts and no sets", () => {
+    // The acceptance rule this panel exists for: nothing renders as "these
+    // fire" without a value and a dated observation behind it. The body is
+    // one a newer backend could send — a full answer, no date. Scoped to the
+    // panel, because the tab's own rows and banner have their own dated read.
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }, { observed_at: undefined }),
+    );
+    const panel = container.querySelector(
+      'section[aria-labelledby="hook-answer-title"]',
+    );
+    const text = panel?.textContent ?? "";
+
+    expect(text).toMatch(/The answer did not come back/);
+    // No headline count, no count chip, no set.
+    expect(text).not.toMatch(/handlers configured on this event run/);
+    expect(text).not.toMatch(/will run/);
+    expect(text).not.toMatch(/Matched by this value/);
+    // And no observation line under it: the answer has no date to show.
+    expect(text).not.toMatch(/Answered from the read/);
+    expect(text).not.toMatch(/Answered from the last known state/);
+  });
+
+  it("reports an unobserved runtime rather than an event with nothing on it", () => {
+    const { container } = mountWithAnswer(
+      answerResult({}, { answer: undefined, observed_at: undefined, error: "runtime has no hook observation to answer from" }),
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/Nothing has been read from this host/);
+    expect(text).toMatch(/not a runtime whose hooks do nothing/);
+    expect(text).not.toMatch(/handlers configured on this event run/);
+  });
+
+  // Read-only: stages 5 and 6 own the write path.
+  it("offers no add, edit, delete, park or disable control", () => {
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }),
+    );
+    const labels = [...container.querySelectorAll("button")].map(
+      (button) => `${button.textContent ?? ""} ${button.getAttribute("title") ?? ""}`,
+    );
+    for (const label of labels) {
+      expect(label).not.toMatch(/\bpark\b|\bunpark\b|\bdisable\b|\benable\b/i);
+      expect(label).not.toMatch(/\badd\b|\bedit\b|\bdelete\b|\bremove\b|\bsave\b/i);
+    }
   });
 });

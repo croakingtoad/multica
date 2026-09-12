@@ -25,21 +25,73 @@ import { useT } from "../../../i18n";
 // because no entry on either provider is ever displaced by another layer.
 // Every label below describes the entry itself.
 
-type BadgeTone = "ok" | "muted" | "bad" | "warn" | "unknown";
+export type BadgeTone =
+  | "ok"
+  | "muted"
+  | "bad"
+  | "warn"
+  | "unknown"
+  | "brand";
 
-// Contrast, measured against the light theme's white surface: success 4.5:1,
-// destructive 4.8:1 and muted-foreground 4.8:1 all clear WCAG AA as text, but
-// `--warning` is 2.25:1 and cannot be used for type at all. The warn tone
-// therefore takes the solid amber chip (warning-foreground on warning is
-// 7.7:1 light / 7.0:1 dark), and the unknown tone keeps an amber ring for
-// recognition while its text stays on a readable foreground.
+// Contrast. Every ratio below is computed from the resolved token values as
+// composited on screen — the colour the eye receives, not the raw token — for
+// both themes.
+//
+// The original numbers here measured each state colour against the light
+// theme's *white surface* (success 4.5:1, destructive 4.8:1). But these chips
+// never sit on white: they sit on a 10% tint of their own colour, which pulls
+// the background toward the foreground and takes the pair below AA. Measured:
+// success on success/10 is 4.00:1 and destructive on destructive/10 is 3.97:1
+// in the light theme, both under the 4.5:1 floor for text this size. Dark
+// passes either way (5.05:1 and 5.39:1), so this was a light-theme-only
+// failure that a single-surface measurement could not see.
+//
+// So ok and bad now take the shape the unknown tone already used: the tint
+// stays as the recognition cue, the ring carries the state colour, and the
+// text moves to `foreground` — 17.5:1 / 16.6:1 light, 14.8:1 / 14.9:1 dark.
+// The ring and the icon keep the state colour and are non-text, where the
+// floor is 3:1: success 4.56:1 light / 5.79:1 dark, destructive 4.77:1 /
+// 6.13:1. State is therefore never carried by colour alone — ring, icon and
+// the label's own words all say it.
+//
+// muted (muted-foreground on muted, 5.38:1 light / 5.68:1 dark) and warn
+// (warning-foreground on the solid amber chip, 7.74:1 / 6.96:1) already
+// cleared AA and are unchanged. `--warning` itself is 2.25:1 on white and
+// still cannot be used for type at all.
 const TONE_CLASS: Record<BadgeTone, string> = {
-  ok: "bg-success/10 text-success",
+  ok: "bg-success/10 text-foreground ring-1 ring-inset ring-success",
   muted: "bg-muted text-muted-foreground",
-  bad: "bg-destructive/10 text-destructive",
+  bad: "bg-destructive/10 text-foreground ring-1 ring-inset ring-destructive",
   warn: "bg-warning text-warning-foreground",
   unknown: "bg-muted text-foreground ring-1 ring-inset ring-warning",
+  brand: "bg-brand/10 text-foreground ring-1 ring-inset ring-brand",
 };
+
+// The icon keeps the state's own colour so the chip is still recognisable at
+// a glance once its text is on `foreground`.
+const TONE_ICON_CLASS: Record<BadgeTone, string> = {
+  ok: "text-success",
+  muted: "text-muted-foreground",
+  bad: "text-destructive",
+  warn: "text-warning-foreground",
+  unknown: "text-foreground",
+  brand: "text-brand",
+};
+
+/**
+ * The tone classes, for the count chips that are not StateBadges. Exported so
+ * every hook surface takes the same measured pairing: the same sub-AA
+ * combination was hand-written at five sites before this, and fixing one
+ * copy is how they drifted apart in the first place.
+ */
+export function hookToneClass(tone: BadgeTone): string {
+  return TONE_CLASS[tone];
+}
+
+/** The icon colour for a tone, where the icon is rendered outside a badge. */
+export function hookToneIconClass(tone: BadgeTone): string {
+  return TONE_ICON_CLASS[tone];
+}
 
 function StateBadge({
   tone,
@@ -65,7 +117,10 @@ function StateBadge({
         className,
       )}
     >
-      <Icon aria-hidden="true" className="mt-0.5 shrink-0" />
+      <Icon
+        aria-hidden="true"
+        className={cn("mt-0.5 shrink-0", TONE_ICON_CLASS[tone])}
+      />
       <span className="min-w-0">{children}</span>
     </Badge>
   );
@@ -291,7 +346,13 @@ export function ScopeBadge({
       variant="ghost"
       className={cn(
         "h-auto gap-1 rounded-md border-transparent py-0.5 font-mono whitespace-normal",
-        writable ? "bg-brand/10 text-brand" : "bg-muted text-muted-foreground",
+        // brand on brand/10 measured 4.28:1 in the light theme — the same
+        // sub-AA pairing as the ok and bad tones above, fixed the same way.
+        // Text on `foreground` is 17.4:1 light / 14.9:1 dark, and the brand
+        // ring is 4.89:1 / 5.45:1 against the card as a non-text cue.
+        writable
+          ? "bg-brand/10 text-foreground ring-1 ring-inset ring-brand"
+          : "bg-muted text-muted-foreground",
       )}
       title={
         writable
@@ -303,4 +364,71 @@ export function ScopeBadge({
       {`${scope}/${format}`}
     </Badge>
   );
+}
+
+/**
+ * What the provider matches an event's matcher against, so a reader knows
+ * what to type. `unspecified` is an event whose role the provider's docs do
+ * not state: the server withholds the caption there rather than inferring one
+ * from the event's name, and this returns the generic prompt rather than
+ * filling the gap with a guess.
+ */
+export function useHookValueRoleLabel(role: string): {
+  label: string;
+  placeholder: string;
+  inert: boolean;
+} {
+  const { t } = useT("runtimes");
+  switch (role) {
+    case "ignored":
+      return {
+        label: t(($) => $.hooks.answer.role_ignored),
+        placeholder: t(($) => $.hooks.answer.placeholder_any),
+        inert: true,
+      };
+    case "tool_name":
+      return {
+        label: t(($) => $.hooks.answer.role_tool_name),
+        placeholder: t(($) => $.hooks.answer.placeholder_tool_name),
+        inert: false,
+      };
+    case "compaction_trigger":
+      return {
+        label: t(($) => $.hooks.answer.role_compaction_trigger),
+        placeholder: t(($) => $.hooks.answer.placeholder_compaction_trigger),
+        inert: false,
+      };
+    case "session_start_source":
+      return {
+        label: t(($) => $.hooks.answer.role_session_start_source),
+        placeholder: t(($) => $.hooks.answer.placeholder_session_start_source),
+        inert: false,
+      };
+    case "session_end_reason":
+      return {
+        label: t(($) => $.hooks.answer.role_session_end_reason),
+        placeholder: t(($) => $.hooks.answer.placeholder_any),
+        inert: false,
+      };
+    case "subagent_type":
+      return {
+        label: t(($) => $.hooks.answer.role_subagent_type),
+        placeholder: t(($) => $.hooks.answer.placeholder_any),
+        inert: false,
+      };
+    case "changed_file_basename":
+      return {
+        label: t(($) => $.hooks.answer.role_changed_file_basename),
+        placeholder: t(($) => $.hooks.answer.placeholder_changed_file_basename),
+        inert: false,
+      };
+    default:
+      // Includes "unspecified" and any role a newer server reports. Neither is
+      // captioned with a guess.
+      return {
+        label: t(($) => $.hooks.answer.role_unspecified),
+        placeholder: t(($) => $.hooks.answer.placeholder_any),
+        inert: false,
+      };
+  }
 }

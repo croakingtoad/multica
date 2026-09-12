@@ -1,5 +1,7 @@
 import type {
   RuntimeHookEntry,
+  RuntimeHookEventAnswer,
+  RuntimeHookEventAnswerResult,
   RuntimeHookReadRequest,
   RuntimeHookSource,
 } from "@multica/core/types";
@@ -375,4 +377,197 @@ export function hookObservationShowsEntries(
   view: HookObservationView,
 ): boolean {
   return view.kind === "live" || view.kind === "last_known";
+}
+
+// ---------------------------------------------------------------------------
+// The per-event answer. Everything below is shape and arithmetic over the
+// server's EventAnswer; no matcher is evaluated here and no provider rule is
+// decided here. `answerable` is the server's own flag and is never inferred
+// from an empty set — an empty `matched` on an unanswerable event means
+// Multica established nothing, not that nothing runs.
+
+export type HookAnswerKind =
+  /** No value supplied yet. Nothing about outcomes may be claimed. */
+  | "idle"
+  /** A request is in flight; the previous answer is no longer this one. */
+  | "asking"
+  /** The server has no observation to answer from. */
+  | "unobserved"
+  /**
+   * The request failed, the payload was a parse refusal, or the answer
+   * arrived with no observation date behind it.
+   */
+  | "failed"
+  /** The server answered that it cannot answer this event. */
+  | "unanswerable"
+  /** A real answer. */
+  | "answered";
+
+export interface HookAnswerView {
+  kind: HookAnswerKind;
+  /** Non-null only for `unanswerable` and `answered`. */
+  answer: RuntimeHookEventAnswer | null;
+  /** The observation the answer was computed from. Null unless dated. */
+  observedAt: string | null;
+  cached: boolean;
+  error: string | null;
+  /**
+   * The answer was computed from a different observation than the rows on
+   * screen. The read endpoint and the answer endpoint both go to the stored
+   * snapshot, so a re-read between them can move it; saying so is cheaper
+   * than presenting two observations as one.
+   */
+  observationMismatch: boolean;
+}
+
+const IDLE_ANSWER: HookAnswerView = {
+  kind: "idle",
+  answer: null,
+  observedAt: null,
+  cached: false,
+  error: null,
+  observationMismatch: false,
+};
+
+/**
+ * The single gate on whether an answer may be shown, mirroring
+ * `hookObservationView`'s role for the observation. Decide from `isFetching`
+ * first for the same reason: `gcTime: 0` collects one macrotask late, so a
+ * value from the previous event or value can briefly survive and must never
+ * be presented as the answer to the current one.
+ */
+export function hookAnswerView(
+  data: RuntimeHookEventAnswerResult | undefined,
+  isFetching: boolean,
+  queryError: unknown,
+  requestedValue: string,
+  tabObservedAt: string | null,
+): HookAnswerView {
+  if (requestedValue.trim().length === 0) return IDLE_ANSWER;
+  if (isFetching) return { ...IDLE_ANSWER, kind: "asking" };
+  if (queryError) {
+    return {
+      ...IDLE_ANSWER,
+      kind: "failed",
+      error: queryError instanceof Error ? queryError.message : null,
+    };
+  }
+  if (!data) return IDLE_ANSWER;
+
+  const observedAt = data.observed_at ?? null;
+  const cached = data.cached === true;
+  if (!data.answer) {
+    // No answer object at all: either nothing has been read from the host, or
+    // the payload did not parse. Both are refusals, and neither is an event
+    // with nothing on it.
+    return {
+      ...IDLE_ANSWER,
+      kind: observedAt ? "failed" : "unobserved",
+      observedAt,
+      cached,
+      error: data.error ?? null,
+    };
+  }
+  if (!observedAt) {
+    // An answer with no observation date is a refusal too, and for the same
+    // reason as the branch above: counts and sets would be a claim about a
+    // host state nobody dated. Today's server cannot produce this body, but
+    // an installed client meets newer backends, so the shape is refused here
+    // rather than trusted. The tab's own observation is deliberately not
+    // borrowed as a date — it is a different read.
+    return {
+      ...IDLE_ANSWER,
+      kind: "failed",
+      cached,
+      error: data.error ?? data.answer.error ?? null,
+    };
+  }
+  const mismatch = Boolean(tabObservedAt && observedAt && tabObservedAt !== observedAt);
+  if (data.answer.answerable !== true) {
+    return {
+      kind: "unanswerable",
+      answer: data.answer,
+      observedAt,
+      cached,
+      error: data.answer.error ?? data.error ?? null,
+      observationMismatch: mismatch,
+    };
+  }
+  return {
+    kind: "answered",
+    answer: data.answer,
+    observedAt,
+    cached,
+    error: null,
+    observationMismatch: mismatch,
+  };
+}
+
+export interface HookAnswerTotals {
+  /** Every entry the answer accounts for, each counted exactly once. */
+  configured: number;
+  /** Matched, live, and the provider's verdict is will_run. These run. */
+  runs: number;
+  /** Matched, but whether the provider acts depends on host-recorded trust. */
+  trustUnconfirmed: number;
+  /** Matched, but the provider parses the entry and skips it. */
+  providerSkips: number;
+  /** Live configuration this value does not satisfy. */
+  notMatched: number;
+  /**
+   * Live configuration the provider's pre-matcher filter excluded before any
+   * matcher ran. Not every entry the provider will not act on: one it parses
+   * and skips is in `matched`, counted as `providerSkips`.
+   */
+  neverRuns: number;
+  /** Parked or disabled, so the provider never sees it. */
+  excluded: number;
+  /**
+   * Definitions the provider's own cross-source rule absorbed: the extra
+   * copies, not the rows that survived them. Three byte-identical copies of
+   * one handler are one row carrying three sources and two absorbed
+   * definitions, and two is the number the chip states. A deduplication of
+   * one definition seen more than once, never one source winning.
+   */
+  collapsed: number;
+}
+
+/**
+ * Each entry lands in exactly one of the answer's four sets, and within the
+ * matched set each entry has exactly one effectiveness, so nothing below
+ * counts an entry twice — including a parked entry that would also never run,
+ * which is counted once, as `excluded`, while still showing both its axes.
+ */
+export function hookAnswerTotals(
+  answer: RuntimeHookEventAnswer | null,
+): HookAnswerTotals {
+  const matched = answer?.matched ?? [];
+  const notMatched = answer?.not_matched ?? [];
+  const neverRuns = answer?.never_runs ?? [];
+  const excluded = answer?.configuration_excluded ?? [];
+  return {
+    configured:
+      matched.length + notMatched.length + neverRuns.length + excluded.length,
+    runs: matched.filter(entryWillRun).length,
+    trustUnconfirmed: matched.filter(
+      (entry) => entry.effectiveness === "trust_unknown",
+    ).length,
+    providerSkips: matched.filter(
+      (entry) => entry.effectiveness === "never_runs",
+    ).length,
+    notMatched: notMatched.length,
+    neverRuns: neverRuns.length,
+    excluded: excluded.length,
+    collapsed: matched.reduce(
+      (total, entry) => total + Math.max(0, entry.sources.length - 1),
+      0,
+    ),
+  };
+}
+
+/** The events the observation actually configured, for the event picker. */
+export function hookAnsweredEvents(entries: RuntimeHookEntry[]): string[] {
+  return [...new Set(entries.map((entry) => entry.event))].sort((left, right) =>
+    left.localeCompare(right),
+  );
 }

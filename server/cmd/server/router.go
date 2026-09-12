@@ -2198,6 +2198,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/local-skills/import", h.InitiateImportLocalSkill)
 					r.Get("/local-skills/import/{requestId}", h.GetLocalSkillImportRequest)
 					r.Post("/hooks", h.InitiateHookRead)
+					// chi resolves a static segment ahead of a param sibling at
+					// the same level whatever order they are registered in, so
+					// "answer" reaches the answer handler and never reads as a
+					// request id. The order below is for the reader, not for
+					// the router. runtime_hooks_answer_test.go holds the chi
+					// precedence this registration assumes, on a router it
+					// builds itself; nothing holds this file.
+					r.Get("/hooks/answer", h.AnswerHookEvent)
 					r.Get("/hooks/{requestId}", h.GetHookReadRequest)
 					r.Delete("/", h.DeleteAgentRuntime)
 					// Confirmed variant of DELETE: unbind every agent bound to

@@ -10,6 +10,7 @@ import {
   EmptyTitle,
 } from "@multica/ui/components/ui/empty";
 import { useT } from "../../../i18n";
+import { hookToneClass } from "./hook-state-badges";
 
 /**
  * The runtime is offline. Two cases share this card and differ in one
@@ -45,7 +46,7 @@ export function HookOfflineCard({
       <EmptyHeader>
         <EmptyMedia
           variant="icon"
-          className="bg-destructive/10 text-destructive"
+          className={hookToneClass("bad")}
         >
           <WifiOff aria-hidden="true" />
         </EmptyMedia>

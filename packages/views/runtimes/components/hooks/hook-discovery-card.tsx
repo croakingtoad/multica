@@ -11,6 +11,7 @@ import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../../i18n";
+import { hookToneClass } from "./hook-state-badges";
 
 /**
  * Discovery in progress. This is a different answer from an empty runtime and
@@ -69,7 +70,7 @@ export function HookDiscoveryCard({
           <h3 className="text-label font-medium">
             {t(($) => $.hooks.discovery.title, { name: runtimeName })}
           </h3>
-          <Badge variant="ghost" className="bg-brand/10 text-brand">
+          <Badge variant="ghost" className={hookToneClass("brand")}>
             {t(($) => $.hooks.discovery.polling)}
           </Badge>
           <span className="flex-1" />
@@ -110,9 +111,9 @@ export function HookDiscoveryCard({
                   className={cn(
                     "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full",
                     done
-                      ? "bg-success/15 text-success"
+                      ? hookToneClass("ok")
                       : active
-                        ? "bg-brand/15 text-brand"
+                        ? hookToneClass("brand")
                         : "bg-muted text-muted-foreground",
                   )}
                 >

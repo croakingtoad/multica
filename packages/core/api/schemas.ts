@@ -74,6 +74,7 @@ import type {
   PluginPreview,
   PluginSurfaceLaunch,
   ResourceLabelsResponse,
+  RuntimeHookEventAnswerResult,
   RuntimeHookReadRequest,
   RuntimeModelListRequest,
   SearchIssuesResponse,
@@ -3502,6 +3503,9 @@ export const RuntimeHookEntrySchema = z.object({
 export const RuntimeHookResolutionSchema = z.object({
   provider: z.string().default(""),
   entries: z.array(RuntimeHookEntrySchema).default([]),
+  // Left as a string map so an unrecognised role still parses and reaches a
+  // default-bearing switch rather than collapsing the whole observation.
+  event_value_roles: z.record(z.string(), z.string()).optional(),
   unrecognized_keys: z.array(z.object({
     source: RuntimeHookSourceRefSchema,
     key: z.string().default(""),
@@ -3557,4 +3561,48 @@ export const failedRuntimeHookRead = (runtimeId: string): RuntimeHookReadRequest
   cached: false,
   offline: false,
   error: "hook read response did not match the expected shape",
+});
+
+// The per-event answer. `answerable` has no default: a malformed response must
+// not parse into an answer that reads as "nothing runs", so the whole payload
+// falls back to failedRuntimeHookEventAnswer below instead. The four sets do
+// default to empty, because they are only ever read once `answerable` is true.
+export const RuntimeHookEventAnswerSchema = z.object({
+  provider: z.string().default(""),
+  event: z.string().default(""),
+  value: z.string().default(""),
+  value_role: z.string().default("unspecified"),
+  answerable: z.boolean(),
+  error: z.string().optional(),
+  unevaluable: z.array(z.object({
+    hook_id: z.string().default(""),
+    matcher: z.string().default(""),
+    error: z.string().default(""),
+  }).loose()).optional(),
+  matched: z.array(RuntimeHookEntrySchema).default([]),
+  not_matched: z.array(RuntimeHookEntrySchema).default([]),
+  never_runs: z.array(RuntimeHookEntrySchema).default([]),
+  configuration_excluded: z.array(RuntimeHookEntrySchema).default([]),
+}).loose();
+
+export const RuntimeHookEventAnswerResultSchema = z.object({
+  runtime_id: z.string().default(""),
+  provider: z.string().default(""),
+  cached: z.boolean().default(false),
+  // Absent is meaningful: an answer with no date is one the server declined
+  // to give, never a current one.
+  observed_at: z.string().optional(),
+  answer: RuntimeHookEventAnswerSchema.optional(),
+  error: z.string().optional(),
+}).loose();
+
+// The fallback is a refusal, not an empty answer — `answer` stays absent so
+// no surface can render a parse failure as an event with nothing on it.
+export const failedRuntimeHookEventAnswer = (
+  runtimeId: string,
+): RuntimeHookEventAnswerResult => ({
+  runtime_id: runtimeId,
+  provider: "",
+  cached: false,
+  error: "hook answer response did not match the expected shape",
 });
