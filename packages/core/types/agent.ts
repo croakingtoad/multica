@@ -1402,6 +1402,13 @@ export interface RuntimeHookReadRequest {
   runtime_id: string;
   status: RuntimeHookReadStatus;
   cached: boolean;
+  // Two bits, not one. `cached` means this answer came from the server's
+  // snapshot; `offline` means the runtime was not online when the server
+  // answered. Cached implies offline; offline does not imply cached — an
+  // offline runtime with no stored observation is the case that needs both,
+  // and it is a state to name rather than a read that failed. Backends that
+  // predate the field omit it; the parser defaults it to `false`.
+  offline: boolean;
   observed_at?: string;
   sources?: RuntimeHookSource[];
   resolved?: RuntimeHookResolution;

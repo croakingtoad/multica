@@ -205,6 +205,38 @@ export function hookTotals(
   };
 }
 
+export interface HookEmptySummary {
+  /** Paths that were read and held no hook entries. */
+  readPaths: string[];
+  /** Scopes Multica looked for and did not find a file at. */
+  absent: HookScopeRow[];
+  /** Scopes nobody looked at, so they say nothing either way. */
+  notChecked: HookScopeRow[];
+  /**
+   * No source was found at all, so "no hooks" is a statement about files that
+   * are not there rather than about files that were read and held nothing.
+   */
+  nothingRead: boolean;
+}
+
+/**
+ * Why there are no entries, from the sources themselves. The two reasons read
+ * differently and must not share one sentence: every source was read and held
+ * nothing, or there was nothing to read. A scope nobody checked supports
+ * neither claim, so it is carried separately in both cases.
+ */
+export function hookEmptySummary(scopes: HookScopeRow[]): HookEmptySummary {
+  const found = scopes.filter((scope) => scope.state === "found");
+  return {
+    readPaths: found.map(
+      (scope) => scope.sourcePath ?? scope.expectedPath ?? scope.key,
+    ),
+    absent: scopes.filter((scope) => scope.state === "absent"),
+    notChecked: scopes.filter((scope) => scope.state === "not_checked"),
+    nothingRead: found.length === 0,
+  };
+}
+
 /**
  * An observation is older than this after the read that produced it, so it is
  * labelled as stale rather than current. The server bounds `observed_at` only
@@ -221,7 +253,13 @@ export type HookObservationKind =
   | "live"
   /** The stored snapshot of an offline runtime, with its observation time. */
   | "last_known"
-  /** Offline with nothing stored, or a read that never produced a date. */
+  /**
+   * The runtime is offline and no snapshot was ever stored for it. Not a
+   * failure: nothing went wrong, there is simply nothing to show and no way to
+   * look until the runtime reconnects.
+   */
+  | "offline_no_snapshot"
+  /** A read that completed or returned without ever producing a date. */
   | "no_observation"
   /** The read reached a terminal failure and carries the reason. */
   | "failed";
@@ -231,6 +269,12 @@ export interface HookObservationView {
   /** Never null for `live` or `last_known`: those two are dated by definition. */
   observedAt: string | null;
   stale: boolean;
+  /**
+   * Whether the runtime was offline when the server answered. Server-reported,
+   * never inferred from the client's own runtime row, which can be staler than
+   * the answer it is framing.
+   */
+  offline: boolean;
   error: string | null;
   resolutionError: string | null;
 }
@@ -257,6 +301,7 @@ export function hookObservationView(
       kind: "discovering",
       observedAt: null,
       stale: false,
+      offline: false,
       error: null,
       resolutionError: null,
     };
@@ -266,6 +311,7 @@ export function hookObservationView(
       kind: "failed",
       observedAt: null,
       stale: false,
+      offline: false,
       error: queryError instanceof Error ? queryError.message : null,
       resolutionError: null,
     };
@@ -275,26 +321,36 @@ export function hookObservationView(
       kind: "no_observation",
       observedAt: null,
       stale: false,
+      offline: false,
       error: null,
       resolutionError: null,
     };
   }
   const resolutionError = data.resolved?.error ?? null;
   const observedAt = data.observed_at ?? null;
+  // A cached answer is an offline answer by construction, so the two agree on
+  // every server that reports both. Taking either as offline keeps the reading
+  // right on a backend that predates the `offline` field.
+  const offline = data.offline || data.cached;
   if (data.status !== "completed") {
+    // Offline with nothing stored is the one non-completed answer that is not
+    // a failure. It is the honest state of an unreachable runtime Multica has
+    // never read, and it says so instead of blaming the read.
     return {
-      kind: "failed",
+      kind: offline && !observedAt ? "offline_no_snapshot" : "failed",
       observedAt,
       stale: false,
+      offline,
       error: data.error ?? null,
       resolutionError,
     };
   }
   if (!observedAt) {
     return {
-      kind: "no_observation",
+      kind: offline ? "offline_no_snapshot" : "no_observation",
       observedAt: null,
       stale: false,
+      offline,
       error: data.error ?? null,
       resolutionError,
     };
@@ -308,6 +364,7 @@ export function hookObservationView(
     // A cached observation is always last-known, whatever its age, so the
     // staleness flag only has to add the age warning a live read can also need.
     stale,
+    offline,
     error: null,
     resolutionError,
   };

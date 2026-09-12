@@ -3005,6 +3005,38 @@ describe("ApiClient lifecycle hook reads", () => {
     expect(result.resolved).toBeUndefined();
   });
 
+  it("keeps offline and cached as two separate bits", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "failed",
+      cached: false,
+      offline: true,
+      error: "runtime is offline and has no last known hook observation",
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .initiateHookRead("rt-1");
+
+    // Offline without a snapshot: the UI needs both bits to tell this apart
+    // from a read that failed on an online runtime.
+    expect(result.offline).toBe(true);
+    expect(result.cached).toBe(false);
+  });
+
+  it("defaults offline to false when a backend omits it", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .initiateHookRead("rt-1");
+
+    expect(result.offline).toBe(false);
+  });
+
   it("degrades a malformed poll body to an explicit failed read", async () => {
     stubHookJSON({ sources: "nope" });
 

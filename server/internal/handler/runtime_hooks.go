@@ -196,11 +196,17 @@ type hookSourceResponse struct {
 	ObservedAt    *time.Time      `json:"observed_at,omitempty"`
 }
 
+// `cached` and `offline` are two bits, not one. `cached` says this answer came
+// from the snapshot; `offline` says the runtime was not online when the answer
+// was produced. Cached implies offline, but offline does not imply cached — an
+// offline runtime with nothing ever observed is the one case that needs both,
+// and it is a state to name rather than a read that failed.
 type hookReadResponse struct {
 	ID         string                   `json:"id,omitempty"`
 	RuntimeID  string                   `json:"runtime_id"`
 	Status     HookReadStatus           `json:"status"`
 	Cached     bool                     `json:"cached"`
+	Offline    bool                     `json:"offline"`
 	ObservedAt *time.Time               `json:"observed_at,omitempty"`
 	Sources    []hookSourceResponse     `json:"sources,omitempty"`
 	Resolved   *runtimehooks.Projection `json:"resolved,omitempty"`
@@ -293,6 +299,7 @@ func (h *Handler) writeOfflineHookSnapshot(w http.ResponseWriter, r *http.Reques
 	}
 	writeJSON(w, http.StatusOK, hookReadResponse{
 		RuntimeID: uuidToString(rt.ID), Status: status, Cached: observation.ObservedAt != nil,
+		Offline:    true,
 		ObservedAt: observation.ObservedAt, Sources: observation.Sources,
 		Resolved: observation.Resolved, Error: errorMessage,
 	})

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentRuntime, RuntimeHookReadRequest } from "@multica/core/types";
 import enCommon from "../../../locales/en/common.json";
@@ -27,11 +27,18 @@ vi.mock("@tanstack/react-query", async () => {
 vi.mock("@multica/core/runtimes", () => ({
   runtimeHooksKeys: { forRuntime: (id: string) => ["runtimes", "hooks", id] },
   runtimeHooksOptions: (id: string | null) => ({ queryKey: ["runtimes", "hooks", id] }),
+  // The discovery card prints the real poll interval and timeout, so the mock
+  // has to carry them rather than let the screen invent friendlier numbers.
+  HOOK_READ_POLL_INTERVAL_MS: 500,
+  HOOK_READ_POLL_TIMEOUT_MS: 100_000,
 }));
 
 import { LifecycleHooksTab } from "./lifecycle-hooks-tab";
 
-function runtime(provider = "claude"): AgentRuntime {
+function runtime(
+  provider = "claude",
+  overrides: Partial<AgentRuntime> = {},
+): AgentRuntime {
   return {
     id: "rt-1",
     workspace_id: "ws-1",
@@ -49,16 +56,17 @@ function runtime(provider = "claude"): AgentRuntime {
     last_seen_at: "2026-09-12T11:00:00Z",
     created_at: "2026-09-12T10:00:00Z",
     updated_at: "2026-09-12T11:00:00Z",
+    ...overrides,
   };
 }
 
-function mount(provider = "claude") {
+function mount(provider = "claude", overrides: Partial<AgentRuntime> = {}) {
   return render(
     <I18nProvider
       locale="en"
       resources={{ en: { common: enCommon, runtimes: enRuntimes } }}
     >
-      <LifecycleHooksTab runtime={runtime(provider)} />
+      <LifecycleHooksTab runtime={runtime(provider, overrides)} />
     </I18nProvider>,
   );
 }
@@ -70,6 +78,7 @@ function observation(
     runtime_id: "rt-1",
     status: "completed",
     cached: false,
+    offline: false,
     observed_at: new Date().toISOString(),
     sources: [
       {
@@ -237,30 +246,83 @@ describe("LifecycleHooksTab", () => {
 
   // AC4: the offline view is the snapshot plus its observed_at, and it reads
   // as last known rather than current.
-  it("dates a cached snapshot and says it is last known", () => {
+  it("offers a cached snapshot as last known instead of serving it", () => {
     hookQuery.mockReturnValue({
-      data: observation({ cached: true, observed_at: "2026-09-12T09:00:00Z" }),
+      data: observation({
+        cached: true,
+        offline: true,
+        observed_at: "2026-09-12T09:00:00Z",
+      }),
       error: null,
       isFetching: false,
     });
 
-    mount();
+    mount("claude", { status: "offline" });
 
-    expect(screen.getByText(/Last known state/)).toBeInTheDocument();
+    // Gated first: the runtime is named as offline and the snapshot is an
+    // offer, not the screen's answer.
     expect(
-      screen.getByText(/Observed at 2026-09-12T09:00:00Z/),
+      screen.getByText("claude (daemon-1) is offline"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("PreToolUse")).not.toBeInTheDocument();
+    // Dated even while gated, so its age is knowable before it is opened.
+    expect(
+      screen.getAllByText(/Observed at 2026-09-12T09:00:00Z/).length,
+    ).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /last known hooks/i }));
+
+    // Revealed: the rows appear, and every frame around them still says the
+    // observation is last known rather than current (invariant 3).
+    expect(screen.getByText("PreToolUse")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Last known state, read/),
     ).toBeInTheDocument();
     expect(screen.getByText(/not as they are now/)).toBeInTheDocument();
+    expect(screen.getByText(/Shown read-only/)).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/Observed at 2026-09-12T09:00:00Z/).length,
+    ).toBeGreaterThanOrEqual(2);
   });
 
-  // AC4, second half: no prior observation is an explicit failure.
-  it("shows an explicit failure when there is no stored observation", () => {
+  // AC4, second half: offline with nothing stored is its own state. It must
+  // not read as a failed read, and there must be nothing to reveal.
+  it("names offline-with-no-snapshot and offers nothing to reveal", () => {
     hookQuery.mockReturnValue({
       data: {
         runtime_id: "rt-1",
         status: "failed",
         cached: false,
+        offline: true,
         error: "runtime is offline and has no last known hook observation",
+      },
+      error: null,
+      isFetching: false,
+    });
+
+    mount("claude", { status: "offline" });
+
+    expect(
+      screen.getByText("claude (daemon-1) is offline"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/no last known state to fall back to/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /last known hooks/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/did not complete/)).not.toBeInTheDocument();
+    expect(screen.queryByText("PreToolUse")).not.toBeInTheDocument();
+  });
+
+  // An online read that failed still reads as a failure — the offline card
+  // must not absorb every empty answer.
+  it("keeps an online read failure a failure", () => {
+    hookQuery.mockReturnValue({
+      data: {
+        runtime_id: "rt-1",
+        status: "timed_out",
+        cached: false,
+        offline: false,
+        error: "daemon did not answer within 30 seconds",
       },
       error: null,
       isFetching: false,
@@ -270,9 +332,9 @@ describe("LifecycleHooksTab", () => {
 
     expect(screen.getByText(/did not complete/)).toBeInTheDocument();
     expect(
-      screen.getByText(/no last known hook observation/),
+      screen.getByText(/daemon did not answer within 30 seconds/),
     ).toBeInTheDocument();
-    expect(screen.queryByText("PreToolUse")).not.toBeInTheDocument();
+    expect(screen.queryByText(/is offline/)).not.toBeInTheDocument();
   });
 
   // The gcTime: 0 caveat — a value still in cache during a new discovery must
@@ -286,9 +348,88 @@ describe("LifecycleHooksTab", () => {
 
     mount();
 
-    expect(screen.getByText(/Reading hooks from the host/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Reading hooks from claude (daemon-1)"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("PreToolUse")).not.toBeInTheDocument();
     expect(screen.queryByText(/Observed at/)).not.toBeInTheDocument();
+  });
+
+  // AC2: a read in flight and a runtime with no hooks must not look alike.
+  // The in-flight screen names the wait and its phases; the empty screen is a
+  // settled statement about files, with the date that statement is about.
+  it("distinguishes discovery in progress from a runtime with no hooks", () => {
+    hookQuery.mockReturnValue({
+      data: observation(),
+      error: null,
+      isFetching: true,
+    });
+    const discovering = mount();
+    const discoveringText = discovering.container.textContent ?? "";
+
+    expect(discoveringText).toMatch(/Polling/);
+    expect(discoveringText).toMatch(/Waiting for the daemon/);
+    expect(discoveringText).toMatch(/Nothing is shown until this read returns/);
+    expect(discoveringText).not.toMatch(/No lifecycle hooks/);
+    discovering.unmount();
+
+    const empty = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    empty.resolved!.entries = [];
+    hookQuery.mockReturnValue({ data: empty, error: null, isFetching: false });
+    const settled = mount();
+    const settledText = settled.container.textContent ?? "";
+
+    expect(
+      screen.getByText("No lifecycle hooks on claude (daemon-1)"),
+    ).toBeInTheDocument();
+    expect(settledText).not.toMatch(/Polling/);
+    expect(settledText).not.toMatch(/Waiting for the daemon/);
+  });
+
+  // An empty runtime has to say which files its claim is about, and which
+  // scopes it says nothing about at all.
+  it("names the sources an empty result is a statement about", () => {
+    const empty = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    empty.resolved!.entries = [];
+    hookQuery.mockReturnValue({ data: empty, error: null, isFetching: false });
+
+    mount();
+
+    expect(
+      screen.getByText(/Every source Multica could read on this host/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText("/home/u/.claude/settings.json").length,
+    ).toBeGreaterThanOrEqual(1);
+    // The two not-checked scopes are listed and excluded from the claim.
+    expect(screen.getByText("Not checked:")).toBeInTheDocument();
+    expect(
+      screen.getByText(/says nothing about them/),
+    ).toBeInTheDocument();
+    // Invariant 3: the claim is dated in the card that makes it.
+    expect(screen.getByText(/Last read/)).toBeInTheDocument();
+  });
+
+  // The other empty case: nothing was read at all, which is a statement about
+  // files that are not there rather than files that held nothing.
+  it("says nothing was read when no source was found", () => {
+    const empty = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    empty.sources = empty.sources!.map((source) => ({
+      ...source,
+      state: "absent" as const,
+      source_path: null,
+      content_hash: null,
+    }));
+    empty.resolved!.entries = [];
+    hookQuery.mockReturnValue({ data: empty, error: null, isFetching: false });
+
+    mount();
+
+    expect(
+      screen.getByText(/None of the sources Multica looks for exist/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Checked, absent:")).toBeInTheDocument();
+    expect(screen.queryByText("Read:")).not.toBeInTheDocument();
   });
 
   // A matcher Multica cannot evaluate gets its own state and an explicit "the
@@ -334,6 +475,7 @@ describe("LifecycleHooksTab", () => {
         runtime_id: "rt-1",
         status: "completed",
         cached: false,
+        offline: false,
         observed_at: new Date().toISOString(),
         sources: [
           {

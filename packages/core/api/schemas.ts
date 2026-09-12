@@ -3529,6 +3529,12 @@ export const RuntimeHookReadRequestSchema = z.object({
   runtime_id: z.string().default(""),
   status: z.string().default("failed"),
   cached: z.boolean().default(false),
+  // Whether the runtime was offline when the server answered. Distinct from
+  // `cached`, which says the answer came from the snapshot: an offline runtime
+  // with nothing ever observed is offline and uncached. A backend that predates
+  // the field omits it, and `false` is the safe fallback — it keeps that case
+  // reading as a failed read, which is what shipped before the field existed.
+  offline: z.boolean().default(false),
   observed_at: z.string().optional(),
   // Absent `sources` is meaningful: a queued read has no observation yet, and
   // an empty array would claim every expected scope was checked and empty.
@@ -3543,5 +3549,6 @@ export const failedRuntimeHookRead = (runtimeId: string): RuntimeHookReadRequest
   runtime_id: runtimeId,
   status: "failed",
   cached: false,
+  offline: false,
   error: "hook read response did not match the expected shape",
 });

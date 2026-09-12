@@ -17,16 +17,20 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@multica/ui/components/ui/empty";
-import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../../i18n";
 import type { HookObservationView } from "./hooks-model";
 
 /**
- * Every state that cannot show hook rows ends here, and each one says what it
- * is: a read in flight, a dated last-known snapshot, no observation at all, or
- * a failure. The two states that do show rows still render their date, because
- * an undated observation must never appear as current (invariant 3).
+ * Dates the observation on screen, and names the two states that have nothing
+ * to date: a read that never produced an observation, and one that failed.
+ * The two states that do show rows still render their date, because an undated
+ * observation must never appear as current (invariant 3).
+ *
+ * Two states deliberately do not live here. A read in flight is
+ * `HookDiscoveryCard` and an offline runtime is `HookOfflineCard`: both are
+ * whole-screen answers rather than a caption over content, and neither may be
+ * mistaken for the settled "nothing here" this banner can sit above.
  */
 export function ObservationBanner({
   view,
@@ -40,27 +44,6 @@ export function ObservationBanner({
   onReread: () => void;
 }) {
   const { t } = useT("runtimes");
-
-  if (view.kind === "discovering") {
-    return (
-      <div className="space-y-3 rounded-lg border bg-card p-4">
-        <p className="flex items-center gap-2 text-label font-medium">
-          <RefreshCw
-            aria-hidden="true"
-            className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
-          />
-          {t(($) => $.hooks.observation.discovering_title)}
-        </p>
-        <p className="text-caption text-muted-foreground">
-          {t(($) => $.hooks.observation.discovering_body)}
-        </p>
-        <div className="space-y-2">
-          <Skeleton className="h-8 w-full rounded-md" />
-          <Skeleton className="h-8 w-4/5 rounded-md" />
-        </div>
-      </div>
-    );
-  }
 
   if (view.kind === "no_observation" || view.kind === "failed") {
     const isFailure = view.kind === "failed";

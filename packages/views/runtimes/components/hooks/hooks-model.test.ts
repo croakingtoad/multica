@@ -8,6 +8,7 @@ import type {
 import {
   HOOK_OBSERVATION_STALE_AFTER_MS,
   entryWillRun,
+  hookEmptySummary,
   hookEventGroups,
   hookObservationShowsEntries,
   hookObservationView,
@@ -42,6 +43,18 @@ function source(overrides: Partial<RuntimeHookSource> = {}): RuntimeHookSource {
     state: "found",
     source_path: "/home/u/.claude/settings.json",
     content_hash: "abc",
+    ...overrides,
+  };
+}
+
+function read(
+  overrides: Partial<RuntimeHookReadRequest> = {},
+): RuntimeHookReadRequest {
+  return {
+    runtime_id: "rt-1",
+    status: "completed",
+    cached: false,
+    offline: false,
     ...overrides,
   };
 }
@@ -218,17 +231,64 @@ describe("hookTotals", () => {
   });
 });
 
+describe("hookEmptySummary", () => {
+  // "No hooks" is two different statements depending on whether anything was
+  // read, and an unchecked scope supports neither. The empty screen needs all
+  // three separated so it can say which files its claim is about.
+  it("separates read-and-empty from nothing-to-read, and carries unchecked scopes", () => {
+    const scopes = hookScopeRows(
+      "claude",
+      [
+        source({ scope: "user", source_path: "/home/u/.claude/settings.json" }),
+        source({ scope: "project", state: "absent" }),
+        source({ scope: "local", state: "not_checked" }),
+      ],
+      [],
+    );
+
+    const summary = hookEmptySummary(scopes);
+
+    expect(summary.nothingRead).toBe(false);
+    expect(summary.readPaths).toEqual(["/home/u/.claude/settings.json"]);
+    expect(summary.absent.map((scope) => scope.key)).toEqual(["project:json"]);
+    expect(summary.notChecked.map((scope) => scope.key)).toEqual(["local:json"]);
+  });
+
+  it("reports nothing read when no source was found", () => {
+    const scopes = hookScopeRows(
+      "claude",
+      [
+        source({ scope: "user", state: "absent" }),
+        source({ scope: "project", state: "not_checked" }),
+      ],
+      [],
+    );
+
+    const summary = hookEmptySummary(scopes);
+
+    expect(summary.nothingRead).toBe(true);
+    expect(summary.readPaths).toEqual([]);
+  });
+
+  it("falls back to the expected path for a found source with no reported path", () => {
+    const scopes = hookScopeRows(
+      "claude",
+      [source({ scope: "user", source_path: null })],
+      [],
+    );
+
+    expect(hookEmptySummary(scopes).readPaths).toEqual([
+      "~/.claude/settings.json",
+    ]);
+  });
+});
+
 describe("hookObservationView", () => {
   // Snapshot invariant 1 + the gcTime caveat: a value still in cache during a
   // new discovery must not be presented as this mount's observation. Deciding
   // from isFetching before touching `data` is what enforces that.
   it("reports discovering while a read is in flight, whatever data holds", () => {
-    const previous: RuntimeHookReadRequest = {
-      runtime_id: "rt-1",
-      status: "completed",
-      cached: false,
-      observed_at: "2026-09-12T11:59:00Z",
-    };
+    const previous = read({ observed_at: "2026-09-12T11:59:00Z" });
 
     const view = hookObservationView(previous, true, null, NOW);
 
@@ -240,51 +300,83 @@ describe("hookObservationView", () => {
   // Snapshot invariant 3: a cached snapshot is dated and reads as last known.
   it("dates a cached snapshot and marks it last known", () => {
     const view = hookObservationView(
-      {
-        runtime_id: "rt-1",
-        status: "completed",
-        cached: true,
-        observed_at: "2026-09-12T11:00:00Z",
-      },
+      read({ cached: true, offline: true, observed_at: "2026-09-12T11:00:00Z" }),
       false,
       null,
       NOW,
     );
 
     expect(view.kind).toBe("last_known");
+    expect(view.offline).toBe(true);
     expect(view.observedAt).toBe("2026-09-12T11:00:00Z");
     expect(hookObservationShowsEntries(view)).toBe(true);
   });
 
-  // Snapshot invariant 3, second half: no prior observation is an explicit
-  // failure, never an undated empty cache that reads as "no hooks".
-  it("reports no observation when an offline runtime has nothing stored", () => {
+  // Offline with nothing stored is its own state, not a failed read: nothing
+  // went wrong, the host is unreachable and has never been read. The UI has to
+  // say that rather than blame the read, so the two must not share a kind.
+  it("names offline-with-no-snapshot instead of calling it a failure", () => {
     const view = hookObservationView(
-      {
-        runtime_id: "rt-1",
+      read({
         status: "failed",
-        cached: false,
+        offline: true,
         error: "runtime is offline and has no last known hook observation",
-      },
+      }),
+      false,
+      null,
+      NOW,
+    );
+
+    expect(view.kind).toBe("offline_no_snapshot");
+    expect(view.offline).toBe(true);
+    expect(view.error).toMatch(/no last known hook observation/);
+    expect(hookObservationShowsEntries(view)).toBe(false);
+  });
+
+  // A backend that predates the `offline` field still marks the snapshot path
+  // `cached`, so the offline reading survives without it.
+  it("treats a cached answer as offline even without the offline flag", () => {
+    const view = hookObservationView(
+      read({ cached: true, observed_at: "2026-09-12T11:00:00Z" }),
+      false,
+      null,
+      NOW,
+    );
+
+    expect(view.kind).toBe("last_known");
+    expect(view.offline).toBe(true);
+  });
+
+  // A non-terminal answer from an online runtime is still a failure — the
+  // offline branch must not swallow every undated non-completed read.
+  it("keeps an online non-completed read a failure", () => {
+    const view = hookObservationView(
+      read({ status: "timed_out", error: "daemon did not answer" }),
       false,
       null,
       NOW,
     );
 
     expect(view.kind).toBe("failed");
-    expect(view.error).toMatch(/no last known hook observation/);
+    expect(view.offline).toBe(false);
+  });
+
+  it("refuses to show entries for a completed online read with no date", () => {
+    const view = hookObservationView(read(), false, null, NOW);
+
+    expect(view.kind).toBe("no_observation");
     expect(hookObservationShowsEntries(view)).toBe(false);
   });
 
-  it("refuses to show entries for a completed read with no date", () => {
+  it("reports an undated completed offline answer as offline, not undated", () => {
     const view = hookObservationView(
-      { runtime_id: "rt-1", status: "completed", cached: true },
+      read({ cached: true, offline: true }),
       false,
       null,
       NOW,
     );
 
-    expect(view.kind).toBe("no_observation");
+    expect(view.kind).toBe("offline_no_snapshot");
     expect(hookObservationShowsEntries(view)).toBe(false);
   });
 
@@ -292,12 +384,11 @@ describe("hookObservationView", () => {
   // arrive on a live read and must read as stale rather than current.
   it("flags a far-past observation as stale on a live read", () => {
     const view = hookObservationView(
-      {
-        runtime_id: "rt-1",
-        status: "completed",
-        cached: false,
-        observed_at: new Date(NOW - HOOK_OBSERVATION_STALE_AFTER_MS - 1_000).toISOString(),
-      },
+      read({
+        observed_at: new Date(
+          NOW - HOOK_OBSERVATION_STALE_AFTER_MS - 1_000,
+        ).toISOString(),
+      }),
       false,
       null,
       NOW,
@@ -309,12 +400,7 @@ describe("hookObservationView", () => {
 
   it("does not flag a just-taken observation as stale", () => {
     const view = hookObservationView(
-      {
-        runtime_id: "rt-1",
-        status: "completed",
-        cached: false,
-        observed_at: new Date(NOW - 1_000).toISOString(),
-      },
+      read({ observed_at: new Date(NOW - 1_000).toISOString() }),
       false,
       null,
       NOW,
@@ -325,7 +411,7 @@ describe("hookObservationView", () => {
 
   it("treats an unparseable observation date as stale", () => {
     const view = hookObservationView(
-      { runtime_id: "rt-1", status: "completed", cached: false, observed_at: "soon" },
+      read({ observed_at: "soon" }),
       false,
       null,
       NOW,
@@ -351,13 +437,14 @@ describe("hookObservationView", () => {
   // flattened into either a read failure or an empty hook list.
   it("carries a resolution failure without discarding the observation", () => {
     const view = hookObservationView(
-      {
-        runtime_id: "rt-1",
-        status: "completed",
-        cached: false,
+      read({
         observed_at: "2026-09-12T11:59:30Z",
-        resolved: { provider: "claude", entries: [], error: "duplicate parked hook id" },
-      },
+        resolved: {
+          provider: "claude",
+          entries: [],
+          error: "duplicate parked hook id",
+        },
+      }),
       false,
       null,
       NOW,

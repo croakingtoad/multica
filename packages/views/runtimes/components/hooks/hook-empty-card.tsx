@@ -1,0 +1,122 @@
+"use client";
+
+import { Webhook } from "lucide-react";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@multica/ui/components/ui/empty";
+import { useT } from "../../../i18n";
+import { ScopeBadge } from "./hook-state-badges";
+import type { HookEmptySummary } from "./hooks-model";
+
+/**
+ * A runtime whose sources hold no hook entries. It says which files that
+ * statement is about — and, separately, which scopes nobody looked at, since
+ * an unchecked scope supports no claim either way.
+ *
+ * It carries the observation date itself rather than relying on the banner
+ * above it: "no hooks" is a claim about a moment, and an undated one would
+ * read as timeless (snapshot invariant 3).
+ */
+export function HookEmptyCard({
+  runtimeName,
+  summary,
+  observedAt,
+  timeAgo,
+}: {
+  runtimeName: string;
+  summary: HookEmptySummary;
+  observedAt: string | null;
+  timeAgo: (value: string) => string;
+}) {
+  const { t } = useT("runtimes");
+  return (
+    <Empty className="border border-dashed">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Webhook aria-hidden="true" />
+        </EmptyMedia>
+        <EmptyTitle>
+          {t(($) => $.hooks.events.empty_title, { name: runtimeName })}
+        </EmptyTitle>
+        <EmptyDescription>
+          {summary.nothingRead
+            ? t(($) => $.hooks.events.empty_nothing_read_body)
+            : t(($) => $.hooks.events.empty_read_body)}
+        </EmptyDescription>
+      </EmptyHeader>
+
+      {summary.readPaths.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.hooks.events.empty_read_paths)}
+          </p>
+          <ul>
+            {summary.readPaths.map((path) => (
+              <li
+                key={path}
+                className="font-mono text-caption break-all text-muted-foreground"
+              >
+                {path}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {summary.absent.length > 0 ? (
+        <ScopeList
+          label={t(($) => $.hooks.events.empty_absent)}
+          scopes={summary.absent}
+        />
+      ) : null}
+
+      {summary.notChecked.length > 0 ? (
+        <div className="space-y-1.5">
+          <ScopeList
+            label={t(($) => $.hooks.events.empty_not_checked)}
+            scopes={summary.notChecked}
+          />
+          <p className="max-w-prose text-caption text-muted-foreground">
+            {t(($) => $.hooks.events.empty_not_checked_note)}
+          </p>
+        </div>
+      ) : null}
+
+      {observedAt ? (
+        <p className="text-caption text-muted-foreground">
+          {t(($) => $.hooks.events.empty_last_read, {
+            when: timeAgo(observedAt),
+          })}
+        </p>
+      ) : null}
+    </Empty>
+  );
+}
+
+function ScopeList({
+  label,
+  scopes,
+}: {
+  label: string;
+  scopes: HookEmptySummary["absent"];
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="text-caption text-muted-foreground">{label}</p>
+      <div className="flex flex-wrap items-center justify-center gap-1.5">
+        {scopes.map((scope) => (
+          <ScopeBadge
+            key={scope.key}
+            scope={scope.scope}
+            format={scope.format}
+            writable={scope.writable}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}

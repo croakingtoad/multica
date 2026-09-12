@@ -2,7 +2,13 @@
 
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveRuntimeHooks, runtimeHooksKeys, runtimeHooksOptions } from "./hooks";
+import {
+  HOOK_READ_POLL_INTERVAL_MS,
+  resolveRuntimeHooks,
+  runtimeHooksKeys,
+  runtimeHooksOptions,
+  type RuntimeHookDiscoveryPhase,
+} from "./hooks";
 
 const initiateHookRead = vi.fn();
 const getHookReadResult = vi.fn();
@@ -46,6 +52,63 @@ describe("runtime hooks", () => {
     initiateHookRead.mockResolvedValue(timedOut);
 
     await expect(resolveRuntimeHooks("rt-1")).resolves.toEqual(timedOut);
+  });
+
+  // The in-progress screen has to distinguish "waiting for the daemon's next
+  // heartbeat" from "the daemon is reading the host", because the first wait
+  // is not ours and the second one is. Both come from the read's own status,
+  // so neither is a guess about progress.
+  it("reports each discovery phase as the read reaches it", async () => {
+    vi.useFakeTimers();
+    try {
+      initiateHookRead.mockResolvedValue({
+        id: "req-1",
+        runtime_id: "rt-1",
+        status: "pending",
+        cached: false,
+        offline: false,
+      });
+      getHookReadResult
+        .mockResolvedValueOnce({
+          id: "req-1",
+          runtime_id: "rt-1",
+          status: "running",
+          cached: false,
+          offline: false,
+        })
+        .mockResolvedValueOnce({
+          id: "req-1",
+          runtime_id: "rt-1",
+          status: "completed",
+          cached: false,
+          offline: false,
+          observed_at: "2026-09-12T12:00:00Z",
+        });
+
+      const phases: RuntimeHookDiscoveryPhase[] = [];
+      const settled = resolveRuntimeHooks("rt-1", (phase) => phases.push(phase));
+      await vi.advanceTimersByTimeAsync(HOOK_READ_POLL_INTERVAL_MS * 3);
+
+      await expect(settled).resolves.toMatchObject({ status: "completed" });
+      expect(phases).toEqual(["initiating", "queued", "reading"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the initiating phase even when no poll follows", async () => {
+    initiateHookRead.mockResolvedValue({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: true,
+      offline: true,
+      observed_at: "2026-09-12T12:00:00Z",
+    });
+
+    const phases: RuntimeHookDiscoveryPhase[] = [];
+    await resolveRuntimeHooks("rt-1", (phase) => phases.push(phase));
+
+    expect(phases).toEqual(["initiating"]);
   });
 
   it("builds disabled and per-runtime query options", () => {

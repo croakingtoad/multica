@@ -456,8 +456,6 @@
     "unsupported_title": "此运行时没有生命周期 hooks",
     "unsupported_body": "只有 Claude 和 Codex 运行时会暴露 Multica 能读取的 hook 配置。",
     "observation": {
-      "discovering_title": "正在从主机读取 hooks",
-      "discovering_body": "读取返回前不显示任何内容。上一次读取遗留的值不代表此运行时的当前状态。",
       "live": "读取于 {{when}}",
       "live_stale": "读取于 {{when}} — 比实时读取应有的时间更早，请视为已过期。",
       "last_known_title": "最后已知状态，读取于 {{when}}",
@@ -470,6 +468,29 @@
       "resolution_error_body": "Multica 无法解读下面的内容。这是解析失败，不是一个没有 hooks 的运行时。",
       "observed_at": "观测于 {{stamp}}",
       "retry": "重新读取"
+    },
+    "discovery": {
+      "title": "正在从 {{name}} 读取 hooks",
+      "polling": "轮询中",
+      "timing": "每 {{interval}} ms 一次 · 已用 {{elapsed}} 秒 · {{timeout}} 秒后放弃",
+      "phase_initiating": "正在排入读取任务",
+      "phase_initiating_detail": "正在请求服务端为此运行时挂起一次主机读取。",
+      "phase_queued": "正在等待守护进程",
+      "phase_queued_detail": "读取任务会一直挂起，直到守护进程的下一次心跳取走它。这段等待属于主机，不属于 Multica。",
+      "phase_reading": "正在读取主机",
+      "phase_reading_detail": "守护进程正在读取该提供方自己的配置文件，并回报读到的内容。",
+      "body": "读取返回前不显示任何内容。上一次读取遗留的值不代表此运行时的当前状态。"
+    },
+    "offline": {
+      "title": "{{name}} 已离线",
+      "last_seen": "守护进程最后一次签入于 {{when}}。",
+      "last_seen_never": "守护进程从未签入过。",
+      "with_snapshot": "Multica 保存了一份 {{when}} 的观测 — 那是当时的状态，不是现在的状态。",
+      "without_snapshot": "从未从此主机读取过任何内容，因此也没有可回退的最后已知状态。",
+      "reveal": "查看最后已知的 hooks",
+      "read_needs_host": "读取在主机上执行，因此必须等到守护进程再次签入才能进行。",
+      "rail_title": "最后已知状态",
+      "rail_body": "保存于 {{when}}。以只读方式显示，并标注为最后已知状态，而不是当作当前状态提供。"
     },
     "behaviour": {
       "claude_title": "hooks 会累加。",
@@ -509,8 +530,14 @@
       "no_order_note": "这里没有任何编号。两个提供方都不为 hooks 指定执行顺序，显示顺序就等于编造顺序。"
     },
     "events": {
-      "empty_title": "已读取的来源中没有 hook 条目",
-      "empty_body": "Multica 检查过的每个来源都没有条目。标记为未检查的来源不在此结论范围内 — 没有人查看过它们。",
+      "empty_title": "{{name}} 上没有生命周期 hooks",
+      "empty_read_body": "Multica 在此主机上能够读取的每个来源都没有 hook 条目。",
+      "empty_nothing_read_body": "Multica 查找的来源在此主机上都不存在，因此没有可读取的内容。",
+      "empty_read_paths": "已读取:",
+      "empty_absent": "已检查，不存在:",
+      "empty_not_checked": "未检查:",
+      "empty_not_checked_note": "没有人查看过它们，因此上面的结论没有涵盖它们。",
+      "empty_last_read": "最后读取于 {{when}}",
       "filter_label": "筛选 hooks",
       "filter_placeholder": "按事件、matcher 或 handler 筛选",
       "filter_empty_title": "没有 hook 匹配此筛选条件",

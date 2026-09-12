@@ -4,7 +4,11 @@ import { useMemo, useState } from "react";
 import { RefreshCw, Search, TriangleAlert, Webhook } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentRuntime, RuntimeHookEntry } from "@multica/core/types";
-import { runtimeHooksKeys, runtimeHooksOptions } from "@multica/core/runtimes";
+import {
+  runtimeHooksKeys,
+  runtimeHooksOptions,
+  type RuntimeHookDiscoveryPhase,
+} from "@multica/core/runtimes";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Empty,
@@ -17,11 +21,15 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { useT, useTimeAgo } from "../../../i18n";
 import { HookDetailDialog } from "./hook-detail-dialog";
+import { HookDiscoveryCard } from "./hook-discovery-card";
+import { HookEmptyCard } from "./hook-empty-card";
 import { HookEventSection, matchesHookQuery } from "./hook-event-section";
+import { HookLastKnownRail, HookOfflineCard } from "./hook-offline-card";
 import { BehaviourStrip, ObservationBanner } from "./hook-observation-banner";
 import { ScopeSourcesCard } from "./hook-source-list";
 import { HookSummaryCard } from "./hook-summary-card";
 import {
+  hookEmptySummary,
   hookEventGroups,
   hookObservationShowsEntries,
   hookObservationView,
@@ -33,25 +41,30 @@ import {
 // Lifecycle Hooks tab. Read-only: this pass adds no write path, no park or
 // disable control, and no code or JSON editor.
 //
-// Structure LOCO-127 (what-actually-runs) and LOCO-128 (empty / offline /
-// discovery states) extend:
+// Structure LOCO-127 (what-actually-runs) extends:
 //
 //   LifecycleHooksTab      owns the query, the observation gate and the layout
-//   ├─ ObservationBanner   every not-showing-entries state lands here
+//   ├─ HookDiscoveryCard   a read in flight, with the phase it has reached
+//   ├─ HookOfflineCard     an offline runtime, with or without a snapshot
+//   ├─ ObservationBanner   dates the observation; names undated states
 //   ├─ BehaviourStrip      the provider's merge rule, stated per provider
 //   ├─ ScopeSourcesCard    one row per expected source, three distinct states
+//   ├─ HookEmptyCard       sources read, no entries — and which files that is about
 //   ├─ HookEventSection    one collapsible group per event, with its counts
 //   │  └─ HookRow          one entry: matcher, handler, source, both axes
 //   ├─ HookSummaryCard     runtime-level totals, in the right rail
+//   ├─ HookLastKnownRail   the last-known caption, in the right rail
 //   └─ HookDetailDialog    per-entry read-only detail, on the Dialog surface
 //
 // Derivation lives in hooks-model.ts; per-state labels live in
 // hook-state-badges.tsx. Both are shared, so a new screen adds a layout, not
 // a second opinion about what a state means.
 //
-// Two rules hold across all of them. Nothing claims a hook is shadowed,
+// Three rules hold across all of them. Nothing claims a hook is shadowed,
 // overridden or displaced — no entry on either provider is ever displaced by
-// another layer. And nothing renders an observation without its date.
+// another layer. Nothing renders an observation without its date. And an
+// in-flight read, an offline runtime and a runtime with no hooks are three
+// different answers that never borrow each other's framing.
 
 export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   const { t } = useT("runtimes");
@@ -61,12 +74,18 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<RuntimeHookEntry | null>(null);
+  const [phase, setPhase] = useState<RuntimeHookDiscoveryPhase>("initiating");
+  // Keyed by runtime rather than a bare boolean so switching runtimes cannot
+  // carry one host's "yes, show me the stale copy" over to another's.
+  const [revealedRuntimeId, setRevealedRuntimeId] = useState<string | null>(
+    null,
+  );
 
   // staleTime and gcTime come from runtimeHooksOptions and are deliberately
   // not overridden here — read the comment above them before touching either.
   // Snapshot invariant 1 depends on both being 0.
   const { data, error, isFetching } = useQuery(
-    runtimeHooksOptions(supported ? runtime.id : null),
+    runtimeHooksOptions(supported ? runtime.id : null, setPhase),
   );
 
   // `Date.now()` is read once per render rather than held in state: its only
@@ -76,7 +95,12 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
     () => hookObservationView(data, isFetching, error, Date.now()),
     [data, isFetching, error],
   );
-  const showsEntries = hookObservationShowsEntries(view);
+  const lastKnown = view.kind === "last_known";
+  const revealed = revealedRuntimeId === runtime.id;
+  // A last-known snapshot is offered behind an explicit reveal, so it arrives
+  // as something the reader asked for rather than as the current state.
+  const showsEntries =
+    hookObservationShowsEntries(view) && (!lastKnown || revealed);
   const entries = useMemo(
     () => (showsEntries ? (data?.resolved?.entries ?? []) : []),
     [showsEntries, data?.resolved?.entries],
@@ -88,6 +112,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   );
   const groups = useMemo(() => hookEventGroups(entries), [entries]);
   const totals = useMemo(() => hookTotals(entries, scopes), [entries, scopes]);
+  const emptySummary = useMemo(() => hookEmptySummary(scopes), [scopes]);
   const unrecognized = data?.resolved?.unrecognized_keys ?? [];
 
   const needle = query.trim().toLowerCase();
@@ -123,129 +148,149 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
       queryKey: runtimeHooksKeys.forRuntime(runtime.id),
     });
 
+  const offlineGate =
+    view.kind === "offline_no_snapshot" || (lastKnown && !revealed);
+
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0 space-y-4">
-        <ObservationBanner
-          view={view}
-          runtimeName={runtime.name}
-          timeAgo={timeAgo}
-          onReread={reread}
-        />
-
-        {showsEntries ? (
+        {view.kind === "discovering" ? (
+          <HookDiscoveryCard runtimeName={runtime.name} phase={phase} />
+        ) : offlineGate ? (
+          <HookOfflineCard
+            runtimeName={runtime.name}
+            lastSeenAt={runtime.last_seen_at}
+            observedAt={view.observedAt}
+            timeAgo={timeAgo}
+            onReread={reread}
+            onReveal={
+              lastKnown ? () => setRevealedRuntimeId(runtime.id) : undefined
+            }
+          />
+        ) : (
           <>
-            <BehaviourStrip provider={runtime.provider} />
-            <ScopeSourcesCard scopes={scopes} />
-            {unrecognized.length > 0 ? (
-              <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
-                <p className="flex items-center gap-2 text-label font-medium">
-                  <TriangleAlert
-                    aria-hidden="true"
-                    className="h-3.5 w-3.5 shrink-0 text-foreground"
-                  />
-                  {t(($) => $.hooks.unrecognized.title, {
-                    count: unrecognized.length,
-                  })}
-                </p>
-                <p className="mt-1 text-caption text-muted-foreground">
-                  {t(($) => $.hooks.unrecognized.body)}
-                </p>
-                <ul className="mt-2 space-y-0.5">
-                  {unrecognized.map((item) => (
-                    <li
-                      key={`${item.source.scope}:${item.source.format}:${item.key}`}
-                      className="font-mono text-caption text-muted-foreground"
-                    >
-                      {t(($) => $.hooks.unrecognized.entry, {
-                        scope: item.source.scope,
-                        format: item.source.format,
-                        key: item.key,
-                      })}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+            <ObservationBanner
+              view={view}
+              runtimeName={runtime.name}
+              timeAgo={timeAgo}
+              onReread={reread}
+            />
 
-            {entries.length === 0 ? (
-              <Empty className="border border-dashed">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Webhook aria-hidden="true" />
-                  </EmptyMedia>
-                  <EmptyTitle>{t(($) => $.hooks.events.empty_title)}</EmptyTitle>
-                  <EmptyDescription>
-                    {t(($) => $.hooks.events.empty_body)}
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
+            {showsEntries ? (
               <>
-                <div className="relative max-w-sm">
-                  <Label htmlFor="hook-filter" className="sr-only">
-                    {t(($) => $.hooks.events.filter_label)}
-                  </Label>
-                  <Search
-                    aria-hidden="true"
-                    className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-                  />
-                  <Input
-                    id="hook-filter"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder={t(($) => $.hooks.events.filter_placeholder)}
-                    className="pl-8"
-                  />
-                </div>
-
-                {filtered.length === 0 ? (
-                  <Empty className="border border-dashed">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <Search aria-hidden="true" />
-                      </EmptyMedia>
-                      <EmptyTitle>
-                        {t(($) => $.hooks.events.filter_empty_title)}
-                      </EmptyTitle>
-                      <EmptyDescription>
-                        {t(($) => $.hooks.events.filter_empty_body)}
-                      </EmptyDescription>
-                    </EmptyHeader>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setQuery("")}
-                    >
-                      {t(($) => $.hooks.events.filter_clear)}
-                    </Button>
-                  </Empty>
-                ) : (
-                  <div className="space-y-3">
-                    {filtered.map((group) => (
-                      <HookEventSection
-                        key={group.event}
-                        group={group}
-                        open={!collapsed[group.event]}
-                        onToggle={() =>
-                          setCollapsed((previous) => ({
-                            ...previous,
-                            [group.event]: !previous[group.event],
-                          }))
-                        }
-                        onSelect={setSelected}
+                <BehaviourStrip provider={runtime.provider} />
+                <ScopeSourcesCard scopes={scopes} />
+                {unrecognized.length > 0 ? (
+                  <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
+                    <p className="flex items-center gap-2 text-label font-medium">
+                      <TriangleAlert
+                        aria-hidden="true"
+                        className="h-3.5 w-3.5 shrink-0 text-foreground"
                       />
-                    ))}
+                      {t(($) => $.hooks.unrecognized.title, {
+                        count: unrecognized.length,
+                      })}
+                    </p>
+                    <p className="mt-1 text-caption text-muted-foreground">
+                      {t(($) => $.hooks.unrecognized.body)}
+                    </p>
+                    <ul className="mt-2 space-y-0.5">
+                      {unrecognized.map((item) => (
+                        <li
+                          key={`${item.source.scope}:${item.source.format}:${item.key}`}
+                          className="font-mono text-caption text-muted-foreground"
+                        >
+                          {t(($) => $.hooks.unrecognized.entry, {
+                            scope: item.source.scope,
+                            format: item.source.format,
+                            key: item.key,
+                          })}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
+                ) : null}
+
+                {entries.length === 0 ? (
+                  <HookEmptyCard
+                    runtimeName={runtime.name}
+                    summary={emptySummary}
+                    observedAt={view.observedAt}
+                    timeAgo={timeAgo}
+                  />
+                ) : (
+                  <>
+                    <div className="relative max-w-sm">
+                      <Label htmlFor="hook-filter" className="sr-only">
+                        {t(($) => $.hooks.events.filter_label)}
+                      </Label>
+                      <Search
+                        aria-hidden="true"
+                        className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                      />
+                      <Input
+                        id="hook-filter"
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder={t(($) => $.hooks.events.filter_placeholder)}
+                        className="pl-8"
+                      />
+                    </div>
+
+                    {filtered.length === 0 ? (
+                      <Empty className="border border-dashed">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <Search aria-hidden="true" />
+                          </EmptyMedia>
+                          <EmptyTitle>
+                            {t(($) => $.hooks.events.filter_empty_title)}
+                          </EmptyTitle>
+                          <EmptyDescription>
+                            {t(($) => $.hooks.events.filter_empty_body)}
+                          </EmptyDescription>
+                        </EmptyHeader>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setQuery("")}
+                        >
+                          {t(($) => $.hooks.events.filter_clear)}
+                        </Button>
+                      </Empty>
+                    ) : (
+                      <div className="space-y-3">
+                        {filtered.map((group) => (
+                          <HookEventSection
+                            key={group.event}
+                            group={group}
+                            open={!collapsed[group.event]}
+                            onToggle={() =>
+                              setCollapsed((previous) => ({
+                                ...previous,
+                                [group.event]: !previous[group.event],
+                              }))
+                            }
+                            onSelect={setSelected}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </>
-            )}
+            ) : null}
           </>
-        ) : null}
+        )}
       </div>
 
       <div className="space-y-4">
+        {/* Dated in the rail as well as the banner, so the last-known reading
+            survives scrolling past the top of the page. */}
+        {lastKnown && view.observedAt ? (
+          <HookLastKnownRail observedAt={view.observedAt} timeAgo={timeAgo} />
+        ) : null}
         {showsEntries ? <HookSummaryCard totals={totals} /> : null}
         {/* Only for a live read: a cached snapshot already reads as last
             known in the banner, and repeating it here would say it twice. */}

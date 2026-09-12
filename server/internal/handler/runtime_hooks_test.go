@@ -58,7 +58,7 @@ func TestInitiateHookReadOnlineAlwaysQueuesLiveDiscovery(t *testing.T) {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
 	response := decodeHookReadResponse(t, w)
-	if response.Status != HookReadPending || response.Cached || response.ObservedAt != nil || len(response.Sources) != 0 {
+	if response.Status != HookReadPending || response.Cached || response.Offline || response.ObservedAt != nil || len(response.Sources) != 0 {
 		t.Fatalf("online initiation served snapshot: %#v", response)
 	}
 	stored, err := store.Get(context.Background(), response.ID)
@@ -99,7 +99,7 @@ func TestInitiateHookReadOfflineReturnsDatedSnapshotWithThreeSourceStates(t *tes
 	w := httptest.NewRecorder()
 	h.InitiateHookRead(w, req)
 	response := decodeHookReadResponse(t, w)
-	if w.Code != http.StatusOK || response.Status != HookReadCompleted || !response.Cached || response.ObservedAt == nil || !response.ObservedAt.Equal(observedAt) {
+	if w.Code != http.StatusOK || response.Status != HookReadCompleted || !response.Cached || !response.Offline || response.ObservedAt == nil || !response.ObservedAt.Equal(observedAt) {
 		t.Fatalf("offline response = %#v, HTTP %d", response, w.Code)
 	}
 	if len(response.Sources) != 4 {
@@ -113,6 +113,32 @@ func TestInitiateHookReadOfflineReturnsDatedSnapshotWithThreeSourceStates(t *tes
 	}
 	if response.Sources[0].SourcePath == nil || *response.Sources[0].SourcePath != path || response.Sources[1].SourcePath != nil {
 		t.Fatalf("source identities = %#v", response.Sources)
+	}
+}
+
+// An offline runtime with nothing ever observed is a state the UI has to name
+// — "offline, and there is no last known snapshot" — not a read that failed on
+// the way out. `offline` is the bit that separates the two, because `cached` is
+// false in both cases and matching on the error prose would not survive a
+// reword.
+func TestOfflineHookReadWithoutSnapshotIsOfflineAndUncached(t *testing.T) {
+	h, runtimeID, _, _ := hookReadWebHandler(t, "claude")
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET status='offline' WHERE id=$1`, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := withURLParams(newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/hooks", nil), "runtimeId", runtimeID)
+	w := httptest.NewRecorder()
+	h.InitiateHookRead(w, req)
+	response := decodeHookReadResponse(t, w)
+	if w.Code != http.StatusOK || response.Status != HookReadFailed {
+		t.Fatalf("offline response = %#v, HTTP %d", response, w.Code)
+	}
+	if !response.Offline || response.Cached || response.ObservedAt != nil {
+		t.Fatalf("offline-without-snapshot must be offline, uncached and undated: %#v", response)
+	}
+	if response.Error == "" {
+		t.Fatalf("offline-without-snapshot response carries no reason: %#v", response)
 	}
 }
 

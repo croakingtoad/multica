@@ -456,8 +456,6 @@
     "unsupported_title": "このランタイムにライフサイクル hooks はありません",
     "unsupported_body": "Multica が読み取れる hook 設定を公開しているのは Claude と Codex のランタイムだけです。",
     "observation": {
-      "discovering_title": "ホストから hooks を読み取っています",
-      "discovering_body": "この読み取りが返るまで何も表示しません。前回の読み取りに残っていた値は、このランタイムの現在の状態ではありません。",
       "live": "{{when}} に読み取り",
       "live_stale": "{{when}} に読み取り — ライブな読み取りとしては古いため、期限切れとして扱ってください。",
       "last_known_title": "最後に判明した状態、{{when}} に読み取り",
@@ -470,6 +468,29 @@
       "resolution_error_title": "ソースは読み取れましたが解決できませんでした",
       "resolution_error_body": "Multica は以下の内容を解釈できませんでした。これは解決の失敗であり、hooks のないランタイムではありません。",
       "retry": "もう一度読み取る"
+    },
+    "discovery": {
+      "title": "{{name}} から hooks を読み取っています",
+      "polling": "ポーリング中",
+      "timing": "{{interval}} ms 間隔 · 経過 {{elapsed}} 秒 · {{timeout}} 秒で打ち切り",
+      "phase_initiating": "読み取りをキューに入れています",
+      "phase_initiating_detail": "このランタイム向けのホスト読み取りを、サーバーに登録しています。",
+      "phase_queued": "デーモンを待っています",
+      "phase_queued_detail": "読み取りはデーモンの次のハートビートが回収するまで待機します。この待ち時間はホスト側のものであり、Multica 側のものではありません。",
+      "phase_reading": "ホストを読み取っています",
+      "phase_reading_detail": "デーモンがプロバイダー自身の設定ファイルを読み取り、見つけた内容を報告しています。",
+      "body": "この読み取りが返るまで何も表示しません。前回の読み取りに残っていた値は、このランタイムの現在の状態ではありません。"
+    },
+    "offline": {
+      "title": "{{name}} はオフラインです",
+      "last_seen": "デーモンの最後のチェックインは {{when}} です。",
+      "last_seen_never": "デーモンは一度もチェックインしていません。",
+      "with_snapshot": "Multica には {{when}} に保存された観測があります — これはその時点の状態であり、現在の状態ではありません。",
+      "without_snapshot": "このホストからは一度も読み取っていないため、最後に判明した状態もありません。",
+      "reveal": "最後に判明した hooks を表示",
+      "read_needs_host": "読み取りはホスト上で実行されるため、デーモンが再びチェックインするまで実行できません。",
+      "rail_title": "最後に判明した状態",
+      "rail_body": "{{when}} に保存されたものです。読み取り専用で表示し、現在の状態としてではなく最後に判明した状態として明示しています。"
     },
     "behaviour": {
       "claude_title": "hooks は積み上がります。",
@@ -509,8 +530,14 @@
       "no_order_note": "ここには番号を振っていません。どちらのプロバイダーも hooks に実行順を与えないため、順序を示せばそれは作り出した順序になります。"
     },
     "events": {
-      "empty_title": "読み取ったソースに hook エントリーはありません",
-      "empty_body": "Multica が確認したどのソースにもエントリーはありませんでした。未確認と表示されたソースはこの結論の対象外です — 誰も見ていません。",
+      "empty_title": "{{name}} にライフサイクル hooks はありません",
+      "empty_read_body": "Multica がこのホストで読み取れたどのソースにも hook エントリーはありませんでした。",
+      "empty_nothing_read_body": "Multica が探すソースはこのホストにいずれも存在しないため、読み取る対象がありませんでした。",
+      "empty_read_paths": "読み取り済み:",
+      "empty_absent": "確認済み、存在しません:",
+      "empty_not_checked": "未確認:",
+      "empty_not_checked_note": "これらは誰も見ていないため、上の説明はこれらについて何も述べていません。",
+      "empty_last_read": "最後の読み取りは {{when}}",
       "filter_label": "hooks を絞り込む",
       "filter_placeholder": "イベント、matcher、handler で絞り込む",
       "filter_empty_title": "この条件に一致する hook はありません",

@@ -472,8 +472,6 @@
     "unsupported_title": "This runtime has no lifecycle hooks",
     "unsupported_body": "Only Claude and Codex runtimes expose a hook configuration Multica can read.",
     "observation": {
-      "discovering_title": "Reading hooks from the host",
-      "discovering_body": "Nothing is shown until this read returns. A value left over from an earlier read is not this runtime's current state.",
       "live": "Read {{when}}",
       "live_stale": "Read {{when}} — older than a live read should be, so treat it as stale.",
       "last_known_title": "Last known state, read {{when}}",
@@ -486,6 +484,29 @@
       "resolution_error_body": "Multica could not interpret the contents below. This is a failure to resolve, not a runtime with no hooks.",
       "observed_at": "Observed at {{stamp}}",
       "retry": "Read again"
+    },
+    "discovery": {
+      "title": "Reading hooks from {{name}}",
+      "polling": "Polling",
+      "timing": "Every {{interval}} ms · {{elapsed}} s elapsed · gives up at {{timeout}} s",
+      "phase_initiating": "Queueing the read",
+      "phase_initiating_detail": "Asking the server to park a host read for this runtime.",
+      "phase_queued": "Waiting for the daemon",
+      "phase_queued_detail": "The read stays parked until the daemon's next heartbeat collects it. This part of the wait is the host's, not Multica's.",
+      "phase_reading": "Reading the host",
+      "phase_reading_detail": "The daemon is reading the provider's own configuration files and reporting what it found.",
+      "body": "Nothing is shown until this read returns. A value left over from an earlier read is not this runtime's current state."
+    },
+    "offline": {
+      "title": "{{name}} is offline",
+      "last_seen": "The daemon last checked in {{when}}.",
+      "last_seen_never": "The daemon has never checked in.",
+      "with_snapshot": "Multica has a stored observation from {{when}} — what was there then, not what is there now.",
+      "without_snapshot": "Nothing has ever been read from this host, so there is no last known state to fall back to either.",
+      "reveal": "View last known hooks",
+      "read_needs_host": "A read runs on the host itself, so it cannot happen until the daemon checks in again.",
+      "rail_title": "Last known state",
+      "rail_body": "Stored from {{when}}. Shown read-only, and labelled as last known rather than served as current."
     },
     "behaviour": {
       "claude_title": "Hooks accumulate.",
@@ -525,8 +546,14 @@
       "no_order_note": "Nothing here is numbered. Neither provider assigns hooks an execution order, so an order shown would be an invented one."
     },
     "events": {
-      "empty_title": "No hook entries in the sources that were read",
-      "empty_body": "Every source Multica checked held no entries. Sources marked not checked are not covered by that statement — nobody looked at them.",
+      "empty_title": "No lifecycle hooks on {{name}}",
+      "empty_read_body": "Every source Multica could read on this host held no hook entries.",
+      "empty_nothing_read_body": "None of the sources Multica looks for exist on this host, so there was nothing to read.",
+      "empty_read_paths": "Read:",
+      "empty_absent": "Checked, absent:",
+      "empty_not_checked": "Not checked:",
+      "empty_not_checked_note": "Nobody looked at these, so the statement above says nothing about them.",
+      "empty_last_read": "Last read {{when}}",
       "filter_label": "Filter hooks",
       "filter_placeholder": "Filter by event, matcher or handler",
       "filter_empty_title": "No hook matches this filter",
