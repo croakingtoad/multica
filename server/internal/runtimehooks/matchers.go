@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-var claudeExactMatcher = regexp.MustCompile(`^[A-Za-z0-9_|]+$`)
+var (
+	claudeExactMatcher       = regexp.MustCompile(`^[-A-Za-z0-9_, |]+$`)
+	claudeNarrowExactMatcher = regexp.MustCompile(`^[A-Za-z0-9_|]+$`)
+)
 
 // MatchResult partitions the unordered candidates for an event. NeverRuns
 // contains Claude handlers whose if pre-filter is set on an event where Claude
@@ -55,15 +58,29 @@ func providerMatcherMatches(provider Provider, event, matcher, value string) (bo
 		}
 		return regexMatches(provider, matcher, value)
 	}
-	if claudeExactMatcher.MatchString(matcher) {
-		for _, candidate := range strings.Split(matcher, "|") {
-			if candidate == value {
-				return true, nil
-			}
+	if claudeIgnoresMatcher(event) {
+		return true, nil
+	}
+	if isClaudeNarrowMatcherEvent(event) {
+		if claudeNarrowExactMatcher.MatchString(matcher) {
+			return exactMatcherMatches(matcher, value, false), nil
 		}
-		return false, nil
+	} else if claudeExactMatcher.MatchString(matcher) {
+		return exactMatcherMatches(matcher, value, true), nil
 	}
 	return regexMatches(provider, matcher, value)
+}
+
+func exactMatcherMatches(matcher, value string, splitCommas bool) bool {
+	if splitCommas {
+		matcher = strings.ReplaceAll(matcher, ",", "|")
+	}
+	for _, candidate := range strings.Split(matcher, "|") {
+		if strings.TrimSpace(candidate) == value {
+			return true
+		}
+	}
+	return false
 }
 
 func regexMatches(provider Provider, matcher, value string) (bool, error) {
@@ -90,6 +107,20 @@ func codexIgnoresMatcher(event string) bool {
 	default:
 		return false
 	}
+}
+
+func claudeIgnoresMatcher(event string) bool {
+	switch event {
+	case "UserPromptSubmit", "PostToolBatch", "Stop", "TeammateIdle", "TaskCreated", "TaskCompleted",
+		"WorktreeCreate", "WorktreeRemove", "MessageDisplay", "CwdChanged":
+		return true
+	default:
+		return false
+	}
+}
+
+func isClaudeNarrowMatcherEvent(event string) bool {
+	return event == "FileChanged" || event == "StopFailure"
 }
 
 func handlerHasIf(handler json.RawMessage) (bool, error) {

@@ -6,8 +6,9 @@ import (
 )
 
 func TestClaudeMatcherPatterns(t *testing.T) {
-	// Claude hooks reference, "Matcher patterns": empty and * match all;
-	// [A-Za-z0-9_|] matchers are exact alternatives; all others are regex.
+	// https://docs.claude.com/en/docs/claude-code/hooks.md, "Matcher patterns",
+	// lines 292-293: "Only letters, digits, `_`, `-`, spaces, `,`, and `|`"
+	// are exact strings or lists split on | or , with optional whitespace.
 	tests := []struct {
 		name    string
 		matcher string
@@ -20,9 +21,11 @@ func TestClaudeMatcherPatterns(t *testing.T) {
 		{name: "simple matcher is not substring regex", matcher: "Bash", value: "PrefixBashSuffix"},
 		{name: "pipe separates exact alternatives", matcher: "Edit|Write", value: "Write", want: true},
 		{name: "pipe alternatives stay exact", matcher: "Edit|Write", value: "PreWritePost"},
-		{name: "hyphen switches to unanchored regex", matcher: "Bash-Tool", value: "PreBash-ToolPost", want: true},
-		{name: "comma switches to unanchored regex", matcher: "Bash,Edit", value: "PreBash,EditPost", want: true},
-		{name: "space switches to unanchored regex", matcher: "Bash Tool", value: "PreBash ToolPost", want: true},
+		{name: "hyphenated name is exact", matcher: "code-reviewer", value: "senior-code-reviewer"},
+		{name: "hyphenated MCP name is exact", matcher: "mcp__brave-search", value: "mcp__brave-search__web"},
+		{name: "comma separates exact alternatives", matcher: "Edit,Write", value: "Write", want: true},
+		{name: "comma allows surrounding whitespace", matcher: "Edit, Write", value: "Write", want: true},
+		{name: "spaces remain exact", matcher: "Bash Tool", value: "PreBash ToolPost"},
 		{name: "regex metacharacter switches to unanchored regex", matcher: `mcp__filesystem__.*`, value: "Pre-mcp__filesystem__read-Post", want: true},
 	}
 
@@ -40,9 +43,60 @@ func TestClaudeMatcherPatterns(t *testing.T) {
 	}
 }
 
+func TestClaudeNarrowMatcherEvents(t *testing.T) {
+	// https://docs.claude.com/en/docs/claude-code/hooks.md, "Matcher patterns",
+	// line 301: FileChanged and StopFailure use [A-Za-z0-9_|] only; a hyphen,
+	// space, or comma selects regex and only | separates exact alternatives.
+	tests := []struct {
+		name    string
+		event   string
+		matcher string
+		value   string
+		want    bool
+	}{
+		{name: "FileChanged hyphen uses unanchored regex", event: "FileChanged", matcher: "code-reviewer", value: "senior-code-reviewer", want: true},
+		{name: "StopFailure comma is not a separator", event: "StopFailure", matcher: "Edit, Write", value: "Write"},
+		{name: "FileChanged pipe remains a separator", event: "FileChanged", matcher: "env|config", value: "config", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution := resolutionWithMatcher(t, ProviderClaude, tt.event, tt.matcher, `{"type":"command","command":"check"}`)
+			result, err := resolution.MatchEvent(tt.event, tt.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(result.Matched) == 1; got != tt.want {
+				t.Fatalf("matched = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeIgnoresMatchersForUnsupportedEvents(t *testing.T) {
+	// https://docs.claude.com/en/docs/claude-code/hooks.md, "Matcher patterns",
+	// lines 319 and 327: these events have no matcher support and always fire.
+	events := []string{
+		"UserPromptSubmit", "PostToolBatch", "Stop", "TeammateIdle", "TaskCreated",
+		"TaskCompleted", "WorktreeCreate", "WorktreeRemove", "MessageDisplay", "CwdChanged",
+	}
+	for _, event := range events {
+		t.Run(event, func(t *testing.T) {
+			resolution := resolutionWithMatcher(t, ProviderClaude, event, "[", `{"type":"command","command":"check"}`)
+			result, err := resolution.MatchEvent(event, "does-not-match")
+			if err != nil {
+				t.Fatalf("ignored matcher returned error: %v", err)
+			}
+			if len(result.Matched) != 1 {
+				t.Fatalf("matched entries = %d, want 1", len(result.Matched))
+			}
+		})
+	}
+}
+
 func TestClaudeInvalidRegexIsReported(t *testing.T) {
-	// Claude hooks reference, "Matcher patterns": punctuation selects regex
-	// evaluation, so malformed patterns must remain visible to callers.
+	// https://docs.claude.com/en/docs/claude-code/hooks.md, "Matcher patterns",
+	// line 293: characters outside the exact set select unanchored regex.
 	resolution := resolutionWithMatcher(t, ProviderClaude, "PreToolUse", "Bash[", `{"type":"command","command":"check"}`)
 	_, err := resolution.MatchEvent("PreToolUse", "Bash")
 	if err == nil || !strings.Contains(err.Error(), `matcher "Bash["`) {
