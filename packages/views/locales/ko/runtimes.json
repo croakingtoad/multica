@@ -511,6 +511,8 @@
     "events": {
       "empty_title": "읽은 소스에 hook 항목이 없습니다",
       "empty_body": "Multica가 확인한 모든 소스에 항목이 없었습니다. 확인하지 않음으로 표시된 소스는 이 결론에 포함되지 않습니다 — 아무도 보지 않았습니다.",
+      "unresolved_title": "해석할 수 없는 소스의 항목은 나열할 수 없습니다",
+      "unresolved_body": "읽기는 소스에 도달했지만 해석할 수 없었기 때문에, 여기의 어떤 내용도 소스가 무엇을 담고 있는지에 대한 진술이 아닙니다. 이유는 위 배너에 있습니다.",
       "filter_label": "hooks 필터",
       "filter_placeholder": "이벤트, matcher 또는 handler로 필터",
       "filter_empty_title": "이 필터에 맞는 hook이 없습니다",

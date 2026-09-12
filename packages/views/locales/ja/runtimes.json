@@ -511,6 +511,8 @@
     "events": {
       "empty_title": "読み取ったソースに hook エントリーはありません",
       "empty_body": "Multica が確認したどのソースにもエントリーはありませんでした。未確認と表示されたソースはこの結論の対象外です — 誰も見ていません。",
+      "unresolved_title": "解決できなかったソースのエントリーは一覧できません",
+      "unresolved_body": "読み取りはソースに到達しましたが解釈できなかったため、ここに表示される内容はソースの中身についての判断ではありません。理由は上のバナーにあります。",
       "filter_label": "hooks を絞り込む",
       "filter_placeholder": "イベント、matcher、handler で絞り込む",
       "filter_empty_title": "この条件に一致する hook はありません",

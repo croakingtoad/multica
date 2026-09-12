@@ -527,6 +527,8 @@
     "events": {
       "empty_title": "No hook entries in the sources that were read",
       "empty_body": "Every source Multica checked held no entries. Sources marked not checked are not covered by that statement — nobody looked at them.",
+      "unresolved_title": "Multica cannot list entries from sources it could not resolve",
+      "unresolved_body": "The read reached the sources but could not interpret them, so nothing here is a statement about what they hold. The reason is in the banner above.",
       "filter_label": "Filter hooks",
       "filter_placeholder": "Filter by event, matcher or handler",
       "filter_empty_title": "No hook matches this filter",

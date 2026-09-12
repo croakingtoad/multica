@@ -418,6 +418,41 @@ describe("LifecycleHooksTab", () => {
       screen.getByText(/could not be resolved/),
     ).toBeInTheDocument();
     expect(screen.getByText(/duplicate parked hook id/)).toBeInTheDocument();
+    // The banner reporting the failure is not enough on its own: the events
+    // region below it must not simultaneously claim the checked sources held
+    // nothing, which is a conclusion the failed resolution never reached.
+    expect(
+      screen.queryByText(enRuntimes.hooks.events.empty_title),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(enRuntimes.hooks.events.empty_body),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(enRuntimes.hooks.events.unresolved_title),
+    ).toBeInTheDocument();
+  });
+
+  // Positive control for the assertion above: without a resolution error the
+  // empty state is the honest answer and still renders, so the absence check
+  // cannot pass just because zero entries renders nothing at all.
+  it("still says no entries when zero entries resolved cleanly", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        resolved: { provider: "claude", entries: [] },
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    mount();
+
+    expect(
+      screen.getByText(enRuntimes.hooks.events.empty_title),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(enRuntimes.hooks.events.unresolved_title),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be resolved/)).not.toBeInTheDocument();
   });
 
   it("says a provider without a hook surface has none", () => {

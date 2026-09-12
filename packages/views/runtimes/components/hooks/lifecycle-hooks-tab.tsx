@@ -168,18 +168,44 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
               </div>
             ) : null}
 
+            {/* Zero entries has two causes and only one of them is "there are
+                none". When resolution failed, Multica did not establish that
+                the sources held no entries — it established that it could not
+                interpret them, which is the rule projection.go states for the
+                same shape. So the error case gets its own copy rather than the
+                empty-list copy, whose body claims every checked source held
+                nothing. A partly-resolved read (error plus entries) keeps the
+                list; this branch is only the nothing-to-list case. */}
             {entries.length === 0 ? (
-              <Empty className="border border-dashed">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Webhook aria-hidden="true" />
-                  </EmptyMedia>
-                  <EmptyTitle>{t(($) => $.hooks.events.empty_title)}</EmptyTitle>
-                  <EmptyDescription>
-                    {t(($) => $.hooks.events.empty_body)}
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
+              view.resolutionError ? (
+                <Empty className="border border-dashed">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <TriangleAlert aria-hidden="true" />
+                    </EmptyMedia>
+                    <EmptyTitle>
+                      {t(($) => $.hooks.events.unresolved_title)}
+                    </EmptyTitle>
+                    <EmptyDescription>
+                      {t(($) => $.hooks.events.unresolved_body)}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <Empty className="border border-dashed">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Webhook aria-hidden="true" />
+                    </EmptyMedia>
+                    <EmptyTitle>
+                      {t(($) => $.hooks.events.empty_title)}
+                    </EmptyTitle>
+                    <EmptyDescription>
+                      {t(($) => $.hooks.events.empty_body)}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )
             ) : (
               <>
                 <div className="relative max-w-sm">
