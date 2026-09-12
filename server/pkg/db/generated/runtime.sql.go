@@ -766,6 +766,65 @@ func (q *Queries) ListDaemonCustomNames(ctx context.Context, arg ListDaemonCusto
 	return items, nil
 }
 
+const listRuntimesByDaemonOwner = `-- name: ListRuntimesByDaemonOwner :many
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name FROM agent_runtime
+WHERE workspace_id = $1
+  AND daemon_id = $2
+  AND owner_id = $3
+ORDER BY last_seen_at DESC
+`
+
+type ListRuntimesByDaemonOwnerParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	DaemonID    pgtype.Text `json:"daemon_id"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+// Every runtime the owner has registered under one daemon_id in the
+// workspace, most recently seen first. A machine hosts one runtime per
+// provider, so this is a handful of rows at most. The path-check dispatch
+// (LOCO-1772) uses it to pick the daemon's online runtime without ever
+// touching a runtime another member registered on the same hostname: the
+// owner_id predicate keeps a second user's machine out of reach even
+// when the daemon_id (hostname) collides.
+func (q *Queries) ListRuntimesByDaemonOwner(ctx context.Context, arg ListRuntimesByDaemonOwnerParams) ([]AgentRuntime, error) {
+	rows, err := q.db.Query(ctx, listRuntimesByDaemonOwner, arg.WorkspaceID, arg.DaemonID, arg.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentRuntime{}
+	for rows.Next() {
+		var i AgentRuntime
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.DaemonID,
+			&i.Name,
+			&i.RuntimeMode,
+			&i.Provider,
+			&i.Status,
+			&i.DeviceInfo,
+			&i.Metadata,
+			&i.LastSeenAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.OwnerID,
+			&i.LegacyDaemonID,
+			&i.Visibility,
+			&i.ProfileID,
+			&i.CustomName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStaleOfflineRuntimeGCCandidates = `-- name: ListStaleOfflineRuntimeGCCandidates :many
 SELECT id FROM agent_runtime
 WHERE status = 'offline'
