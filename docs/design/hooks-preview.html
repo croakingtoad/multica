@@ -705,7 +705,7 @@ const HOOKS = {
     { id: 'c11', event: 'Stop', matcher: '', scope: 'user', type: 'command',
       command: '~/.claude/hooks/context-cost.js', timeout: 20, async: false, shell: 'bash',
       owner: 'multica', parked: false, installedFrom: 'context-cost', stopFeedback: true,
-      desc: 'Hands Claude the turn cost as hookSpecificOutput.additionalContext — non-error feedback, so the turn continues and the transcript labels it "Stop hook feedback" with no hook error. Claude-only on this event: Codex Stop takes decision/reason and nothing else.' },
+      desc: 'Hands Claude the turn cost as hookSpecificOutput.additionalContext — non-error feedback, so the turn continues and the transcript labels it "Stop hook feedback" with no hook error. Claude-only on this event: Codex Stop has no additionalContext. It takes decision/reason plus the shared continue, stopReason and systemMessage fields (suppressOutput is parsed but not yet implemented).' },
 
     { id: 'c12', event: 'Notification', matcher: '', scope: 'user', type: 'http',
       url: 'https://hooks.slack.com/services/T0…/B0…/xxxx', timeout: 10, async: true,
@@ -1119,7 +1119,7 @@ function validateCommand(cmd) {
   const s = (cmd || '').trim();
   if (!s) return { level: 'error', text: 'A command handler needs a command.' };
   if (s.includes('\\')) return { level: 'error',
-    text: 'Backslashes are Windows separators. Claude runs this through bash, which reads \\U as an escape — the path collapses to C:UsersMarty and fails with status 127 on every fire, silently.' };
+    text: 'Backslashes are Windows separators. Claude runs this through bash, which reads \\U as an escape — the path collapses to C:UsersMarty and fails with status 127 on every fire. Non-blocking, so the action proceeds and the transcript gets one hook-error notice per fire; what is left silently disabled is the gate this hook was meant to be.' };
   if (/\s/.test(s.split(' ')[0]) === false && / /.test(s) && !/["']/.test(s)) {
     const first = s.split(' ')[0];
     if (!/^(sh|bash|node|python3?|npx|pnpm|uv|deno)$/.test(first)) {
@@ -1215,7 +1215,7 @@ function behaviorStrip(prov) {
       <div>
         <div class="t-label"><strong class="semibold">Hooks accumulate.</strong>
         Every layer's entries merge and all of them run — nothing is ever displaced. Adding a hook
-        only ever adds work. 33 events; all five handler types work.</div>
+        only ever adds work. 33 events, but handler support varies: all five types on 13 of them, <code class="cmd">command</code>/<code class="cmd">http</code>/<code class="cmd">mcp_tool</code> on 18, and <code class="cmd">command</code>/<code class="cmd">mcp_tool</code> only on SessionStart and Setup.</div>
         <div class="t-caption muted" style="margin-top:2px">Claude has <strong class="semibold">no per-hook disable</strong>, so the pile only grows. A byte-identical handler in two settings files is the single exception — it collapses and runs once.</div>
       </div>
       <span class="spacer"></span>
@@ -1427,7 +1427,7 @@ function trustBanner(stale) {
     <div>
       <strong class="semibold">${stale.length} Codex hook${stale.length > 1 ? 's are' : ' is'} edited but not trusted — ${stale.length > 1 ? 'they are' : 'it is'} not running.</strong>
       Codex records trust against the hook's hash in <code class="cmd">[hooks.state]</code>. Any edit — including one Multica makes — invalidates it,
-      and Codex skips the hook silently until the new hash is trusted.
+      and Codex marks the hook for review and skips it until the new hash is trusted. Startup is not silent: Codex prints a warning telling you to open <code class="cmd">/hooks</code>.
       <div style="margin-top:6px">${stale.map((h) => `<button class="btn sm" data-retrust="${h.id}">${ic('key', 13)}Re-trust ${esc((h.command || '').split('/').pop())}</button>`).join(' ')}</div>
     </div>
   </div>`;
@@ -1904,7 +1904,7 @@ function screenLog() {
             <div><span class="badge b-warn">${ic('ban', 11)}blocked</span> <span class="muted">exit 2 on a blockable event — the tool call was rejected.</span></div>
             <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero, non-blocking — the action proceeded and Claude never saw it. The transcript got a one-line hook-error notice; this row is the only record.</span></div>
             <div><span class="badge b-bad">${ic('clock', 11)}timed out</span> <span class="muted">killed at its timeout.</span></div>
-            <div><span class="badge">${ic('zap', 11)}async · unknown</span> <span class="muted">detached. Neither CLI records the outcome — a permanent blind spot, not a gap in this feed.</span></div>
+            <div><span class="badge">${ic('zap', 11)}async · unknown</span> <span class="muted">detached. Neither CLI keeps a structured record — no duration, verdict or history — so this feed cannot show one. Claude does still hand the hook's additionalContext and systemMessage to Claude on the next turn, and shows completion notices under <code class="cmd">--verbose</code> or Ctrl+O.</span></div>
             <div><span class="badge b-bad">${ic('ban', 11)}never invoked</span> <span class="muted">Loaded, but the provider never calls it. No error is raised, so this row is inferred from an absence rather than read from a log line.</span></div>
             <div><span class="badge">${ic('copy', 11)}collapsed · ran once</span> <span class="muted">Claude only. Two identical settings-file entries, one process.</span></div>
             <div><span class="badge">${ic('filter', 11)}if did not match</span> <span class="muted">Claude only. Deliberate: the pre-filter kept the process from spawning.</span></div>
@@ -2246,7 +2246,7 @@ function editorProblems() {
   if (ed.event === 'Stop' || ed.event === 'SubagentStop') out.push({ level: 'warn', field: 'event',
     text: 'A ' + ed.event + ' hook returning decision:"block" does not reject the turn on either provider — it CONTINUES it. Omit decision to let the turn end; only continue:false ends it. '
       + (ed.provider === 'codex'
-        ? 'Codex turns your reason into a new continuation prompt that acts as a new user prompt, so write it as an instruction — and it has no additionalContext on this event, so decision/reason is the only way in.'
+        ? 'Codex turns your reason into a new continuation prompt that acts as a new user prompt, so write it as an instruction — and it has no additionalContext on this event, so decision/reason is the only way to feed the model context. Stop does also take the shared continue, stopReason and systemMessage fields.'
         : 'Claude takes your reason as the explanation for why it should continue, capped at 8 consecutive continuations. If the hook is working as designed and only wants to hand Claude guidance, return hookSpecificOutput.additionalContext instead: same continuation, same loop protections, but the transcript labels it Stop hook feedback and raises no hook error.') });
   if (ed.provider === 'codex' && ed.type === 'command' && String(ed.additionalContextLimit || '').trim() && ed.event && !CODEX_ADDCTX_EVENTS.includes(ed.event)) {
     out.push({ level: 'warn', field: 'additionalContextLimit',
@@ -2261,7 +2261,7 @@ function editorProblems() {
   if (ed.if && ed.if.trim() && ed.provider === 'codex') out.push({ level: 'error', field: 'if',
     text: 'Codex has no if field. It would be stored and ignored.' });
   if (ed.async) out.push({ level: 'warn', field: 'async',
-    text: 'async detaches the process. Neither CLI checks its exit status, so a failure will never appear anywhere — including in the fire log. On Claude, timeout is not enforced on an async command hook either.' });
+    text: 'async detaches the process, so neither CLI keeps a structured record of the run — no duration, verdict or matcher counts, here or in the fire log. Claude still delivers the hook response\'s additionalContext and systemMessage to Claude on the next turn, and its completion notice is suppressed unless you run --verbose or press Ctrl+O. Claude also stops enforcing timeout once an async command hook is running.' });
   if (ed.provider === 'codex') out.push({ level: 'warn', field: 'trust',
     text: 'Codex records trust against each hook\u2019s own hash, so saving a new or edited entry leaves that entry needing review in /hooks before it can run. Untouched entries in the same file keep their trust — the hash is per hook, not per file.' });
   return out;
@@ -2445,12 +2445,19 @@ function editorDialog() {
         ${perField('mcpTool').map((p) => `<div class="err">${ic('circleAlert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
       </div>` : ''}
 
+      ${ed.provider === 'claude' || ed.type === 'command' || ed.type === 'mcp_tool' ? `
+      <div class="field">
+        <label for="edSm">statusMessage</label>
+        <input class="input" id="edSm" data-f="statusMessage" value="${esc(ed.statusMessage)}" placeholder="Checking shell policy…" />
+        <div class="hint">Spinner text shown while the hook runs. <strong class="semibold">Both providers take it</strong> — Claude as a common field on every handler type, Codex on <code class="cmd">command</code> and <code class="cmd">mcp_tool</code> handlers.</div>
+      </div>` : ''}
+
       ${ed.provider === 'codex' && ed.type === 'command' ? `
       <div class="card" style="background:color-mix(in oklab, var(--info) 6%, transparent);border-color:color-mix(in oklab, var(--info) 26%, transparent)">
         <div class="card-body tight">
           <div class="inline" style="margin-bottom:10px">
             <span class="badge b-codex">${ic('cpu', 11)}Codex-only fields</span>
-            <span class="t-caption muted">These three have no Claude equivalent.</span>
+            <span class="t-caption muted">These two have no Claude equivalent.</span>
           </div>
           <div class="stack">
             <div class="field">
@@ -2458,16 +2465,10 @@ function editorDialog() {
               <input class="input mono" id="edCw" data-f="commandWindows" value="${esc(ed.commandWindows)}" placeholder="powershell -File %USERPROFILE%\\.codex\\hooks\\guard.ps1" />
               <div class="hint">Used instead of <code class="cmd">command</code> on Windows hosts. Written as <code class="cmd">command_windows</code> in TOML.</div>
             </div>
-            <div class="row-2">
-              <div class="field">
-                <label for="edSm">statusMessage</label>
-                <input class="input" id="edSm" data-f="statusMessage" value="${esc(ed.statusMessage)}" placeholder="Checking shell policy…" />
-              </div>
-              <div class="field">
-                <label for="edAcl">additionalContextLimit</label>
-                <input class="input" id="edAcl" data-f="additionalContextLimit" value="${esc(ed.additionalContextLimit)}" placeholder="4096" inputmode="numeric" />
-                ${perField('additionalContextLimit').map((p) => `<div class="warn">${ic('alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
-              </div>
+            <div class="field">
+              <label for="edAcl">additionalContextLimit</label>
+              <input class="input" id="edAcl" data-f="additionalContextLimit" value="${esc(ed.additionalContextLimit)}" placeholder="4096" inputmode="numeric" />
+              ${perField('additionalContextLimit').map((p) => `<div class="warn">${ic('alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
             </div>
           </div>
         </div>
@@ -2719,7 +2720,8 @@ function trustDialog() {
         ${ic('circleAlert', 13, 'ico')}
         <div><strong class="semibold">This is what makes a Codex hooks manager awkward.</strong> Codex only runs a hook while its hash matches
         <code class="cmd">[hooks.state].trusted_hash</code> in <code class="cmd">~/.codex/config.toml</code>. Any edit — including one Multica
-        makes on your behalf — breaks the match, and Codex then skips the hook without saying anything. Writing Codex hooks from a web app
+        makes on your behalf — breaks the match, and Codex then marks the hook for review and skips it until it is trusted again. You do get a
+        warning at startup telling you to open <code class="cmd">/hooks</code>, but nothing at the moment of the missed fire. Writing Codex hooks from a web app
         therefore breaks them by definition, and re-trust has to be part of the flow rather than an afterthought.</div>
       </div>
       <div class="field">
