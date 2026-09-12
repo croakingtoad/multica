@@ -1464,6 +1464,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/hooks/{requestId}/result", h.ReportHookReadResult)
+		r.Post("/runtimes/{runtimeId}/hook-fires", h.ReportHookFires)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 
@@ -2207,6 +2208,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// builds itself; nothing holds this file.
 					r.Get("/hooks/answer", h.AnswerHookEvent)
 					r.Get("/hooks/{requestId}", h.GetHookReadRequest)
+					// Read-only hook-fire feed (LOCO-135). Authorised by
+					// DP-LOCO-114-03: the capture path keeps zero reads of
+					// hook_fire_history, and this SELECT renders the stored
+					// per-row `provenance` verbatim rather than deriving it.
+					r.Get("/hook-fires", h.ListHookFires)
 					r.Delete("/", h.DeleteAgentRuntime)
 					// Confirmed variant of DELETE: unbind every agent bound to
 					// this runtime (they keep their configuration and chats and

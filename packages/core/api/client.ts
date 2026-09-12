@@ -82,6 +82,7 @@ import type {
   RuntimeLocalSkillImportRequest,
   RuntimeHookEventAnswerResult,
   RuntimeHookReadRequest,
+  RuntimeHookFireFeed,
   TimelineEntry,
   AssigneeFrequencyEntry,
   TaskMessagePayload,
@@ -330,6 +331,7 @@ import {
   failedRuntimeHookRead,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
+  RuntimeHookFireFeedSchema,
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
   SearchIssuesResponseSchema,
@@ -2439,6 +2441,31 @@ export class ApiClient {
       RuntimeHookEventAnswerResultSchema,
       failedRuntimeHookEventAnswer(runtimeId),
       { endpoint: "GET /api/runtimes/{id}/hooks/answer" },
+    );
+  }
+
+  /**
+   * Read-only hook-fire feed. Every field, `provenance` included, is whatever
+   * the server stored — this method must never derive, upgrade or normalize
+   * provenance, and neither may its schema (DP-LOCO-114-03 condition 2).
+   *
+   * The empty fallback is a genuinely empty feed, not a zero-provenance feed:
+   * no rows means no provenance claims, which is the only safe default here.
+   */
+  async listRuntimeHookFires(
+    runtimeId: string,
+    params?: { limit?: number },
+  ): Promise<RuntimeHookFireFeed> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/hook-fires?${search}`,
+    );
+    return parseWithFallback<RuntimeHookFireFeed>(
+      raw,
+      RuntimeHookFireFeedSchema,
+      { fires: [], limit: 0, truncated: false },
+      { endpoint: "GET /api/runtimes/:id/hook-fires" },
     );
   }
 

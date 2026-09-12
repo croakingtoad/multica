@@ -716,5 +716,54 @@
       "body": "These keys were not a hook event's matcher groups, so Multica skipped them. Everything else in the same source resolved.",
       "entry": "{{scope}}/{{format}}: {{key}}"
     }
+  },
+  "hook_fires": {
+    "title": "Hook fires",
+    "subtitle": "Newest first. One row per fire a provider reported.",
+    "loading": "Loading hook fires…",
+    "error": "Could not load hook fires.",
+    "empty": "No hook fires recorded for this runtime yet.",
+    "empty_hint": "Multica records a fire when a provider reports one in a task's structured output stream. An empty feed means nothing was reported, or that every reported fire has passed the 30-day retention window — not that no hook ran.",
+    "truncated": "Showing the {{count}} most recent fires. Older fires are not on this page.",
+    "how_we_know_title": "How Multica knows these ran",
+    "how_we_know_intro": "Provenance is stated per row, never per provider. This runtime's feed can mix both of the following, and the time shown means something different in each.",
+    "mix_summary": "On this page {{inferred}} of {{total}} rows carry Multica's receipt time rather than a time the host recorded.",
+    "counts_debug_log": "{{count}} host-timed",
+    "counts_inferred": "{{count}} receipt-timed",
+    "counts_unrecognized": "{{count}} unrecognized",
+    "execution_ref_note": "A per-execution reference, fresh on every fire. Not an identity for a configured hook, and not a way to group fires.",
+    "provenance": {
+      "debug_log": {
+        "label": "Host-timed",
+        "meaning": "The host's own debug log recorded this execution and Multica matched it uniquely. The time shown is the time the host recorded."
+      },
+      "inferred": {
+        "label": "Receipt-timed",
+        "meaning": "Multica knows this hook ran, and knows its outcome and exit code, from the provider's own structured stream. But the host recorded no timestamp it could match, so the time shown is when Multica received the record — a materially weaker claim than host-timed."
+      },
+      "unrecognized": {
+        "label": "Unrecognized",
+        "meaning": "This record's provenance is a value this version of Multica does not recognise, so Multica makes no claim about what the time shown means."
+      }
+    },
+    "outcome": {
+      "success": "Success",
+      "failure": "Failure",
+      "blocked": "Blocked",
+      "skipped": "Skipped",
+      "unknown": "Unknown",
+      "unrecognized": "Unrecognized"
+    },
+    "unknown_cause": {
+      "spawn_ambiguous": "Exit {{code}}: the provider exposes no spawn-failure field, so a hook that ran and exited {{code}} cannot be told apart from a shell that never started it.",
+      "no_exit_code": "The provider reported an error but no exit code, so the result cannot be narrowed further.",
+      "provider_state": "The provider reported this hook as \"{{state}}\" — a timed-out hook lands here, for example.",
+      "unclassified": "The provider's report did not carry enough to classify this result."
+    },
+    "row": {
+      "hook_unknown": "Handler not reported",
+      "exit_code": "Exit {{code}}",
+      "execution_ref": "Execution ref"
+    }
   }
 }

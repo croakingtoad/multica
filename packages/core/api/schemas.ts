@@ -1801,6 +1801,43 @@ const RuntimeUsageByAgentSchema = z.object({
 
 export const RuntimeUsageByAgentListSchema = z.array(RuntimeUsageByAgentSchema);
 
+// ---------------------------------------------------------------------------
+// Hook-fire feed schema (LOCO-135) — `/api/runtimes/:id/hook-fires`.
+//
+// `provenance` and `outcome` are typed as plain strings ON PURPOSE. A
+// `z.enum([...]).catch("inferred")` would be the usual leniency move here and
+// it would be a defect: coercing an unrecognised value into a known one is a
+// render-time provenance decision, which DP-LOCO-114-03 condition 2 forbids.
+// The stored column travels through this schema untouched, and the renderer
+// carries an explicit branch for a value it does not recognise.
+//
+// Defaulting them to "" is safe for the same reason — "" matches no known
+// provenance, so it falls into that unrecognised branch and makes no claim,
+// rather than silently asserting the stronger `debug_log` reading.
+// ---------------------------------------------------------------------------
+
+const RuntimeHookFireSchema = z.object({
+  id: z.string().default(""),
+  provider: z.string().default(""),
+  event: z.string().default(""),
+  // Per-execution reference, fresh on every fire for Claude. Diagnostic only:
+  // never a grouping key, never presented as "this hook".
+  execution_id: z.string().default(""),
+  hook_spec: z.union([z.record(z.string(), z.unknown()), z.array(z.unknown())]).optional(),
+  fired_at: z.string().default(""),
+  provenance: z.string().default(""),
+  outcome: z.string().default(""),
+  detail: z.record(z.string(), z.unknown()).optional(),
+}).loose();
+
+export const RuntimeHookFireFeedSchema = z.object({
+  fires: z.array(RuntimeHookFireSchema).default([]),
+  limit: z.number().default(0),
+  // Absent/malformed reads as "not truncated": the screen then states it is
+  // showing the most recent fires without claiming rows were hidden.
+  truncated: z.boolean().default(false),
+}).loose();
+
 const RuntimeUsageByHourSchema = z.object({
   hour: z.number().default(0),
   model: z.string().default(""),

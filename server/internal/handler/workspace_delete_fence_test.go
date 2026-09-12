@@ -442,7 +442,7 @@ VALUES
 	var fireID string
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO hook_fire_history (
-    runtime_id, provider, event, hook_id, hook_spec, fired_at, provenance, outcome
+    runtime_id, provider, event, execution_id, hook_spec, fired_at, provenance, outcome
 )
 VALUES ($1, 'codex', 'Stop', 'legacy-fire', '{"command": "true"}'::jsonb, now(), 'inferred', 'success')
 RETURNING id

@@ -1497,3 +1497,95 @@ export interface RuntimeHookEventAnswerResult {
   answer?: RuntimeHookEventAnswer;
   error?: string;
 }
+
+/**
+ * How Multica came to know the time on a hook-fire record. Stated per record,
+ * never per provider — a Claude feed is mixed, and stage 7's audit of a real
+ * 144-response corpus measured 70.1% of it as `inferred`, because 66% of hook
+ * responses print nothing on stdout and so can never be matched to a
+ * host-recorded timestamp.
+ *
+ * - `debug_log`: the host's own debug log recorded this execution and Multica
+ *   matched it uniquely. `fired_at` is the time the host recorded.
+ * - `inferred`: Multica knows from the provider's structured stream that the
+ *   hook ran, and knows its outcome and exit code, but the host recorded no
+ *   timestamp it could match. `fired_at` is when Multica received the record.
+ *   A materially weaker claim than `debug_log`, and the difference is the
+ *   whole point of the two-tier design.
+ *
+ * Never derive or upgrade this client-side. The stored column is rendered
+ * verbatim (DP-LOCO-114-03 condition 2); a render-time provenance decision
+ * reintroduces the fabricated-provenance defect that the capture path is now
+ * audited against.
+ */
+export type RuntimeHookFireProvenance = "debug_log" | "inferred";
+
+/**
+ * Result of one hook fire, as stored.
+ *
+ * `unknown` is not a fallback — it is a real, honest state with two distinct
+ * causes, and it accounted for 66.7% of all non-success outcomes in the
+ * measured corpus:
+ *
+ * 1. Exit 126 or 127. Claude exposes no spawn-failure field, so a hook that
+ *    ran and exited 127 is indistinguishable from a shell that never started
+ *    it. Neither `failure` nor `skipped` would be true.
+ * 2. A provider `cancelled` outcome, e.g. a hook that timed out.
+ *
+ * `skipped` is unreachable on Claude. Nothing may offer the reader a
+ * "never ran" state the data cannot supply.
+ */
+export type RuntimeHookFireOutcome =
+  | "success"
+  | "failure"
+  | "blocked"
+  | "skipped"
+  | "unknown";
+
+/**
+ * One row of the server-authoritative `hook_fire_history` table.
+ *
+ * WARNING on `execution_id`: this is the provider's PER-EXECUTION reference,
+ * fresh on every fire for Claude — not stable configured-hook identity. It
+ * must never be presented to the reader as "this hook", and nothing may group,
+ * join, dedupe or key on it (DP-LOCO-114-02 item 3, foreclosed). Group on the
+ * hook name plus event when grouping is needed, and do not imply the grouping
+ * is by a specific hook configuration.
+ *
+ * `hook_spec` is the handler identity observed AT FIRE TIME, denormalized on
+ * purpose so a later edit or delete of the hook cannot rewrite history. For
+ * Claude capture it carries `{ hook_name, type: "claude_hook_response" }`.
+ *
+ * `fired_at` only means something read together with `provenance` — see
+ * {@link RuntimeHookFireProvenance}.
+ */
+export interface RuntimeHookFire {
+  id: string;
+  provider: string;
+  event: string;
+  execution_id: string;
+  hook_spec?: Record<string, unknown> | unknown[];
+  fired_at: string;
+  /**
+   * Open unions (house style, cf. `PluginHookTrigger | string`) and
+   * deliberately so. The wire value is passed through verbatim and is never
+   * coerced into a known member, because narrowing an unrecognised provenance
+   * into `debug_log` or `inferred` IS a render-time provenance decision — the
+   * exact thing DP-LOCO-114-03 condition 2 forbids. Renderers must carry an
+   * explicit branch for a value they do not recognise and make no strength
+   * claim in it.
+   */
+  provenance: RuntimeHookFireProvenance | string;
+  outcome: RuntimeHookFireOutcome | string;
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * A page of the feed. `truncated` lets the screen state its own completeness
+ * rather than implying it is showing everything that ever fired.
+ */
+export interface RuntimeHookFireFeed {
+  fires: RuntimeHookFire[];
+  limit: number;
+  truncated: boolean;
+}

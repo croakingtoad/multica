@@ -130,6 +130,28 @@ type ExecOptions struct {
 	// through Claude Code's --settings flag. It currently carries restrictive
 	// runtime-skill overrides only; other providers ignore it.
 	ClaudeSettingsPath string
+	// ClaudeDebugFile is a daemon-owned, task-scoped destination for Claude's
+	// host debug log. The daemon reads hook results from it after the process
+	// exits; other providers ignore it.
+	ClaudeDebugFile string
+	// ClaudeHookResponse receives Claude's structured hook_response stream
+	// events. The callback must not block; Claude invokes it from the stdout
+	// drain goroutine. Other providers ignore it.
+	ClaudeHookResponse func(ClaudeHookResponse)
+}
+
+// ClaudeHookResponse is Claude Code's structured statement that one hook
+// invocation finished. HookID identifies this execution, not the stable
+// content-derived hook definition used by Multica snapshots.
+type ClaudeHookResponse struct {
+	HookID    string
+	HookName  string
+	HookEvent string
+	Output    string
+	Stdout    string
+	Stderr    string
+	ExitCode  *int
+	Outcome   string
 }
 
 // runContext derives the execution context for an agent subprocess from the

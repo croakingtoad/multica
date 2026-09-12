@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 const preparationHelperTestMode = "execenv-preparation-helper"
@@ -268,6 +270,7 @@ func TestPreparationHelperPreservesOpenclawTimeoutKind(t *testing.T) {
 	if err != nil {
 		t.Skipf("no sleep binary available to build a slow shim: %v", err)
 	}
+	cli.IsolateConfigRoot(t)
 	// A CLI slower than the deadline, which the child process inherits through
 	// the environment. openclawCLIMinTimeout is the floor, so the shim has to
 	// outlast a full second.

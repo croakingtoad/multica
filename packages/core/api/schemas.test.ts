@@ -52,6 +52,7 @@ import {
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
+  RuntimeHookFireFeedSchema,
   SendChatMessageResponseSchema,
   SquadListSchema,
   SquadSchema,
@@ -2106,5 +2107,84 @@ describe("issue status catalog schemas", () => {
       { endpoint: "POST /api/issue-statuses" },
     );
     expect(parsed).toEqual(EMPTY_ISSUE_STATUS_ENTRY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hook-fire feed (LOCO-135). The schema's job here is unusual: it must be
+// LENIENT about shape and absolutely INERT about meaning. `provenance` and
+// `outcome` pass through untouched, because coercing an unrecognised value
+// into a known one would be a render-time provenance decision — the thing
+// DP-LOCO-114-03 condition 2 forbids.
+// ---------------------------------------------------------------------------
+describe("RuntimeHookFireFeedSchema", () => {
+  it("passes both stored provenance values through unchanged", () => {
+    const parsed = RuntimeHookFireFeedSchema.parse({
+      fires: [
+        { id: "a", provenance: "inferred", outcome: "unknown" },
+        { id: "b", provenance: "debug_log", outcome: "success" },
+      ],
+      limit: 100,
+      truncated: false,
+    });
+    expect(parsed.fires.map((f) => f.provenance)).toEqual([
+      "inferred",
+      "debug_log",
+    ]);
+  });
+
+  it("does not coerce an unrecognised provenance into a known value", () => {
+    // "" and "observed" must survive as themselves so the renderer takes its
+    // unrecognised branch and makes no claim. A `.catch("inferred")` here
+    // would silently assert the weaker of the two real claims about a value
+    // we do not understand.
+    const parsed = RuntimeHookFireFeedSchema.parse({
+      fires: [
+        { id: "a", provenance: "observed" },
+        { id: "b", provenance: "DEBUG_LOG" },
+        { id: "c" },
+      ],
+    });
+    expect(parsed.fires.map((f) => f.provenance)).toEqual([
+      "observed",
+      "DEBUG_LOG",
+      "",
+    ]);
+  });
+
+  it("keeps an outcome this client build has never heard of", () => {
+    const parsed = RuntimeHookFireFeedSchema.parse({
+      fires: [{ id: "a", outcome: "throttled" }],
+    });
+    expect(parsed.fires[0]?.outcome).toBe("throttled");
+  });
+
+  it("defaults a malformed envelope to an empty, non-truncated feed", () => {
+    // An empty feed makes no provenance claims at all, which is the only
+    // safe fallback for this surface.
+    const parsed = RuntimeHookFireFeedSchema.parse({});
+    expect(parsed.fires).toEqual([]);
+    expect(parsed.limit).toBe(0);
+    expect(parsed.truncated).toBe(false);
+  });
+
+  it("rejects a non-object body so parseWithFallback returns its fallback", () => {
+    expect(RuntimeHookFireFeedSchema.safeParse(null).success).toBe(false);
+    expect(RuntimeHookFireFeedSchema.safeParse([]).success).toBe(false);
+    expect(RuntimeHookFireFeedSchema.safeParse("boom").success).toBe(false);
+  });
+
+  it("tolerates unknown fields a newer server adds", () => {
+    const parsed = RuntimeHookFireFeedSchema.parse({
+      fires: [{ id: "a", provenance: "inferred", cursor: "abc" }],
+      next_cursor: "abc",
+    });
+    expect(parsed.fires[0]?.provenance).toBe("inferred");
+  });
+
+  it("keeps hook_spec and detail optional rather than inventing objects", () => {
+    const parsed = RuntimeHookFireFeedSchema.parse({ fires: [{ id: "a" }] });
+    expect(parsed.fires[0]?.hook_spec).toBeUndefined();
+    expect(parsed.fires[0]?.detail).toBeUndefined();
   });
 });

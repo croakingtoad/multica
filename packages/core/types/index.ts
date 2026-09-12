@@ -100,6 +100,10 @@ export type {
   RuntimeHookUnevaluableMatcher,
   RuntimeHookEventAnswer,
   RuntimeHookEventAnswerResult,
+  RuntimeHookFireProvenance,
+  RuntimeHookFireOutcome,
+  RuntimeHookFire,
+  RuntimeHookFireFeed,
   IssueUsageSummary,
   MikaBootstrapResponse,
 } from "./agent";

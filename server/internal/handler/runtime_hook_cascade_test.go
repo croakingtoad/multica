@@ -19,7 +19,7 @@ func seedRuntimeHookRows(t *testing.T, ctx context.Context, runtimeID string) {
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO hook_fire_history (
-			runtime_id, provider, event, hook_id, hook_spec, fired_at, provenance, outcome
+			runtime_id, provider, event, execution_id, hook_spec, fired_at, provenance, outcome
 		)
 		VALUES ($1, 'codex', 'Stop', 'hook-cascade-test', '{"command": "true"}'::jsonb, now(), 'inferred', 'success')
 	`, runtimeID); err != nil {
