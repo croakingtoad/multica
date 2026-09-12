@@ -1,5 +1,10 @@
 package runtimehooks
 
+import (
+	"errors"
+	"fmt"
+)
+
 // Answering "which handlers run on this event" requires a value, because that
 // is what a matcher is evaluated against. There is no valueless form of this
 // answer: without a tool name, a changed file or a start source, the truthful
@@ -200,8 +205,14 @@ func AnswerEvent(provider Provider, expected []SourceRef, observed []ObservedSou
 	// MergeMatched is applied only to Matched, which is the one set whose
 	// matchers have already matched — its documented input. The other three
 	// stay one row per source occurrence, as the tab's own list does.
-	answer.Matched = answerEntries(provider, byHookID, resolution.MergeMatched(result.Matched))
-	answer.NeverRuns = answerEntries(provider, byHookID, result.NeverRuns)
+	matched, err := answerEntries(provider, byHookID, resolution.MergeMatched(result.Matched))
+	if err != nil {
+		return unansweredEvent(answer, err)
+	}
+	neverRuns, err := answerEntries(provider, byHookID, result.NeverRuns)
+	if err != nil {
+		return unansweredEvent(answer, err)
+	}
 
 	decided := make(map[string]struct{}, len(result.Matched)+len(result.NeverRuns))
 	for _, entry := range result.Matched {
@@ -220,13 +231,27 @@ func AnswerEvent(provider Provider, expected []SourceRef, observed []ObservedSou
 		}
 		notMatched = append(notMatched, state.Hook)
 	}
-	answer.NotMatched = answerEntries(provider, byHookID, notMatched)
+	notMatchedEntries, err := answerEntries(provider, byHookID, notMatched)
+	if err != nil {
+		return unansweredEvent(answer, err)
+	}
 
 	excluded := make([]ResolvedHook, 0, len(result.ConfigurationExcluded))
 	for _, state := range result.ConfigurationExcluded {
 		excluded = append(excluded, state.Hook)
 	}
-	answer.ConfigurationExcluded = answerEntries(provider, byHookID, excluded)
+	excludedEntries, err := answerEntries(provider, byHookID, excluded)
+	if err != nil {
+		return unansweredEvent(answer, err)
+	}
+
+	// Assigned only once every set projected. A set is never published beside
+	// a sibling that failed: that would be a partial answer presenting itself
+	// as a whole one.
+	answer.Matched = matched
+	answer.NeverRuns = neverRuns
+	answer.NotMatched = notMatchedEntries
+	answer.ConfigurationExcluded = excludedEntries
 
 	for _, set := range [][]ProjectedEntry{
 		answer.Matched, answer.NotMatched, answer.NeverRuns, answer.ConfigurationExcluded,
@@ -239,33 +264,59 @@ func AnswerEvent(provider Provider, expected []SourceRef, observed []ObservedSou
 	return answer
 }
 
+// errMissingRunState is the one inconsistency answerEntries can meet: a hook
+// that reached an answer set, or a member that reached a row, for which
+// RunStates produced no state. Nothing in this package can currently produce
+// it — every state is inserted into byHookID unconditionally — and it is kept
+// as an error rather than deleted as unreachable because the guard is what
+// makes the inconsistency legible if anything ever does.
+var errMissingRunState = errors.New("hook resolution and run state disagree")
+
 // answerEntries projects hooks through their own RunState, so both axes come
 // from the resolution layer and none is re-derived here. A merged row keeps
 // every member's original identity; MergeMatched only combines live Claude
 // settings entries, whose configuration, effectiveness and trust agree.
-func answerEntries(provider Provider, byHookID map[string]RunState, hooks []ResolvedHook) []ProjectedEntry {
+//
+// A hook or member with no state is returned as an error, never absorbed.
+// Skipping the row instead would delete a hook that genuinely runs from the
+// answer, and a reader who cannot see it cannot know it is missing — the one
+// failure mode this surface must not have. The caller turns the error into an
+// unanswerable event, which is a limit the reader is shown.
+func answerEntries(provider Provider, byHookID map[string]RunState, hooks []ResolvedHook) ([]ProjectedEntry, error) {
 	entries := make([]ProjectedEntry, 0, len(hooks))
 	for _, hook := range hooks {
 		state, ok := byHookID[hook.HookID]
 		if !ok {
-			continue
+			return nil, fmt.Errorf("%w: no run state for hook %q", errMissingRunState, hook.HookID)
 		}
 		state.Hook = hook
 		entry := projectEntry(provider, state)
 		entry.Members = entry.Members[:0]
-		complete := true
 		for _, member := range hook.Members {
 			memberState, ok := byHookID[member.HookID]
 			if !ok {
-				complete = false
-				break
+				return nil, fmt.Errorf("%w: no run state for member %q of hook %q",
+					errMissingRunState, member.HookID, hook.HookID)
 			}
 			projected := projectEntry(provider, memberState)
 			entry.Members = append(entry.Members, projected.Members...)
 		}
-		if complete {
-			entries = append(entries, entry)
-		}
+		entries = append(entries, entry)
 	}
-	return entries
+	return entries, nil
+}
+
+// unansweredEvent restates answer as the failure the screen already renders:
+// the reason, and four empty sets. EventAnswer's own doc requires that shape —
+// an empty Matched on an unanswerable event is Multica's limit and never a
+// claim that nothing runs. Unevaluable is kept, because the unanswerable
+// panel already names the matchers the evaluator refused.
+func unansweredEvent(answer EventAnswer, err error) EventAnswer {
+	answer.Answerable = false
+	answer.Error = err.Error()
+	answer.Matched = []ProjectedEntry{}
+	answer.NotMatched = []ProjectedEntry{}
+	answer.NeverRuns = []ProjectedEntry{}
+	answer.ConfigurationExcluded = []ProjectedEntry{}
+	return answer
 }

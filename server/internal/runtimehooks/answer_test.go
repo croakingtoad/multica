@@ -2,6 +2,7 @@ package runtimehooks
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -498,4 +499,111 @@ func TestProjectionCarriesAValueRolePerConfiguredEvent(t *testing.T) {
 	if _, ok := projection.EventValueRoles["SessionStart"]; ok {
 		t.Fatal("an unconfigured event must not appear in the role map")
 	}
+}
+
+// R3. A hook in an answer set, or a member of one, with no run state is an
+// inconsistency between the resolution and the answer. It must surface as the
+// event's own failure and must never remove the row: a hook that genuinely
+// runs, silently absent from the answer, is the one failure mode this surface
+// cannot have, because a reader who cannot see the row cannot know it is
+// missing. No input reaches this state — AnswerEvent inserts every state into
+// byHookID unconditionally — so the state is constructed directly here, which
+// is also why the guard stays rather than being deleted as unreachable.
+func TestAnswerEntriesSurfacesMissingRunStateInsteadOfDroppingTheRow(t *testing.T) {
+	handler := json.RawMessage(`{"command":"format.sh","type":"command"}`)
+	userRef := SourceRef{Scope: "user", Format: "json", Kind: SourceSettings}
+	projectRef := SourceRef{Scope: "project", Format: "json", Kind: SourceSettings}
+	member := func(id string, ref SourceRef) ResolvedHookMember {
+		return ResolvedHookMember{HookID: id, Matcher: "Bash", Source: ref}
+	}
+	// One collapsed row standing for two configured entries, exactly as
+	// MergeMatched produces: the survivor's identity, both members' identities.
+	merged := ResolvedHook{
+		HookID: "user-hook", Event: "PreToolUse", Matcher: "Bash", Handler: handler,
+		Sources: []SourceRef{userRef, projectRef},
+		Members: []ResolvedHookMember{member("user-hook", userRef), member("project-hook", projectRef)},
+	}
+	state := func(id string, ref SourceRef) RunState {
+		return RunState{
+			Hook: ResolvedHook{
+				HookID: id, Event: "PreToolUse", Matcher: "Bash", Handler: handler,
+				Sources: []SourceRef{ref}, Members: []ResolvedHookMember{member(id, ref)},
+			},
+			Configuration: ConfigurationLive,
+			Effectiveness: EffectivenessWillRun,
+			Trust:         TrustNotApplicable,
+		}
+	}
+	complete := map[string]RunState{
+		"user-hook":    state("user-hook", userRef),
+		"project-hook": state("project-hook", projectRef),
+	}
+	missingMember := map[string]RunState{"user-hook": state("user-hook", userRef)}
+	missingHook := map[string]RunState{"project-hook": state("project-hook", projectRef)}
+
+	// The row is real: with both states present it projects, carrying both
+	// member identities. Without this the assertions below would pass on a
+	// row that was never producible in the first place.
+	entries, err := answerEntries(ProviderClaude, complete, []ResolvedHook{merged})
+	if err != nil {
+		t.Fatalf("consistent states must project: %v", err)
+	}
+	if len(entries) != 1 || len(entries[0].Members) != 2 {
+		t.Fatalf("want 1 row carrying 2 members, got %+v", entries)
+	}
+
+	for _, tt := range []struct {
+		name      string
+		byHookID  map[string]RunState
+		wantInErr string
+	}{
+		{name: "member state missing", byHookID: missingMember, wantInErr: "project-hook"},
+		{name: "row state missing", byHookID: missingHook, wantInErr: "user-hook"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			entries, err := answerEntries(ProviderClaude, tt.byHookID, []ResolvedHook{merged})
+			if err == nil {
+				t.Fatalf("want an error, got %d entries: %+v", len(entries), entries)
+			}
+			if !errors.Is(err, errMissingRunState) {
+				t.Fatalf("want errMissingRunState, got %v", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantInErr) {
+				t.Fatalf("error must name the hook %q: %v", tt.wantInErr, err)
+			}
+			// Not a partial row either: a half-projected row published beside
+			// the error would still be a claim Multica cannot support.
+			if len(entries) != 0 {
+				t.Fatalf("no row may be emitted alongside the error: %+v", entries)
+			}
+
+			// And the caller's channel is the failure the screen renders.
+			answer := unansweredEvent(EventAnswer{
+				Provider: string(ProviderClaude), Event: "PreToolUse", Value: "Bash",
+				Answerable: true,
+				Matched:    entriesFor(merged), NotMatched: entriesFor(merged),
+				NeverRuns: entriesFor(merged), ConfigurationExcluded: entriesFor(merged),
+			}, err)
+			if answer.Answerable {
+				t.Fatal("an inconsistency must leave the event unanswerable")
+			}
+			if !strings.Contains(answer.Error, tt.wantInErr) {
+				t.Fatalf("answer.Error must name the inconsistency: %q", answer.Error)
+			}
+			for name, set := range map[string][]ProjectedEntry{
+				"matched": answer.Matched, "not_matched": answer.NotMatched,
+				"never_runs": answer.NeverRuns, "configuration_excluded": answer.ConfigurationExcluded,
+			} {
+				if len(set) != 0 {
+					t.Fatalf("%s must be empty on an unanswerable event: %+v", name, set)
+				}
+			}
+		})
+	}
+}
+
+// entriesFor is a non-empty set to prove unansweredEvent empties it rather
+// than relying on the set having been empty already.
+func entriesFor(hook ResolvedHook) []ProjectedEntry {
+	return []ProjectedEntry{{HookID: hook.HookID, Event: hook.Event}}
 }

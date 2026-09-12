@@ -5,6 +5,7 @@ import type {
   RuntimeHookMember,
   RuntimeHookReadRequest,
   RuntimeHookSource,
+  RuntimeHookSourceRef,
 } from "@multica/core/types";
 
 // Pure derivation for the Lifecycle Hooks tab. Everything here is shape and
@@ -534,21 +535,41 @@ export interface HookAnswerTotals {
 }
 
 /**
- * The server-projected identities represented by one answer row. The fallback
- * only keeps an installed client usable with an older backend: it repeats the
- * surviving row identity once per source because that wire shape did not
- * retain the identities the backend discarded.
+ * One row of an answer row's member list. `source` is known either way — the
+ * wire shape has always carried it. `identity` is the server's projection for
+ * that source's own configured entry, and is null on an observation cached by
+ * a backend that predates member projection.
+ *
+ * Null is the whole point of the shape. A fallback cannot know these
+ * identities, because the backend that wrote the observation discarded them,
+ * and a reader must be told that rather than shown a guess.
  */
-export function hookAnswerMembers(entry: RuntimeHookEntry): RuntimeHookMember[] {
-  if (entry.members && entry.members.length > 0) return entry.members;
-  return entry.sources.map((source) => ({
-    hook_id: entry.hook_id,
-    occurrence: 0,
-    matcher: entry.matcher,
-    matcher_kind: entry.matcher_kind,
-    matcher_error: entry.matcher_error,
-    source,
-  }));
+export interface HookAnswerMember {
+  source: RuntimeHookSourceRef;
+  identity: RuntimeHookMember | null;
+}
+
+/**
+ * The identities represented by one answer row, one row per contributing
+ * source in both shapes.
+ *
+ * The fallback only keeps an installed client usable with an older backend,
+ * and it claims no per-member identity: it reports the sources it has and
+ * leaves `identity` null. Stamping the surviving row's `hook_id`, `matcher`
+ * and `occurrence` onto every source — which is what this did — put one
+ * member's identity beside another member's scope, so the dialog would show a
+ * hook id against a source that did not produce it. That is a fabricated
+ * identity, which DP-LOCO-114-02 clause 2 forecloses; a fallback is not an
+ * exemption from it. Callers render the null case as identity-unavailable.
+ */
+export function hookAnswerMembers(entry: RuntimeHookEntry): HookAnswerMember[] {
+  if (entry.members && entry.members.length > 0) {
+    return entry.members.map((member) => ({
+      source: member.source,
+      identity: member,
+    }));
+  }
+  return entry.sources.map((source) => ({ source, identity: null }));
 }
 
 /**

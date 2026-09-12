@@ -8,6 +8,8 @@ import type {
 import {
   HOOK_OBSERVATION_STALE_AFTER_MS,
   entryWillRun,
+  hookAnswerMembers,
+  hookAnswerTotals,
   hookEmptySummary,
   hookEventGroups,
   hookObservationShowsEntries,
@@ -453,5 +455,91 @@ describe("hookObservationView", () => {
     expect(view.kind).toBe("live");
     expect(view.resolutionError).toBe("duplicate parked hook id");
     expect(hookObservationShowsEntries(view)).toBe(true);
+  });
+});
+
+// LOCO-533 R2. A fallback may report less than the backend would; it may not
+// report something the backend never said. The pre-member wire shape carried
+// sources and no per-member identity, so the fallback stamped the surviving
+// row's `hook_id`, `matcher` and `occurrence` onto every source — which put
+// the id of the entry that survived the collapse beside the scope of an entry
+// that did not. That is a fabricated identity (DP-LOCO-114-02 clause 2), and a
+// fallback is not an exemption from the rule.
+describe("answer members on an observation that predates member projection", () => {
+  const userSource = { scope: "user", format: "json", kind: "settings" };
+  const projectSource = { scope: "project", format: "json", kind: "settings" };
+  const collapsed = entry({
+    hook_id: "sha256:user-copy",
+    matcher: "Bash",
+    sources: [userSource, projectSource],
+  });
+
+  it("claims no identity for a source whose identity was discarded", () => {
+    const members = hookAnswerMembers(collapsed);
+
+    expect(members.map((member) => member.source)).toEqual([
+      userSource,
+      projectSource,
+    ]);
+    // Not the surviving row's id, not the surviving row's matcher, not an
+    // occurrence of 0 standing in for an occurrence nobody recorded.
+    for (const member of members) {
+      expect(member.identity).toBeNull();
+    }
+    expect(JSON.stringify(members)).not.toContain("sha256:user-copy");
+  });
+
+  it("still reports one row per contributing source, so the collapsed count is unchanged", () => {
+    // The collapsed chip counts absorbed definitions as members minus one.
+    // Withholding identity must not quietly change that arithmetic.
+    expect(hookAnswerMembers(collapsed)).toHaveLength(2);
+    expect(
+      hookAnswerTotals({
+        provider: "claude",
+        event: "PreToolUse",
+        value: "Bash",
+        value_role: "tool_name",
+        answerable: true,
+        matched: [collapsed],
+        not_matched: [],
+        never_runs: [],
+        configuration_excluded: [],
+      }).collapsed,
+    ).toBe(1);
+  });
+
+  it("passes the server's own identities through untouched when it sent them", () => {
+    const members = hookAnswerMembers(
+      entry({
+        hook_id: "sha256:user-copy",
+        sources: [userSource, projectSource],
+        members: [
+          {
+            hook_id: "sha256:user-copy",
+            occurrence: 0,
+            matcher: "Bash",
+            matcher_kind: "exact",
+            source: userSource,
+          },
+          {
+            hook_id: "sha256:project-copy",
+            occurrence: 1,
+            matcher: "Bash|Read",
+            matcher_kind: "regex",
+            source: projectSource,
+          },
+        ],
+      }),
+    );
+
+    expect(members.map((member) => member.identity?.hook_id)).toEqual([
+      "sha256:user-copy",
+      "sha256:project-copy",
+    ]);
+    expect(members.map((member) => member.identity?.matcher)).toEqual([
+      "Bash",
+      "Bash|Read",
+    ]);
+    expect(members.map((member) => member.identity?.occurrence)).toEqual([0, 1]);
   });
 });

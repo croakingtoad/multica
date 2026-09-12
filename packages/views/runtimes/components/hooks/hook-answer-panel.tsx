@@ -105,7 +105,7 @@ export function HookAnswerPanel({
   timeAgo: (value: string) => string;
   tabObservedAt: string | null;
   notCheckedSources: number;
-  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member?: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
   const totals = useMemo(() => hookAnswerTotals(view.answer), [view.answer]);
@@ -239,7 +239,7 @@ function AnswerBody({
   tabObservedAt: string | null;
   notCheckedSources: number;
   onReask: () => void;
-  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member?: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
 
@@ -527,7 +527,7 @@ function AnswerSet({
   entries: RuntimeHookEntry[];
   tone: "ok" | "bad" | "muted";
   defaultOpen?: boolean;
-  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member?: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
   const [open, setOpen] = useState(defaultOpen);
@@ -585,7 +585,7 @@ function AnswerEntry({
   onSelectEntry,
 }: {
   entry: RuntimeHookEntry;
-  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member?: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
   const neverRunsReason = useNeverRunsReason(entry);
@@ -628,38 +628,52 @@ function AnswerEntry({
         </p>
       ) : null}
       <ul className="mt-2 space-y-1.5">
-        {members.map((member) => (
+        {members.map(({ source, identity }, index) => (
           <li
-            key={`${member.source.scope}:${member.source.format}:${member.source.kind}:${member.source.name ?? ""}:${member.hook_id}:${member.occurrence}`}
+            key={`${source.scope}:${source.format}:${source.kind}:${source.name ?? ""}:${identity ? `${identity.hook_id}:${identity.occurrence}` : `unidentified:${index}`}`}
             className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-surface-border px-2 py-1.5"
           >
             <div className="min-w-0 flex-1 space-y-0.5">
               <div className="flex flex-wrap items-center gap-1.5">
                 <ScopeBadge
-                  scope={member.source.scope}
-                  format={member.source.format}
-                  writable={member.source.scope === "user"}
+                  scope={source.scope}
+                  format={source.format}
+                  writable={source.scope === "user"}
                 />
                 <span className="font-mono text-caption text-muted-foreground">
-                  {member.source.kind}
-                  {member.source.name ? `:${member.source.name}` : ""}
+                  {source.kind}
+                  {source.name ? `:${source.name}` : ""}
                 </span>
-                <span className="text-caption text-muted-foreground">
-                  {t(($) => $.hooks.answer.member_matcher, {
-                    matcher: member.matcher || t(($) => $.hooks.table.matcher_all),
-                  })}
-                </span>
+                {identity ? (
+                  <span className="text-caption text-muted-foreground">
+                    {t(($) => $.hooks.answer.member_matcher, {
+                      matcher:
+                        identity.matcher || t(($) => $.hooks.table.matcher_all),
+                    })}
+                  </span>
+                ) : null}
               </div>
-              <p className="font-mono text-caption break-all text-muted-foreground">
-                {member.hook_id}
-              </p>
+              {/* The identity, or the reason there is none. An observation
+                  cached before member projection retained no per-entry id or
+                  matcher, and the row says so instead of borrowing the
+                  surviving row's — which would put this member's scope beside
+                  another member's identity. */}
+              {identity ? (
+                <p className="font-mono text-caption break-all text-muted-foreground">
+                  {identity.hook_id}
+                </p>
+              ) : (
+                <p className="text-caption text-muted-foreground">
+                  {t(($) => $.hooks.answer.member_identity_unavailable)}
+                </p>
+              )}
             </div>
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="h-7"
-              onClick={() => onSelectEntry(entry, member)}
+              onClick={() => onSelectEntry(entry, identity ?? undefined)}
               title={t(($) => $.hooks.table.open_details)}
             >
               {t(($) => $.hooks.table.actions)}

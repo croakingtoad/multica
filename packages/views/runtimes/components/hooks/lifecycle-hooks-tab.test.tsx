@@ -1128,6 +1128,57 @@ describe("LifecycleHooksTab — what actually runs", () => {
     expect(text).not.toMatch(/handlers configured on this event run/);
   });
 
+  // LOCO-533 R2. An observation cached before the backend projected members
+  // carries sources and no per-member identity. The panel must report the
+  // sources it has and say the identity is unavailable — never repeat the
+  // surviving row's hook id and matcher once per source, which would show one
+  // member's identity against another member's scope.
+  it("withholds member identity on an observation that predates it, rather than repeating the row's", () => {
+    const { container } = mountWithAnswer(
+      answerResult({
+        matched: [
+          answerEntry({
+            hook_id: "sha256:user-copy",
+            matcher: "Bash",
+            sources: [
+              { scope: "user", format: "json", kind: "settings" },
+              { scope: "project", format: "json", kind: "settings" },
+            ],
+          }),
+        ],
+      }),
+    );
+    const panel = container.querySelector(
+      'section[aria-labelledby="hook-answer-title"]',
+    );
+    if (!(panel instanceof HTMLElement)) throw new Error("answer panel not found");
+    const text = panel.textContent ?? "";
+
+    // Both sources are still reported: that much the wire shape did carry.
+    expect(within(panel).getAllByText("user/json").length).toBeGreaterThanOrEqual(1);
+    expect(within(panel).getAllByText("project/json").length).toBeGreaterThanOrEqual(1);
+    // And the limit is stated, once per source, in words.
+    expect(
+      within(panel).getAllByText(/This observation predates per-member identity/),
+    ).toHaveLength(2);
+    // The surviving row's identity is claimed for no source, and no matcher
+    // caption is invented for one either.
+    expect(text).not.toMatch(/sha256:user-copy/);
+    expect(text).not.toMatch(/Matcher Bash/);
+
+    // The detail dialog opened from such a row says nothing per-member: no
+    // occurrence, and the identity shown is the row's own.
+    const actions = within(panel).getAllByRole("button", { name: "Details" });
+    expect(actions).toHaveLength(2);
+    const second = actions[1];
+    if (!second) throw new Error("second member action not found");
+    fireEvent.click(second);
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("Occurrence")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("sha256:user-copy")).toBeInTheDocument();
+  });
+
   // Read-only: stages 5 and 6 own the write path.
   it("offers no add, edit, delete, park or disable control", () => {
     const { container } = mountWithAnswer(
