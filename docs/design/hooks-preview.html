@@ -723,9 +723,13 @@ const HOOKS = {
        `httpHookAllowedEnvVars`: when defined, Claude Code interpolates only the
        environment variables on that list into hook headers."
        — https://code.claude.com/docs/en/hooks#hook-locations
-       Checked by name on 2026-09-12 because allowedEnvVars, the same shape of
-       claim on the Codex side, turned out fabricated (LOCO-480). These two are
-       real. Codex has no http handler at all, hence "Claude only". */
+       Checked by name on 2026-09-12 because the Codex-side claim of an
+       allowedEnvVars equivalent turned out fabricated (LOCO-480). The field
+       itself is real on Claude, and applies to the c12 seed below: hooks
+       reference, "HTTP hook fields", allowedEnvVars is the "List of environment
+       variable names that may be interpolated into header values". It is the
+       Codex equivalent that does not exist, not the field. These two settings
+       keys are real too. Codex has no http handler at all, hence "Claude only". */
     { id: 'c12', event: 'Notification', matcher: '', scope: 'user', type: 'http',
       url: 'https://hooks.slack.com/services/T0…/B0…/xxxx', timeout: 10, async: true,
       owner: 'multica', parked: false, installedFrom: 'slack-notify',
@@ -840,7 +844,7 @@ const FIRE_LOG = {
       { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'branch-guard.sh', ms: null, verdict: 'neverran', task: 'LOCO-82',
         note: 'Has an if condition, and if is only evaluated on tool events. On UserPromptSubmit the handler is loaded and never invoked — no error, no log line of its own. This row is inferred from its absence.' },
       { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
-        note: 'async:true — spawned and detached. No structured record of the run is kept, so this row carries no duration or verdict. The exit status is not acted on, but completion is not hidden: notices show under --verbose or Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' },
+        note: 'async:true — spawned and detached. Claude Code does emit a completion record when the process exits — hook_response, carrying exit_code and outcome — so an outcome is available for this row; what that record has no field for is a duration, which is why the timing stays a dash. The exit status is not acted on, and completion notices are suppressed unless you run --verbose or press Ctrl+O, but its additionalContext and systemMessage still reach Claude on the next turn.' },
       { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
         note: 'The same formatter again, from the plugin layer. A plugin copy is not deduped against the settings-file copy, so the repo formatter really did run twice on one edit.' },
       { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'rm-rf-guard.py', ms: 51, verdict: 'deduped', task: 'LOCO-81',
@@ -890,7 +894,7 @@ const VERDICTS = {
   blocked:     { label: 'blocked',     cls: 'b-warn', icon: 'ban' },
   failed:      { label: 'failed',      cls: 'b-bad',  icon: 'circleAlert' },
   timeout:     { label: 'timed out',   cls: 'b-bad',  icon: 'clock' },
-  async:       { label: 'async · unknown', cls: '',   icon: 'zap' },
+  async:       { label: 'async · no duration', cls: '',   icon: 'zap' },
   deduped:     { label: 'collapsed · ran once', cls: '', icon: 'copy' },
   neverran:    { label: 'never invoked', cls: 'b-bad', icon: 'ban' },
   skippedif:   { label: 'if did not match', cls: '', icon: 'filter' },
@@ -1093,7 +1097,7 @@ function runState(h, runtime) {
   if (h.broken === 'path') return { runs: true, label: 'Failing',  cls: 'b-bad',  icon: 'circleAlert',
     why: 'Registered and fires, but the command cannot be found. Claude treats that as non-blocking \u2014 the action proceeds and Claude never sees the failure. The transcript does get a hook-error notice with the first line of stderr; what nothing keeps is a record of it.' };
   if (h.async)       return { runs: true,  label: 'Active · async', cls: 'b-ok', icon: 'zap',
-    why: 'Runs detached. Its exit status is not acted on and no structured record of the run is kept, so a failure drives nothing. It is not invisible, though: completion notices show under --verbose or Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' };
+    why: 'Runs detached, so its exit status is not acted on and a failure drives nothing on its own — asyncRewake is the field that wakes Claude on exit code 2. The run is still reported: Claude Code emits a hook_response record with exit_code and outcome when the process exits, though that record carries no duration. Completion notices are suppressed unless you run --verbose or press Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' };
   return { runs: true, label: 'Active', cls: 'b-ok', icon: 'check', why: 'Registered and running.' };
 }
 
@@ -1669,7 +1673,15 @@ function accumulationTable(r, byEvent) {
    Both are documented, and so is the merge-across-levels and every-source
    behaviour the caption asserts: "The HTTP hook allowlists apply to hooks from
    every source, including managed policy settings" — see the fuller quote at
-   the c12 seed entry. — https://code.claude.com/docs/en/hooks#hook-locations */
+   the c12 seed entry. — https://code.claude.com/docs/en/hooks#hook-locations
+
+   httpHookAllowedEnvVars is an OUTER BOUND, not a substitute for a hook's own
+   list: "a hook can use a variable only if both its own allowedEnvVars and this
+   key name it", and unset means "each hook's own allowedEnvVars list applies".
+   The caption above does not claim otherwise, so it needs no change — but if this
+   sketch ever renders a hook's own allowedEnvVars, both lists have to be shown as
+   an intersection rather than either one alone.
+   — https://code.claude.com/docs/en/settings-reference#httphookallowedenvvars */
 function killSwitchCard(r, hooks) {
   const prov = r.provider;
   const names = prov === 'claude'
@@ -1936,7 +1948,7 @@ function screenLog() {
             <div><span class="badge b-warn">${ic('ban', 11)}blocked</span> <span class="muted">exit 2 on a blockable event — the tool call was rejected.</span></div>
             <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero, non-blocking — the action proceeded and Claude never saw it. The transcript got a one-line hook-error notice; this row is the only record.</span></div>
             <div><span class="badge b-bad">${ic('clock', 11)}timed out</span> <span class="muted">killed at its timeout.</span></div>
-            <div><span class="badge">${ic('zap', 11)}async · unknown</span> <span class="muted">detached. Neither CLI keeps a structured record — no duration, verdict or history — so this feed cannot show one. Claude does still hand the hook's additionalContext and systemMessage to Claude on the next turn, and shows completion notices under <code class="cmd">--verbose</code> or Ctrl+O.</span></div>
+            <div><span class="badge">${ic('zap', 11)}async · no duration</span> <span class="muted">detached, so the timing column stays a dash. Claude Code does emit a completion record when the process exits — <code class="cmd">hook_response</code>, with <code class="cmd">exit_code</code> and <code class="cmd">outcome</code> — so an outcome is available to this feed; that record is what has no duration field. Codex writes no per-hook log at all, so its async rows are inferred. The hook's additionalContext and systemMessage still reach Claude on the next turn, and completion notices are suppressed unless you run <code class="cmd">--verbose</code> or press Ctrl+O.</span></div>
             <div><span class="badge b-bad">${ic('ban', 11)}never invoked</span> <span class="muted">Loaded, but the provider never calls it. No error is raised, so this row is inferred from an absence rather than read from a log line.</span></div>
             <div><span class="badge">${ic('copy', 11)}collapsed · ran once</span> <span class="muted">Claude only. Two identical settings-file entries, one process.</span></div>
             <div><span class="badge">${ic('filter', 11)}if did not match</span> <span class="muted">Claude only. Deliberate: the pre-filter kept the process from spawning.</span></div>
@@ -2296,7 +2308,7 @@ function editorProblems() {
   if (ed.if && ed.if.trim() && ed.provider === 'codex') out.push({ level: 'error', field: 'if',
     text: 'Codex has no if field. It would be stored and ignored.' });
   if (ed.async) out.push({ level: 'warn', field: 'async',
-    text: 'async detaches the process, so neither CLI keeps a structured record of the run — no duration, verdict or matcher counts, here or in the fire log. Claude still delivers the hook response\'s additionalContext and systemMessage to Claude on the next turn, and its completion notice is suppressed unless you run --verbose or press Ctrl+O. Claude also stops enforcing timeout once an async command hook is running.' });
+    text: 'async detaches the process. Claude Code still emits a completion record when it exits — hook_response, with exit_code and outcome — but that record carries no duration, so neither this editor nor the fire log can show a timing or matcher counts for the run. Its exit status is not acted on; asyncRewake is the field that wakes Claude on exit code 2. Claude still delivers the hook response\'s additionalContext and systemMessage on the next turn, and its completion notice is suppressed unless you run --verbose or press Ctrl+O. Claude also stops enforcing timeout once an async command hook is running, though it keeps enforcing it on an asyncRewake hook.' });
   if (ed.provider === 'codex') out.push({ level: 'warn', field: 'trust',
     text: 'Codex records trust against each hook\u2019s own hash, so saving a new or edited entry leaves that entry needing review in /hooks before it can run. Untouched entries in the same file keep their trust — the hash is per hook, not per file.' });
   return out;
