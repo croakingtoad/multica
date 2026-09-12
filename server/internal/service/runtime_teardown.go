@@ -148,6 +148,9 @@ func TeardownRuntime(ctx context.Context, qtx *db.Queries, runtimeID pgtype.UUID
 	if err := qtx.DeleteSystemAgentsByRuntime(ctx, runtimeID); err != nil {
 		return out, fmt.Errorf("clean up system agents: %w", err)
 	}
+	if err := qtx.DeleteRuntimeHookData(ctx, runtimeID); err != nil {
+		return out, fmt.Errorf("clean up runtime hook data: %w", err)
+	}
 	return out, nil
 }
 

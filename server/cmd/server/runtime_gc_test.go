@@ -112,6 +112,54 @@ func TestRuntimeGC_KeepsTerminalTaskHistory(t *testing.T) {
 	}
 }
 
+func TestRuntimeGC_CleansRuntimeHookRows(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+	ctx := context.Background()
+	runtimeID := createRuntimeGCFixtureRuntime(t, ctx, "hook-data")
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO hook_state_snapshot (
+			runtime_id, provider, scope, format, hooks, disabled_hooks, observed_at
+		)
+		VALUES ($1, 'codex', 'user', 'json', '{"hooks": []}'::jsonb, '{}'::jsonb, now())
+	`, runtimeID); err != nil {
+		t.Fatalf("seed hook_state_snapshot: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO hook_fire_history (
+			runtime_id, provider, event, hook_id, hook_spec, fired_at, provenance, outcome
+		)
+		VALUES ($1, 'codex', 'Stop', 'runtime-gc-hook', '{"command": "true"}'::jsonb, now(), 'inferred', 'success')
+	`, runtimeID); err != nil {
+		t.Fatalf("seed hook_fire_history: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM hook_state_snapshot WHERE runtime_id = $1`, runtimeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM hook_fire_history WHERE runtime_id = $1`, runtimeID)
+	})
+
+	result, err := gcRuntime(ctx, testPool, db.New(testPool), parseUUID(runtimeID))
+	if err != nil {
+		t.Fatalf("gcRuntime: %v", err)
+	}
+	if !result.deleted || result.skipReason != "" {
+		t.Fatalf("gc result deleted=%v skip_reason=%q, want deleted", result.deleted, result.skipReason)
+	}
+
+	for _, table := range []string{"hook_state_snapshot", "hook_fire_history"} {
+		var count int
+		if err := testPool.QueryRow(ctx,
+			`SELECT count(*) FROM `+table+` WHERE runtime_id = $1`, runtimeID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count %s rows: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows after runtime GC = %d, want 0", table, count)
+		}
+	}
+}
+
 func TestRuntimeGC_ProtectsEveryNonTerminalTaskStatus(t *testing.T) {
 	if testPool == nil {
 		t.Skip("no database connection")

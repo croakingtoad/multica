@@ -396,15 +396,28 @@ RETURNING *;
 DELETE FROM agent_runtime WHERE id = $1;
 
 -- name: DeleteRuntimeHookData :exec
--- Application-layer cascade: hook tables deliberately carry no foreign keys,
--- so every runtime-delete path removes both dependents before agent_runtime in
--- the same application transaction.
+-- Application-layer runtime-delete contract: hook tables deliberately carry no
+-- foreign keys, so no hook row may retain a deleted runtime id. TeardownRuntime
+-- removes both dependents on ordinary deletes; MergeRuntimeHookData handles the
+-- history-preserving legacy merge. Both run in the parent-delete transaction.
 WITH deleted_snapshots AS (
     DELETE FROM hook_state_snapshot
     WHERE hook_state_snapshot.runtime_id = @target_runtime_id
 )
 DELETE FROM hook_fire_history
 WHERE hook_fire_history.runtime_id = @target_runtime_id;
+
+-- name: MergeRuntimeHookData :exec
+-- A snapshot is a droppable cache and may collide with the target's independently
+-- observed row, so discard it. Fire history is server-authoritative and keyed by
+-- a surrogate UUID, so preserve it by re-pointing it to the surviving runtime.
+WITH deleted_snapshots AS (
+    DELETE FROM hook_state_snapshot
+    WHERE hook_state_snapshot.runtime_id = @old_runtime_id
+)
+UPDATE hook_fire_history
+SET runtime_id = @new_runtime_id
+WHERE hook_fire_history.runtime_id = @old_runtime_id;
 
 -- name: DeleteSystemAgentsByRuntime :exec
 -- System agents are invisible execution infrastructure (for example the Agent
