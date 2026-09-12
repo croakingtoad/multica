@@ -71,13 +71,92 @@ func TestResolvedHookIdentityAndMatcher(t *testing.T) {
 		t.Fatal("HookID did not change when canonical handler content changed")
 	}
 
-	identical := foundSource(ref, `{"Stop":[{"hooks":[{"type":"command","command":"same"},{"command":"same","type":"command"}]}]}`)
-	identicalEntries := mustResolve(t, ProviderClaude, []ObservedSource{identical}).EntriesForEvent("Stop")
-	if identicalEntries[0].HookID == identicalEntries[1].HookID {
-		t.Fatal("positionally distinct identical handlers received the same HookID")
+}
+
+func TestHookIDKeepsParkedMatcherStableAcrossGroupReorder(t *testing.T) {
+	ref := SourceRef{Scope: "local", Format: "json"}
+	path, hash := "/repo/.claude/settings.local.json", "settings-hash"
+	before := ObservedSource{
+		Source: ref, SourcePath: &path, ContentHash: &hash,
+		Hooks: raw(`{"PreToolUse":[
+			{"matcher":"Bash","hooks":[{"type":"command","command":"./check.sh"}]},
+			{"matcher":"Write","hooks":[{"type":"command","command":"./check.sh"}]}
+		]}`),
 	}
-	if identicalEntries[0].Occurrence != 0 || identicalEntries[1].Occurrence != 1 {
-		t.Fatalf("identical handler occurrences = %d, %d; want 0, 1", identicalEntries[0].Occurrence, identicalEntries[1].Occurrence)
+	beforeResolution := mustResolve(t, ProviderClaude, []ObservedSource{before})
+	beforeByMatcher := entriesByMatcher(beforeResolution.EntriesForEvent("PreToolUse"))
+	bashID := beforeByMatcher["Bash"].HookID
+
+	parked := fmt.Sprintf(`{%q:{"event":"PreToolUse","matcher":"Bash","handler":{"type":"command","command":"./check.sh"},"parked_at":"2026-09-12T08:00:00Z"}}`, bashID)
+	after := ObservedSource{
+		Source: ref, SourcePath: &path, ContentHash: &hash,
+		Hooks: raw(`{"PreToolUse":[
+			{"matcher":"Write","hooks":[{"type":"command","command":"./check.sh"}]},
+			{"matcher":"Bash","hooks":[{"type":"command","command":"./check.sh"}]}
+		]}`),
+		DisabledHooks: raw(parked),
+	}
+	afterResolution := mustResolve(t, ProviderClaude, []ObservedSource{after})
+	afterEntries := entriesByMatcher(afterResolution.EntriesForEvent("PreToolUse"))
+	if afterEntries["Bash"].HookID != beforeByMatcher["Bash"].HookID || afterEntries["Write"].HookID != beforeByMatcher["Write"].HookID {
+		t.Fatalf("matcher-bound IDs changed across group reorder: before=%#v after=%#v", beforeByMatcher, afterEntries)
+	}
+	states, err := afterResolution.RunStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statesByMatcher := runStatesByMatcher(states)
+	if statesByMatcher["Bash"].Configuration != ConfigurationParked {
+		t.Fatalf("Bash state = %#v, want parked", statesByMatcher["Bash"])
+	}
+	if statesByMatcher["Write"].Configuration != ConfigurationLive {
+		t.Fatalf("Write state = %#v, want live", statesByMatcher["Write"])
+	}
+}
+
+func TestHookIDDistinguishesSameMatcherTrueDuplicatesByOccurrence(t *testing.T) {
+	source := foundSource(SourceRef{Scope: "user", Format: "json"}, `{"Stop":[
+		{"matcher":"same","hooks":[{"type":"command","command":"same"}]},
+		{"matcher":"same","hooks":[{"command":"same","type":"command"}]}
+	]}`)
+	entries := mustResolve(t, ProviderClaude, []ObservedSource{source}).EntriesForEvent("Stop")
+	if entries[0].HookID == entries[1].HookID {
+		t.Fatal("same-matcher true duplicates received the same HookID")
+	}
+	if entries[0].Occurrence != 0 || entries[1].Occurrence != 1 {
+		t.Fatalf("duplicate occurrences = %d, %d; want 0, 1", entries[0].Occurrence, entries[1].Occurrence)
+	}
+}
+
+func TestParkedHookIDMatchRequiresMatchingBody(t *testing.T) {
+	ref := SourceRef{Scope: "local", Format: "json"}
+	path, hash := "/repo/.claude/settings.local.json", "settings-hash"
+	hooks := raw(`{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"./check.sh"}]}]}`)
+	base := mustResolve(t, ProviderClaude, []ObservedSource{{
+		Source: ref, SourcePath: &path, ContentHash: &hash, Hooks: hooks,
+	}})
+	hookID := base.EntriesForEvent("PreToolUse")[0].HookID
+	tests := []struct {
+		name    string
+		event   string
+		matcher string
+		handler string
+	}{
+		{name: "event drift", event: "PostToolUse", matcher: "Bash", handler: `{"type":"command","command":"./check.sh"}`},
+		{name: "matcher drift", event: "PreToolUse", matcher: "Write", handler: `{"type":"command","command":"./check.sh"}`},
+		{name: "handler drift", event: "PreToolUse", matcher: "Bash", handler: `{"type":"command","command":"./other.sh"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			disabled := fmt.Sprintf(`{%q:{"event":%q,"matcher":%q,"handler":%s,"parked_at":"2026-09-12T08:00:00Z"}}`, hookID, tt.event, tt.matcher, tt.handler)
+			resolution := mustResolve(t, ProviderClaude, []ObservedSource{{
+				Source: ref, SourcePath: &path, ContentHash: &hash,
+				Hooks: hooks, DisabledHooks: raw(disabled),
+			}})
+			if _, err := resolution.RunStates(); err == nil || !strings.Contains(err.Error(), "does not match configured hook") {
+				t.Fatalf("RunStates error = %v, want fail-safe parked body mismatch", err)
+			}
+		})
 	}
 }
 
@@ -365,7 +444,7 @@ func TestCodexStateJoinDoesNotCrossScopes(t *testing.T) {
 func TestClaudeParkedHookIsNotReportedLive(t *testing.T) {
 	ref := SourceRef{Scope: "local", Format: "json"}
 	canonical := raw(`{"command":"./check.sh","type":"command"}`)
-	id := hookID(ref, "PreToolUse", canonical, 0)
+	id := hookID(ref, "PreToolUse", "Bash", canonical, 0)
 	path, hash := "/repo/.claude/settings.local.json", "settings-hash"
 	parked := fmt.Sprintf(`{%q:{"event":"PreToolUse","matcher":"Bash","handler":{"type":"command","command":"./check.sh"},"parked_at":"2026-09-12T08:00:00Z"}}`, id)
 	observed := ObservedSource{
@@ -452,6 +531,22 @@ func entriesByCommand(t *testing.T, entries []ResolvedHook) map[string]ResolvedH
 			t.Fatal(err)
 		}
 		result[handler.Command] = entry
+	}
+	return result
+}
+
+func entriesByMatcher(entries []ResolvedHook) map[string]ResolvedHook {
+	result := make(map[string]ResolvedHook, len(entries))
+	for _, entry := range entries {
+		result[entry.Matcher] = entry
+	}
+	return result
+}
+
+func runStatesByMatcher(states []RunState) map[string]RunState {
+	result := make(map[string]RunState, len(states))
+	for _, state := range states {
+		result[state.Hook.Matcher] = state
 	}
 	return result
 }

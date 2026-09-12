@@ -228,16 +228,17 @@ func parseEntries(source SourceRef, raw json.RawMessage) ([]ResolvedHook, []Unre
 		}
 		occurrences := make(map[string]int)
 		for groupIndex, group := range groups {
+			canonicalMatcher, _ := json.Marshal(group.Matcher)
 			for handlerIndex, handler := range group.Hooks {
 				canonical, err := canonicalJSON(handler)
 				if err != nil {
 					return nil, nil, fmt.Errorf("decode %s handler from %s: %w", event, describeSource(source), err)
 				}
-				canonicalKey := string(canonical)
+				canonicalKey := string(canonicalMatcher) + "\x00" + string(canonical)
 				occurrence := occurrences[canonicalKey]
 				occurrences[canonicalKey]++
 				entries = append(entries, ResolvedHook{
-					HookID: hookID(source, event, canonical, occurrence), Occurrence: occurrence,
+					HookID: hookID(source, event, group.Matcher, canonical, occurrence), Occurrence: occurrence,
 					Event: event, Matcher: group.Matcher, Handler: canonical, Sources: []SourceRef{source},
 					groupIndex: groupIndex, handlerIndex: handlerIndex,
 				})
@@ -247,7 +248,7 @@ func parseEntries(source SourceRef, raw json.RawMessage) ([]ResolvedHook, []Unre
 	return entries, unrecognized, nil
 }
 
-func hookID(source SourceRef, event string, handler json.RawMessage, occurrence int) string {
+func hookID(source SourceRef, event, matcher string, handler json.RawMessage, occurrence int) string {
 	source = normalizeRef(source)
 	canonicalSource, _ := json.Marshal(struct {
 		Scope  string     `json:"scope"`
@@ -255,13 +256,14 @@ func hookID(source SourceRef, event string, handler json.RawMessage, occurrence 
 		Kind   SourceKind `json:"kind"`
 		Name   string     `json:"name"`
 	}{source.Scope, source.Format, source.Kind, source.Name})
+	canonicalMatcher, _ := json.Marshal(matcher)
 
 	// NUL-delimited canonical components make the identity unambiguous.
-	// Occurrence is the same-handler ordinal in the flattened group/handler
-	// sequence: distinct handlers remain stable when reordered, while duplicate
-	// byte-identical handlers still receive different IDs.
+	// Occurrence is the same-matcher/same-handler ordinal in the flattened
+	// group/handler sequence: distinct entries remain stable when reordered,
+	// while genuine duplicates still receive different IDs.
 	hash := sha256.New()
-	for _, part := range [][]byte{canonicalSource, []byte(event), handler, []byte(strconv.Itoa(occurrence))} {
+	for _, part := range [][]byte{canonicalSource, []byte(event), canonicalMatcher, handler, []byte(strconv.Itoa(occurrence))} {
 		_, _ = hash.Write(part)
 		_, _ = hash.Write([]byte{0})
 	}

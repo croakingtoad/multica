@@ -96,7 +96,9 @@ func (r Resolution) RunStates() ([]RunState, error) {
 			Trust:         TrustNotApplicable,
 		}
 		if parkedEntry, ok := parked[entry.HookID]; ok {
-			state.Hook = cloneEntry(parkedEntry.Hook)
+			if !sameHookDefinition(entry, parkedEntry.Hook) {
+				return nil, fmt.Errorf("parked hook %q does not match configured hook", entry.HookID)
+			}
 			state.Configuration = ConfigurationParked
 			state.ParkedAt = parkedEntry.ParkedAt
 			usedParked[entry.HookID] = struct{}{}
@@ -128,6 +130,12 @@ func (r Resolution) RunStates() ([]RunState, error) {
 	}
 
 	return states, nil
+}
+
+func sameHookDefinition(configured, parked ResolvedHook) bool {
+	return configured.Event == parked.Event &&
+		configured.Matcher == parked.Matcher &&
+		bytes.Equal(configured.Handler, parked.Handler)
 }
 
 func (r Resolution) applyEffectiveness(state *RunState) error {
