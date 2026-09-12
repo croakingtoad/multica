@@ -22,7 +22,7 @@ var ucrtbaseDLL = windows.NewLazySystemDLL("ucrtbase.dll")
 var procWAccess = ucrtbaseDLL.NewProc("_waccess")
 
 // accessMode calls _waccess(path, mode): 0 when the access right holds,
-// -1 otherwise. If the entry point cannot be resolved (ucrtbase is present
+// non-zero otherwise. If the entry point cannot be resolved (ucrtbase is present
 // on every supported Windows), the check fails open — this is a picker UX
 // hint, and the daemon re-checks authoritatively before running a task.
 func accessMode(path string, mode int) error {
@@ -40,5 +40,8 @@ func accessMode(path string, mode int) error {
 	if ret == 0 {
 		return nil
 	}
-	return windows.GetLastError()
+	// _waccess reports through the CRT's errno, not Win32 last-error. The
+	// return code is the authoritative allow/deny signal; use a stable
+	// non-nil error only to preserve accessMode's cross-platform contract.
+	return windows.ERROR_ACCESS_DENIED
 }

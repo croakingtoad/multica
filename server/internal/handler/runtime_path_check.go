@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/redis/go-redis/v9"
@@ -473,7 +474,8 @@ func (h *Handler) resolveOwnedRuntimeIDsForPathCheckPoll(
 // ReportDaemonPathCheckResult receives the daemon's verdict.
 // POST /api/daemon/runtimes/{runtimeId}/path-checks/{requestId}/result
 //
-// Daemon-token authenticated, exactly like ReportLocalSkillListResult.
+// Owner-authenticated: current daemons use the owner's CLI PAT/JWT, while
+// daemon tokens are bound to the runtime's daemon id.
 // Request: { "status": "completed", "exists": true, "is_directory": true,
 //
 //	"readable": true, "writable": true, "is_git_repo": false, "reason": "" }
@@ -482,7 +484,12 @@ func (h *Handler) resolveOwnedRuntimeIDsForPathCheckPoll(
 // (also for stale reports after a terminal state), 404 for unknown ids.
 func (h *Handler) ReportDaemonPathCheckResult(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	if !daemonPathCheckReporterOwnsRuntime(r, runtime) {
+		writeError(w, http.StatusNotFound, "request not found")
 		return
 	}
 
@@ -541,4 +548,12 @@ func (h *Handler) ReportDaemonPathCheckResult(w http.ResponseWriter, r *http.Req
 
 	slog.Debug("daemon path check report", "runtime_id", runtimeID, "request_id", requestID, "status", body.Status)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func daemonPathCheckReporterOwnsRuntime(r *http.Request, runtime db.AgentRuntime) bool {
+	if middleware.DaemonWorkspaceIDFromContext(r.Context()) != "" {
+		return middleware.DaemonIDFromContext(r.Context()) == runtime.DaemonID.String
+	}
+	userID := requestUserID(r)
+	return userID != "" && userID == uuidToString(runtime.OwnerID)
 }

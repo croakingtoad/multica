@@ -52,9 +52,9 @@ func (s *RedisPathCheckStore) Create(ctx context.Context, runtimeID, path string
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	data, err := json.Marshal(req)
+	data, err := s.marshalRequest(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal path check request: %w", err)
+		return nil, err
 	}
 
 	requestKey := pathCheckKey(req.ID)
@@ -84,30 +84,59 @@ func (s *RedisPathCheckStore) Get(ctx context.Context, id string) (*DaemonPathCh
 	if err != nil {
 		return nil, fmt.Errorf("get path check request: %w", err)
 	}
-	var req DaemonPathCheckRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, fmt.Errorf("decode path check request: %w", err)
+	req, err := s.unmarshalRequest(raw)
+	if err != nil {
+		return nil, err
 	}
-	if applyDaemonPathCheckTimeout(&req, time.Now()) {
+	if applyDaemonPathCheckTimeout(req, time.Now()) {
 		// Persist the timeout so subsequent Get / PopPending on any node see
 		// the terminal state, and drop the id from the pending zset.
-		if err := s.persistPathCheckRequest(ctx, &req); err != nil {
+		if err := s.persistPathCheckRequest(ctx, req); err != nil {
 			return nil, err
 		}
 		s.rdb.ZRem(ctx, pathCheckPendingKey(req.RuntimeID), req.ID)
 	}
-	return &req, nil
+	return req, nil
 }
 
 func (s *RedisPathCheckStore) persistPathCheckRequest(ctx context.Context, req *DaemonPathCheckRequest) error {
-	data, err := json.Marshal(req)
+	data, err := s.marshalRequest(req)
 	if err != nil {
-		return fmt.Errorf("marshal path check request: %w", err)
+		return err
 	}
 	if err := s.rdb.Set(ctx, pathCheckKey(req.ID), data, daemonPathCheckStoreRetention).Err(); err != nil {
 		return fmt.Errorf("persist path check request: %w", err)
 	}
 	return nil
+}
+
+// RunStartedAt is internal timeout bookkeeping and is deliberately hidden
+// from API responses by json:"-". Redis still needs it so another server
+// node can time out a claimed request. Keep it in a private envelope.
+type redisPathCheckEnvelope struct {
+	Public       *DaemonPathCheckRequest `json:"r"`
+	RunStartedAt *time.Time              `json:"s,omitempty"`
+}
+
+func (s *RedisPathCheckStore) marshalRequest(req *DaemonPathCheckRequest) ([]byte, error) {
+	env := redisPathCheckEnvelope{Public: req, RunStartedAt: req.RunStartedAt}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("marshal path check request: %w", err)
+	}
+	return data, nil
+}
+
+func (s *RedisPathCheckStore) unmarshalRequest(raw []byte) (*DaemonPathCheckRequest, error) {
+	var env redisPathCheckEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("decode path check request: %w", err)
+	}
+	if env.Public == nil {
+		return nil, fmt.Errorf("decode path check request: missing payload")
+	}
+	env.Public.RunStartedAt = env.RunStartedAt
+	return env.Public, nil
 }
 
 // HasPending is a cheap read-only probe (ZCARD) used by the heartbeat
@@ -154,9 +183,9 @@ func (s *RedisPathCheckStore) PopPending(ctx context.Context, runtimeID string) 
 		req.Status = DaemonPathCheckRunning
 		req.RunStartedAt = &now
 		req.UpdatedAt = now
-		data, err := json.Marshal(req)
+		data, err := s.marshalRequest(req)
 		if err != nil {
-			return nil, fmt.Errorf("marshal path check request: %w", err)
+			return nil, err
 		}
 
 		result, err := claimPendingScript.Run(

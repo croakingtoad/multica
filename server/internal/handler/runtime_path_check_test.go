@@ -115,8 +115,28 @@ func pollPathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, requ
 func reportPathCheck(t *testing.T, h *Handler, runtimeID, requestID string, payload map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
 
+	var daemonID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT daemon_id FROM agent_runtime WHERE id = $1
+	`, runtimeID).Scan(&daemonID); err != nil {
+		t.Fatalf("find daemon for runtime %s: %v", runtimeID, err)
+	}
+
 	req := withURLParams(
-		newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/path-checks/"+requestID+"/result", payload, testWorkspaceID, "path-check-daemon-token"),
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/path-checks/"+requestID+"/result", payload, testWorkspaceID, daemonID),
+		"runtimeId", runtimeID,
+		"requestId", requestID,
+	)
+	w := httptest.NewRecorder()
+	h.ReportDaemonPathCheckResult(w, req)
+	return w
+}
+
+func reportPathCheckAsUser(t *testing.T, h *Handler, userID, runtimeID, requestID string, payload map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := withURLParams(
+		newRequestAsUser(userID, http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/path-checks/"+requestID+"/result", payload),
 		"runtimeId", runtimeID,
 		"requestId", requestID,
 	)
@@ -263,6 +283,99 @@ func TestDaemonPathCheck_SecondUserCannotPathCheck(t *testing.T) {
 	wp, pollBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, ownerDaemon, requestID)
 	if wp.Code != http.StatusOK || pollBody["status"] != "pending" {
 		t.Fatalf("owner poll after cross-daemon attempts: %d %v", wp.Code, pollBody)
+	}
+}
+
+// Regression: two users can register runtimes under the same hostname-derived
+// daemon id. Poll authorization must still bind each request to its runtime's
+// owner, in both directions.
+func TestDaemonPathCheck_SharedDaemonIDCannotCrossPoll(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	const daemonID = "path-check-shared-daemon"
+	secondUserID := createRuntimeLocalSkillTestMember(t, "member")
+	createPathCheckTestRuntimeForProvider(t, testUserID, daemonID, "claude", "online", time.Now())
+	createPathCheckTestRuntimeForProvider(t, secondUserID, daemonID, "codex", "online", time.Now())
+
+	ownerResponse, ownerBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/owner-project")
+	if ownerResponse.Code != http.StatusOK {
+		t.Fatalf("owner initiate: expected 200, got %d: %s", ownerResponse.Code, ownerResponse.Body.String())
+	}
+	secondResponse, secondBody := initiatePathCheck(t, testHandler, secondUserID, testWorkspaceID, daemonID, "/tmp/second-project")
+	if secondResponse.Code != http.StatusOK {
+		t.Fatalf("second user initiate: expected 200, got %d: %s", secondResponse.Code, secondResponse.Body.String())
+	}
+
+	ownerCrossPoll, _ := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, firstInitID(secondBody))
+	if ownerCrossPoll.Code != http.StatusNotFound {
+		t.Fatalf("owner cross-poll: expected 404, got %d: %s", ownerCrossPoll.Code, ownerCrossPoll.Body.String())
+	}
+	secondCrossPoll, _ := pollPathCheck(t, testHandler, secondUserID, testWorkspaceID, daemonID, firstInitID(ownerBody))
+	if secondCrossPoll.Code != http.StatusNotFound {
+		t.Fatalf("second user cross-poll: expected 404, got %d: %s", secondCrossPoll.Code, secondCrossPoll.Body.String())
+	}
+}
+
+// Regression: the report route accepts only the runtime owner's user token or
+// a daemon token for that runtime's daemon. Workspace membership alone is not
+// authority to inject a filesystem verdict.
+func TestDaemonPathCheck_ReportRequiresRuntimeOwner(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	const daemonID = "path-check-report-owner-daemon"
+	runtimeID := createPathCheckTestRuntime(t, testUserID, daemonID, "online")
+	secondUserID := createRuntimeLocalSkillTestMember(t, "member")
+
+	_, initBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/auth-owner")
+	requestID := firstInitID(initBody)
+	payload := map[string]any{
+		"status":       "completed",
+		"exists":       true,
+		"is_directory": true,
+		"readable":     true,
+		"writable":     true,
+		"is_git_repo":  true,
+	}
+
+	attackerReport := reportPathCheckAsUser(t, testHandler, secondUserID, runtimeID, requestID, payload)
+	if attackerReport.Code != http.StatusNotFound {
+		t.Fatalf("non-owner user report: expected 404, got %d: %s", attackerReport.Code, attackerReport.Body.String())
+	}
+
+	wrongDaemonReq := withURLParams(
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/path-checks/"+requestID+"/result", payload, testWorkspaceID, "another-daemon"),
+		"runtimeId", runtimeID,
+		"requestId", requestID,
+	)
+	wrongDaemonReport := httptest.NewRecorder()
+	testHandler.ReportDaemonPathCheckResult(wrongDaemonReport, wrongDaemonReq)
+	if wrongDaemonReport.Code != http.StatusNotFound {
+		t.Fatalf("wrong daemon report: expected 404, got %d: %s", wrongDaemonReport.Code, wrongDaemonReport.Body.String())
+	}
+
+	ownerPoll, ownerBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, requestID)
+	if ownerPoll.Code != http.StatusOK || ownerBody["status"] != "pending" {
+		t.Fatalf("request changed after rejected reports: %d %v", ownerPoll.Code, ownerBody)
+	}
+
+	daemonReport := reportPathCheck(t, testHandler, runtimeID, requestID, payload)
+	if daemonReport.Code != http.StatusOK {
+		t.Fatalf("owner daemon report: expected 200, got %d: %s", daemonReport.Code, daemonReport.Body.String())
+	}
+
+	_, ownerBody = pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, requestID)
+	if ownerBody["status"] != "completed" {
+		t.Fatalf("owner poll after daemon report: status = %v, want completed", ownerBody["status"])
+	}
+
+	_, userInitBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/auth-owner-user-token")
+	ownerUserReport := reportPathCheckAsUser(t, testHandler, testUserID, runtimeID, firstInitID(userInitBody), payload)
+	if ownerUserReport.Code != http.StatusOK {
+		t.Fatalf("owner user-token report: expected 200, got %d: %s", ownerUserReport.Code, ownerUserReport.Body.String())
 	}
 }
 
