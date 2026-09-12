@@ -130,13 +130,25 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
     () => (showsEntries ? (data?.resolved?.entries ?? []) : []),
     [showsEntries, data?.resolved?.entries],
   );
+  // Both derivations take the projection's own error: an entry count derived
+  // without it states a number for a snapshot Multica may not have read.
   const scopes = useMemo(
     () =>
-      showsEntries ? hookScopeRows(runtime.provider, data?.sources, entries) : [],
-    [showsEntries, runtime.provider, data?.sources, entries],
+      showsEntries
+        ? hookScopeRows(
+            runtime.provider,
+            data?.sources,
+            entries,
+            view.resolutionError,
+          )
+        : [],
+    [showsEntries, runtime.provider, data?.sources, entries, view.resolutionError],
   );
   const groups = useMemo(() => hookEventGroups(entries), [entries]);
-  const totals = useMemo(() => hookTotals(entries, scopes), [entries, scopes]);
+  const totals = useMemo(
+    () => hookTotals(entries, scopes, view.resolutionError),
+    [entries, scopes, view.resolutionError],
+  );
   const emptySummary = useMemo(() => hookEmptySummary(scopes), [scopes]);
   const unrecognized = data?.resolved?.unrecognized_keys ?? [];
   const answerableEvents = useMemo(() => hookAnsweredEvents(entries), [entries]);

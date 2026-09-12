@@ -529,6 +529,75 @@ describe("LifecycleHooksTab", () => {
     expect(text).toMatch(/could not interpret them/);
   });
 
+  // R4 (LOCO-408 AC1 + AC2). The same claim one layer down, as a number. The
+  // Sources card and the summary rail both derive from the entries array, so
+  // an unresolved read used to render "Entries: 0" on a found row and
+  // "Configured 0" in the rail. Zero is a stronger version of "no hooks", not
+  // a weaker one. The source-state counts are a different measurement — the
+  // host's diff of expected against observed — and must survive.
+  it("states no entry count anywhere when resolution failed", () => {
+    const unresolved = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    unresolved.resolved = {
+      provider: "claude",
+      entries: [],
+      error: "user:json: invalid character '}' looking for beginning of value",
+    };
+    hookQuery.mockReturnValue({
+      data: unresolved,
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount();
+    const text = container.textContent ?? "";
+
+    // The found source states no number at all.
+    expect(screen.queryByText("Entries: 0")).not.toBeInTheDocument();
+    expect(screen.getByText("Entries: not established")).toBeInTheDocument();
+    // The rail says so too, and explains itself once.
+    expect(screen.getAllByText("Not established").length).toBeGreaterThan(0);
+    expect(text).toMatch(/none of the counts above were established/);
+    // The source states are a different measurement and still read.
+    expect(screen.getByText("Sources found").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("Sources not checked").nextSibling).toHaveTextContent(
+      "2",
+    );
+  });
+
+  // R4, the partly-resolved half (LOCO-408 AC2). A blanket "counts are
+  // unavailable when any error is present" would throw away truth: the source
+  // that did resolve has a real count. What must not survive is presenting
+  // that floor as a complete total.
+  it("keeps the counts it has on a partly-resolved read and calls them a floor", () => {
+    const partial = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    partial.resolved!.error =
+      "project:json: invalid character '}' looking for beginning of value";
+    hookQuery.mockReturnValue({ data: partial, error: null, isFetching: false });
+
+    const { container } = mount();
+
+    expect(screen.getByText("Entries: 2")).toBeInTheDocument();
+    expect(screen.getByText("Configured").nextSibling).toHaveTextContent("2");
+    expect(container.textContent ?? "").toMatch(
+      /read them as a floor rather than a total/,
+    );
+  });
+
+  // AC3, at the screen. The fix is not "suppress zeros": a clean read of a
+  // source that genuinely holds nothing still says zero.
+  it("still states zero entries for a source that resolved and held nothing", () => {
+    const empty = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    empty.resolved = { provider: "claude", entries: [] };
+    hookQuery.mockReturnValue({ data: empty, error: null, isFetching: false });
+
+    const { container } = mount();
+
+    expect(screen.getByText("Entries: 0")).toBeInTheDocument();
+    expect(screen.getByText("Configured").nextSibling).toHaveTextContent("0");
+    expect(screen.queryByText("Entries: not established")).not.toBeInTheDocument();
+    expect(container.textContent ?? "").not.toMatch(/were established/);
+  });
+
   // The positive control for the assertion above: the same shape with the
   // resolution error removed renders the empty card, so the absence is caused
   // by the error and not by the state failing to render at all.

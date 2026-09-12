@@ -73,13 +73,30 @@ export interface HookScopeRow {
   contentHash: string | null;
   observedAt: string | null;
   writable: boolean;
-  entryCount: number;
+  /**
+   * Entries attributed to this source, or null when Multica did not establish
+   * a number for it. Null is not zero and must never be rendered as one — see
+   * `hookScopeRows` for the rule that produces it.
+   */
+  entryCount: number | null;
 }
 
+/**
+ * One row per expected source, with the entries each contributed.
+ *
+ * `resolutionError` is the projection's own error (`resolved.error`) and is a
+ * required argument rather than an option: a count derived without it is a
+ * claim about a snapshot Multica may not have been able to read.
+ * `server/internal/runtimehooks/projection.go` states the rule the count has
+ * to respect — "the honest report of an unreadable snapshot is that it could
+ * not be resolved, not 'no hooks'" — and a count of zero is a stronger version
+ * of "no hooks", not a weaker one.
+ */
 export function hookScopeRows(
   provider: string,
   sources: RuntimeHookSource[] | undefined,
   entries: RuntimeHookEntry[],
+  resolutionError: string | null,
 ): HookScopeRow[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -93,6 +110,7 @@ export function hookScopeRows(
   }
   return (sources ?? []).map((source) => {
     const key = `${source.scope}:${source.format}`;
+    const counted = counts.get(key) ?? 0;
     return {
       key,
       scope: source.scope,
@@ -103,9 +121,35 @@ export function hookScopeRows(
       contentHash: source.content_hash ?? null,
       observedAt: source.observed_at ?? null,
       writable: hookScopeIsWritable(source.scope),
-      entryCount: counts.get(key) ?? 0,
+      entryCount: hookSourceEntryCount(source.state, counted, resolutionError),
     };
   });
+}
+
+/**
+ * Zero has two causes once resolution failed, and only one of them is "this
+ * file held nothing". The projection carries its error alongside whatever
+ * entries it could resolve, so per-source is the only place the difference
+ * survives:
+ *
+ * - A source that contributed entries demonstrably parsed. Its count stands,
+ *   error or not — a blanket "counts are unavailable when any error is
+ *   present" would throw away truth Multica does hold.
+ * - A *found* source that contributed none under an error is the ambiguous
+ *   cell: it may be the source that failed. Multica established that it could
+ *   not interpret the snapshot, not that this file was empty, so there is no
+ *   number to show.
+ * - An absent or unchecked source contributes nothing whatever else failed,
+ *   so its zero is arithmetic rather than a claim. Neither renders a count.
+ */
+function hookSourceEntryCount(
+  state: string,
+  counted: number,
+  resolutionError: string | null,
+): number | null {
+  if (!resolutionError) return counted;
+  if (counted > 0) return counted;
+  return state === "found" ? null : counted;
 }
 
 export interface HookEventGroup {
@@ -171,6 +215,26 @@ export function entryWillRun(entry: RuntimeHookEntry): boolean {
   return entry.configuration === "live" && entry.effectiveness === "will_run";
 }
 
+/**
+ * How much of the entry-derived block of `HookTotals` Multica established.
+ * The source-state counts are not covered by this: they come from the host's
+ * own diff of expected against observed, which a parse failure does not touch.
+ */
+export type HookEntryCoverage =
+  /** Every source resolved. The entry totals are the whole picture. */
+  | "complete"
+  /**
+   * Resolution failed and produced no entries at all, so no entry total was
+   * established. Every one of them would be the "no hooks" claim restated as
+   * a number.
+   */
+  | "unestablished"
+  /**
+   * Resolution failed but some entries resolved. The entry totals are real
+   * for the sources that parsed and are a floor, not a total.
+   */
+  | "partial";
+
 export interface HookTotals {
   configured: number;
   willRun: number;
@@ -182,13 +246,30 @@ export interface HookTotals {
   foundSources: number;
   absentSources: number;
   notCheckedSources: number;
+  /**
+   * Whether the seven entry-derived totals above may be read as totals. A
+   * consumer that shows them without consulting this presents whatever
+   * resolved as everything there is.
+   */
+  entryCoverage: HookEntryCoverage;
 }
 
+/**
+ * Runtime-level totals. `resolutionError` is required for the same reason as
+ * in `hookScopeRows`: without it the entry-derived rows state a number for a
+ * snapshot Multica may not have been able to read.
+ */
 export function hookTotals(
   entries: RuntimeHookEntry[],
   scopes: HookScopeRow[],
+  resolutionError: string | null,
 ): HookTotals {
   return {
+    entryCoverage: !resolutionError
+      ? "complete"
+      : entries.length > 0
+        ? "partial"
+        : "unestablished",
     configured: entries.length,
     willRun: entries.filter(entryWillRun).length,
     inactive: entries.filter((entry) => entry.configuration !== "live").length,
@@ -374,6 +455,19 @@ export function hookObservationView(
   };
 }
 
+/**
+ * The date rule, in one place. A timestamp only dates an observation if it
+ * parses: `Date.parse("not-a-date")` is `NaN`, and everything downstream that
+ * subtracts it — `packages/views/i18n/use-time-ago.ts` among them — renders
+ * that as `NaN days ago` beside the string itself. An unparsable stamp is not
+ * a weaker date than none; it is a date Multica cannot place, and treating it
+ * as one is the same unearned claim as counting an unresolved source as zero.
+ */
+function datedObservation(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return Number.isNaN(Date.parse(value)) ? null : value;
+}
+
 /** Whether this view state may show hook rows at all. */
 export function hookObservationShowsEntries(
   view: HookObservationView,
@@ -456,27 +550,35 @@ export function hookAnswerView(
   }
   if (!data) return IDLE_ANSWER;
 
-  const observedAt = data.observed_at ?? null;
+  const rawObservedAt = data.observed_at ?? null;
+  // One date rule for every branch below, mirroring hookObservationView's.
+  const observedAt = datedObservation(rawObservedAt);
   const cached = data.cached === true;
   if (!data.answer) {
     // No answer object at all: either nothing has been read from the host, or
     // the payload did not parse. Both are refusals, and neither is an event
-    // with nothing on it.
+    // with nothing on it. A stamp that arrived but does not parse is the
+    // second case, not the first — the server answered, it just did not date
+    // the answer in a way Multica can place, so `observedAt` stays null.
     return {
       ...IDLE_ANSWER,
-      kind: observedAt ? "failed" : "unobserved",
+      kind: rawObservedAt ? "failed" : "unobserved",
       observedAt,
       cached,
       error: data.error ?? null,
     };
   }
   if (!observedAt) {
-    // An answer with no observation date is a refusal too, and for the same
-    // reason as the branch above: counts and sets would be a claim about a
-    // host state nobody dated. Today's server cannot produce this body, but
-    // an installed client meets newer backends, so the shape is refused here
-    // rather than trusted. The tab's own observation is deliberately not
-    // borrowed as a date — it is a different read.
+    // An answer with no *placeable* observation date is a refusal too, and
+    // for the same reason as the branch above: counts and sets would be a
+    // claim about a host state nobody dated. An absent stamp and one that
+    // does not parse fail identically here — `not-a-date` would otherwise
+    // render as a full answer captioned `Observed at not-a-date` and
+    // `Answered from the read NaN days ago`, which is worse than undated.
+    // Today's server cannot produce either body, but an installed client
+    // meets newer backends, so both shapes are refused here rather than
+    // trusted. The tab's own observation is deliberately not borrowed as a
+    // date — it is a different read.
     return {
       ...IDLE_ANSWER,
       kind: "failed",

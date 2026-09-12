@@ -217,6 +217,71 @@ describe("hookAnswerView", () => {
     expect(view.error).toBe("compile claude matcher failed");
   });
 
+  // LOCO-408 AC7/AC8: the undated guard was falsiness only, so any non-empty
+  // string dated an answer. `Date.parse("not-a-date")` is NaN, and the panel
+  // rendered `Observed at not-a-date` beside `Answered from the read NaN days
+  // ago` plus a mismatch box quoting the garbage. An unparsable stamp is not a
+  // weaker date than none, so it is refused exactly as an absent one is.
+  //
+  // The whole input space in one table, valid date last: it must still answer.
+  //
+  // `"0"` is the one row that answers rather than failing, and deliberately.
+  // The LOCO-457 write-up grouped it with `not-a-date` and `"   "`, but
+  // `Date.parse("0")` is 946684800000 — V8's legacy parser reads it as the
+  // year 2000, so it is a date Multica can place and age, not a NaN. Refusing
+  // it would take a second, stricter date rule than the one
+  // `hookObservationView` applies, and the format of `observed_at` is the
+  // boundary schema's business, not this derivation's.
+  it.each([
+    ["absent", undefined, "failed"],
+    ["null", null, "failed"],
+    ["empty", "", "failed"],
+    ["blank", "   ", "failed"],
+    ["unparsable", "not-a-date", "failed"],
+    ["year-2000 numeric string", "0", "answered"],
+    ["RFC3339", "2026-09-12T12:00:00Z", "answered"],
+  ] as const)("handles %s observed_at (%s)", (_label, observedAt, kind) => {
+    const view = hookAnswerView(
+      result({
+        // The schema types this optional-string, so null models a backend
+        // that sends the field explicitly empty.
+        observed_at: observedAt as string | undefined,
+        answer: answer({ matched: [entry()] }),
+      }),
+      false,
+      null,
+      "Bash",
+      "2026-09-12T12:00:00Z",
+    );
+
+    expect(view.kind).toBe(kind);
+    if (kind === "answered") {
+      expect(view.observedAt).toBe(observedAt);
+      expect(view.answer?.matched).toHaveLength(1);
+      return;
+    }
+    // No counts, no sets, no observation line, no mismatch box.
+    expect(view.answer).toBeNull();
+    expect(view.observedAt).toBeNull();
+    expect(view.observationMismatch).toBe(false);
+  });
+
+  it("refuses an unparsable date on an unanswerable body too", () => {
+    const view = hookAnswerView(
+      result({
+        observed_at: "not-a-date",
+        answer: answer({ answerable: false, error: "compile claude matcher failed" }),
+      }),
+      false,
+      null,
+      "Bash",
+      null,
+    );
+
+    expect(view.kind).toBe("failed");
+    expect(view.observedAt).toBeNull();
+  });
+
   it("carries the answer's own observation date and cached flag", () => {
     const view = hookAnswerView(
       result({ cached: true, observed_at: "2026-09-11T09:00:00Z" }),

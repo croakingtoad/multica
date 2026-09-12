@@ -29,10 +29,26 @@ export function ScopeSourcesCard({ scopes }: { scopes: HookScopeRow[] }) {
                 writable={scope.writable}
               />
               <SourceStateBadge state={scope.state} />
+              {/* A found source with no established count reads as an open
+                  question, not as a file that held nothing. The derivation
+                  decides which of the two this is; the badge only has to keep
+                  them typographically apart. */}
               {scope.state === "found" ? (
-                <Badge variant="ghost" className="bg-muted text-muted-foreground">
-                  {t(($) => $.hooks.scopes.entry_count, { count: scope.entryCount })}
-                </Badge>
+                scope.entryCount === null ? (
+                  <Badge
+                    variant="ghost"
+                    className="h-auto gap-1 rounded-md border border-dashed border-warning bg-warning/10 py-0.5 text-foreground whitespace-normal"
+                  >
+                    <CircleHelp aria-hidden="true" />
+                    {t(($) => $.hooks.scopes.entry_count_unknown)}
+                  </Badge>
+                ) : (
+                  <Badge variant="ghost" className="bg-muted text-muted-foreground">
+                    {t(($) => $.hooks.scopes.entry_count, {
+                      count: scope.entryCount,
+                    })}
+                  </Badge>
+                )
               ) : null}
               {!scope.writable ? (
                 <span className="inline-flex items-center gap-1 text-caption text-muted-foreground">

@@ -575,6 +575,7 @@
       "expected_path": "{{path}}에서 읽을 예정입니다",
       "content_hash": "콘텐츠 해시 {{hash}}",
       "entry_count": "항목: {{count}}",
+      "entry_count_unknown": "항목: 확인하지 못함",
       "write_note": "user 범위는 데몬 호스트에 있는 유일한 소스이므로 Multica가 쓸 수 있는 유일한 소스이기도 합니다. project와 local은 이 런타임이 식별 정보를 갖고 있지 않은 체크아웃에 속합니다. 이 탭은 아무것도 쓰지 않습니다."
     },
     "summary": {
@@ -588,6 +589,9 @@
       "events": "이벤트",
       "sources_found": "찾은 소스",
       "sources_not_checked": "확인하지 않은 소스",
+      "not_established": "확인하지 못함",
+      "unestablished_note": "Multica가 이 런타임의 hook 소스를 해석하지 못했으므로 위의 어떤 개수도 확인하지 못했습니다. 0으로 표시하면 파일 내용에 대한 주장이 되지만, 읽기는 거기까지 가지 못했습니다. 아래 소스 상태는 그래도 실제로 관측한 것입니다.",
+      "partial_note": "소스 중 최소 하나를 해석하지 못했습니다. 위의 개수는 해석에 성공한 소스만 포함하므로 합계가 아니라 하한으로 읽어야 합니다.",
       "no_order_note": "여기에는 번호를 붙이지 않습니다. 두 제공자 모두 hooks에 실행 순서를 부여하지 않으므로, 순서를 보여주면 그것은 만들어낸 순서가 됩니다."
     },
     "events": {
