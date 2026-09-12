@@ -464,6 +464,9 @@ type HookConfigReadReport struct {
 // deterministic from stream-only identity so a transport retry remains
 // idempotent. Provider comes from the authenticated runtime; Provenance states
 // whether FiredAt and Detail were upgraded from a unique debug-log match.
+// ExecutionID is the provider's per-execution reference: Claude emits a fresh
+// value for every fire, while Codex uses a content-stable trust hash. It must
+// not be presented or joined on as stable configured-hook identity.
 type HookFire struct {
 	ID          string          `json:"id"`
 	Event       string          `json:"event"`

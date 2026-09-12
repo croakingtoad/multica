@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -232,6 +235,75 @@ func TestClaudeHookFireCaptureJanitorRemovesOnlyOrphanedLogs(t *testing.T) {
 	}
 	d.finishClaudeHookFireCapture(second, "runtime-1", "task-2")
 	d.finishClaudeHookFireCapture(first, "runtime-1", "task-1")
+}
+
+func TestClaudeHookFireCaptureJanitorPreservesConcurrentCaptures(t *testing.T) {
+	const captureCount = 16
+	envRoot := t.TempDir()
+	d := &Daemon{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	active := make([]*claudeHookFireCapture, captureCount)
+	sweepers := make([]*claudeHookFireCapture, captureCount)
+
+	var group sync.WaitGroup
+	for i := range active {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			active[i] = d.startClaudeHookFireCapture("runtime-1", fmt.Sprintf("active-%d", i), envRoot)
+		}()
+	}
+	group.Wait()
+	for i, capture := range active {
+		if capture == nil {
+			t.Fatalf("active capture %d is nil", i)
+		}
+		if err := os.WriteFile(capture.debugPath, []byte("active"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for i := range sweepers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			sweepers[i] = d.startClaudeHookFireCapture("runtime-1", fmt.Sprintf("sweeper-%d", i), envRoot)
+		}()
+	}
+	group.Wait()
+	for i, capture := range active {
+		if _, err := os.Stat(capture.debugPath); err != nil {
+			t.Errorf("active capture %d removed by concurrent janitor: %v", i, err)
+		}
+	}
+
+	for i := range active {
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			d.finishClaudeHookFireCapture(active[i], "runtime-1", fmt.Sprintf("active-%d", i))
+		}()
+		go func() {
+			defer group.Done()
+			d.finishClaudeHookFireCapture(sweepers[i], "runtime-1", fmt.Sprintf("sweeper-%d", i))
+		}()
+	}
+	group.Wait()
+	d.hookFireCaptureMu.Lock()
+	defer d.hookFireCaptureMu.Unlock()
+	if got := len(d.activeHookFireCaptures); got != 0 {
+		t.Fatalf("active capture registry contains %d entries after finish, want 0", got)
+	}
+}
+
+func TestTruncateHookFireDetailPreservesUTF8(t *testing.T) {
+	prefix := strings.Repeat("a", maxHookFireDetailBytes-1)
+	got := truncateHookFireDetail(prefix + "—trailing")
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated detail is invalid UTF-8: %q", got)
+	}
+	if got != prefix {
+		t.Fatalf("truncated detail length/content = %d/%q, want %d ASCII bytes", len(got), got[len(got)-8:], len(prefix))
+	}
 }
 
 func TestHookFireOutcomeDoesNotCallUnknownErrorFailure(t *testing.T) {

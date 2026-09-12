@@ -76,7 +76,9 @@ CREATE TABLE hook_fire_history (
     provenance TEXT NOT NULL CHECK (provenance IN ('debug_log', 'inferred')),
     -- Stage 7 owns the mapping; the CHECK is widened by a new migration if
     -- the final set differs. 'skipped' is the never-ran case; 'blocked' is a
-    -- decision:block continuation (LOCO-114 verified fact 4).
+    -- decision:block continuation (LOCO-114 verified fact 4). Claude also
+    -- emits 'cancelled' for timeouts; it maps to 'unknown' because cancellation
+    -- establishes neither whether the hook ran nor a success/failure outcome.
     outcome TEXT NOT NULL
         CHECK (outcome IN ('success', 'failure', 'blocked', 'skipped', 'unknown')),
     -- Stage 7's raw material (exit code, stderr first line, duration,

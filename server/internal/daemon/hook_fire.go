@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -144,6 +145,9 @@ func hookFireOutcome(response agent.ClaudeHookResponse) string {
 		}
 		return "failure"
 	default:
+		// Claude emits "cancelled" when a hook times out. Cancellation does
+		// not establish success, failure, blocking, skipping, or even whether
+		// the hook ran, so preserve it as unknown.
 		return "unknown"
 	}
 }
@@ -167,7 +171,11 @@ func truncateHookFireDetail(value string) string {
 	if len(value) <= maxHookFireDetailBytes {
 		return value
 	}
-	return value[:maxHookFireDetailBytes]
+	value = value[:maxHookFireDetailBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func readClaudeDebugFires(path string) ([]claudeDebugFire, error) {
