@@ -4465,3 +4465,38 @@ func TestBatchIssueGCCheckReadsNoCatalogForBuiltInStatuses(t *testing.T) {
 			counter.entryReads, counter.keyReads)
 	}
 }
+
+// TestRequestHasClientCapability_HooksV1 pins the fail-closed contract of the
+// hooks-v1 gate (LOCO-114): a daemon that does not advertise hooks-v1 in
+// X-Client-Capabilities must be reported as lacking it. Absence of the header
+// or of the token is never treated as support.
+func TestRequestHasClientCapability_HooksV1(t *testing.T) {
+	tests := []struct {
+		name      string
+		header    string
+		setHeader bool
+		want      bool
+	}{
+		{name: "absent header"},
+		{name: "empty header", setHeader: true},
+		{name: "other capabilities only", setHeader: true, header: strings.Join([]string{
+			protocol.DaemonCapabilitySkillBundlesV1,
+			protocol.DaemonCapabilityRPCV1,
+		}, ",")},
+		{name: "exact", setHeader: true, header: protocol.DaemonCapabilityHooksV1, want: true},
+		{name: "comma separated and trimmed", setHeader: true, header: "skill-bundles-v1,  hooks-v1  ", want: true},
+		{name: "substring", setHeader: true, header: "xhooks-v1", want: false},
+		{name: "case sensitive", setHeader: true, header: "Hooks-V1", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/claim", nil)
+			if tc.setHeader {
+				req.Header.Set("X-Client-Capabilities", tc.header)
+			}
+			if got := requestHasClientCapability(req, protocol.DaemonCapabilityHooksV1); got != tc.want {
+				t.Fatalf("requestHasClientCapability(%q) = %v, want %v", tc.header, got, tc.want)
+			}
+		})
+	}
+}

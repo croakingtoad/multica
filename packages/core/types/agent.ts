@@ -1302,3 +1302,36 @@ export interface RuntimeLocalSkillImportResult {
   skill?: Skill;
   conflict?: RuntimeLocalSkillImportConflict;
 }
+
+export type RuntimeHookReadStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timed_out";
+
+export type RuntimeHookSourceState = "found" | "absent" | "not_checked";
+
+export interface RuntimeHookSource {
+  provider: string;
+  scope: string;
+  format: "json" | "toml";
+  state: RuntimeHookSourceState;
+  source_path: string | null;
+  content_hash: string | null;
+  hooks?: Record<string, unknown> | unknown[];
+  disabled_hooks?: Record<string, unknown> | unknown[];
+  observed_at?: string;
+}
+
+export interface RuntimeHookReadRequest {
+  id?: string;
+  runtime_id: string;
+  status: RuntimeHookReadStatus;
+  cached: boolean;
+  observed_at?: string;
+  sources?: RuntimeHookSource[];
+  error?: string;
+  created_at?: string;
+  updated_at?: string;
+}

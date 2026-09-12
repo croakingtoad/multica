@@ -210,6 +210,7 @@ func daemonCommonCapabilities() []string {
 		protocol.DaemonCapabilitySourceContextQuickCreateV1,
 		protocol.DaemonCapabilityRPCV1,
 		protocol.DaemonCapabilityPlatformSkillV1,
+		protocol.DaemonCapabilityHooksV1,
 	}
 }
 
@@ -627,6 +628,7 @@ type (
 	PendingUpdate           = protocol.DaemonHeartbeatPendingUpdate
 	PendingModelList        = protocol.DaemonHeartbeatPendingModelList
 	PendingLocalSkills      = protocol.DaemonHeartbeatPendingLocalSkills
+	PendingHookRead         = protocol.DaemonHeartbeatPendingHookRead
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
 )
 
@@ -659,6 +661,17 @@ func (c *Client) ReportLocalSkillListResult(ctx context.Context, runtimeID, requ
 // ReportLocalSkillImportResult sends a runtime-local-skill bundle back to the server.
 func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/import/%s/result", runtimeID, requestID), result, nil)
+}
+
+// ReportHookReadResult sends provider hook configuration observed on the host.
+func (c *Client) ReportHookReadResult(ctx context.Context, runtimeID, requestID string, result protocol.HookConfigReadReport) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/hooks/%s/result", runtimeID, requestID), result, nil)
+}
+
+// ReportHookFires ships task-scoped Claude debug-log observations to the
+// server-authoritative fire history.
+func (c *Client) ReportHookFires(ctx context.Context, runtimeID string, report protocol.HookFireReport) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/hook-fires", runtimeID), report, nil)
 }
 
 // WorkspaceInfo holds minimal workspace metadata returned by the API.

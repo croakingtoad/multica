@@ -499,6 +499,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if rdb != nil {
 		h.UpdateStore = handler.NewRedisUpdateStore(rdb)
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
+		h.HookReadStore = handler.NewRedisHookReadStore(rdb)
 		h.ModelCatalogCache = handler.NewRedisModelCatalogCache(rdb)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
@@ -1462,6 +1463,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
+		r.Post("/runtimes/{runtimeId}/hooks/{requestId}/result", h.ReportHookReadResult)
+		r.Post("/runtimes/{runtimeId}/hook-fires", h.ReportHookFires)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 
@@ -2195,6 +2198,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/local-skills/{requestId}", h.GetLocalSkillListRequest)
 					r.Post("/local-skills/import", h.InitiateImportLocalSkill)
 					r.Get("/local-skills/import/{requestId}", h.GetLocalSkillImportRequest)
+					r.Post("/hooks", h.InitiateHookRead)
+					r.Get("/hooks/{requestId}", h.GetHookReadRequest)
 					r.Delete("/", h.DeleteAgentRuntime)
 					// Confirmed variant of DELETE: unbind every agent bound to
 					// this runtime (they keep their configuration and chats and
