@@ -2401,7 +2401,7 @@ export class ApiClient {
   // Daemon path checks (LOCO-171). Workspace-scoped rather than runtime-scoped
   // because the question is about a MACHINE ("is /srv/app a usable directory on
   // that box?"), and a daemon can carry several runtimes. The server authorises
-  // on daemon ownership: 403/404 for a daemon the caller does not own, 503 when
+  // on daemon ownership: 404 for a daemon the caller does not own, 503 when
   // it has no online runtime to ask.
   async initiateDaemonPathCheck(
     workspaceId: string,

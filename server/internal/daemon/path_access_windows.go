@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"log/slog"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -27,6 +28,7 @@ var procWAccess = ucrtbaseDLL.NewProc("_waccess")
 // hint, and the daemon re-checks authoritatively before running a task.
 func accessMode(path string, mode int) error {
 	if err := procWAccess.Find(); err != nil {
+		slog.Warn("windows path access check unavailable; allowing access", "error", err)
 		return nil
 	}
 	wpath, err := windows.UTF16FromString(path)

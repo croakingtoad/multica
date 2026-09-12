@@ -2,10 +2,8 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -21,24 +19,15 @@ func createPathCheckTestRuntimeForProvider(t *testing.T, ownerID, daemonID, prov
 	t.Helper()
 
 	runtimeName := fmt.Sprintf("path-check-%d", time.Now().UnixNano())
-
-	var runtimeID string
-	err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at
-		)
-		VALUES ($1, $2, $3, 'local', $4, $5, 'Path Check Test', '{}'::jsonb, $6, $7)
-		RETURNING id
-	`, testWorkspaceID, daemonID, runtimeName, provider, status, ownerID, lastSeenAt).Scan(&runtimeID)
-	if err != nil {
-		t.Fatalf("create path check runtime: %v", err)
-	}
-
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	return testutil.New(testPool, testWorkspaceID, testUserID).Runtime(t, runtimeName, testutil.Cols{
+		"daemon_id":    daemonID,
+		"runtime_mode": "local",
+		"provider":     provider,
+		"status":       status,
+		"device_info":  "Path Check Test",
+		"owner_id":     ownerID,
+		"last_seen_at": lastSeenAt,
 	})
-
-	return runtimeID
 }
 
 // Regression: polling must authorize against every provider runtime the owner
@@ -54,24 +43,20 @@ func TestDaemonPathCheck_OwnerPollsOnlineProviderWhenNewestProviderIsOffline(t *
 	createPathCheckTestRuntimeForProvider(t, testUserID, daemonID, "claude", "offline", now)
 
 	w, initBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/multi-provider-project")
-	if w.Code != http.StatusOK {
-		t.Fatalf("initiate: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
+	w.Want(http.StatusOK)
 	if initBody["runtime_id"] != onlineRuntimeID {
 		t.Fatalf("initiate runtime_id = %v, want online runtime %s", initBody["runtime_id"], onlineRuntimeID)
 	}
 
 	requestID, _ := initBody["id"].(string)
 	wp, pollBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, requestID)
-	if wp.Code != http.StatusOK {
-		t.Fatalf("poll: expected 200, got %d: %s", wp.Code, wp.Body.String())
-	}
+	wp.Want(http.StatusOK)
 	if pollBody["runtime_id"] != onlineRuntimeID {
 		t.Fatalf("poll runtime_id = %v, want %s", pollBody["runtime_id"], onlineRuntimeID)
 	}
 }
 
-func initiatePathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, path string) (*httptest.ResponseRecorder, map[string]any) {
+func initiatePathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, path string) (*testutil.Response, map[string]any) {
 	t.Helper()
 
 	req := withURLParams(
@@ -81,19 +66,14 @@ func initiatePathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, 
 		"workspaceId", workspaceID,
 		"daemonId", daemonID,
 	)
-	w := httptest.NewRecorder()
-	h.InitiateDaemonPathCheck(w, req)
+	w := testutil.Call(t, h.InitiateDaemonPathCheck, req)
 	if w.Code == http.StatusOK {
-		var body map[string]any
-		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-			t.Fatalf("decode initiate response: %v", err)
-		}
-		return w, body
+		return w, w.Map()
 	}
 	return w, nil
 }
 
-func pollPathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, requestID string) (*httptest.ResponseRecorder, map[string]any) {
+func pollPathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, requestID string) (*testutil.Response, map[string]any) {
 	t.Helper()
 
 	req := withURLParams(
@@ -102,18 +82,15 @@ func pollPathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, requ
 		"daemonId", daemonID,
 		"requestId", requestID,
 	)
-	w := httptest.NewRecorder()
-	h.GetDaemonPathCheck(w, req)
+	w := testutil.Call(t, h.GetDaemonPathCheck, req)
 	var body map[string]any
 	if w.Code == http.StatusOK {
-		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-			t.Fatalf("decode poll response: %v", err)
-		}
+		body = w.Map()
 	}
 	return w, body
 }
 
-func reportPathCheck(t *testing.T, h *Handler, runtimeID, requestID string, payload map[string]any) *httptest.ResponseRecorder {
+func reportPathCheck(t *testing.T, h *Handler, runtimeID, requestID string, payload map[string]any) *testutil.Response {
 	t.Helper()
 
 	var daemonID string
@@ -128,12 +105,10 @@ func reportPathCheck(t *testing.T, h *Handler, runtimeID, requestID string, payl
 		"runtimeId", runtimeID,
 		"requestId", requestID,
 	)
-	w := httptest.NewRecorder()
-	h.ReportDaemonPathCheckResult(w, req)
-	return w
+	return testutil.Call(t, h.ReportDaemonPathCheckResult, req)
 }
 
-func reportPathCheckAsUser(t *testing.T, h *Handler, userID, runtimeID, requestID string, payload map[string]any) *httptest.ResponseRecorder {
+func reportPathCheckAsUser(t *testing.T, h *Handler, userID, runtimeID, requestID string, payload map[string]any) *testutil.Response {
 	t.Helper()
 
 	req := withURLParams(
@@ -141,9 +116,7 @@ func reportPathCheckAsUser(t *testing.T, h *Handler, userID, runtimeID, requestI
 		"runtimeId", runtimeID,
 		"requestId", requestID,
 	)
-	w := httptest.NewRecorder()
-	h.ReportDaemonPathCheckResult(w, req)
-	return w
+	return testutil.Call(t, h.ReportDaemonPathCheckResult, req)
 }
 
 // Acceptance: the full initiate → heartbeat claim → report → poll round trip
@@ -161,9 +134,7 @@ func TestDaemonPathCheck_RoundTrip(t *testing.T) {
 	h.DaemonPendingWork = recorder
 
 	w, initBody := initiatePathCheck(t, &h, testUserID, testWorkspaceID, daemonID, "/tmp/some-project")
-	if w.Code != http.StatusOK {
-		t.Fatalf("initiate: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
+	w.Want(http.StatusOK)
 	requestID, _ := initBody["id"].(string)
 	if requestID == "" {
 		t.Fatalf("initiate response missing id: %v", initBody)
@@ -188,15 +159,7 @@ func TestDaemonPathCheck_RoundTrip(t *testing.T) {
 	heartbeatReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
 		"runtime_id": runtimeID,
 	}, testWorkspaceID, daemonID)
-	wb := httptest.NewRecorder()
-	h.DaemonHeartbeat(wb, heartbeatReq)
-	if wb.Code != http.StatusOK {
-		t.Fatalf("heartbeat: expected 200, got %d: %s", wb.Code, wb.Body.String())
-	}
-	var heartbeatResp map[string]any
-	if err := json.NewDecoder(wb.Body).Decode(&heartbeatResp); err != nil {
-		t.Fatalf("decode heartbeat: %v", err)
-	}
+	heartbeatResp := testutil.Call(t, h.DaemonHeartbeat, heartbeatReq).Want(http.StatusOK).Map()
 	pending, ok := heartbeatResp["pending_path_check"].(map[string]any)
 	if !ok {
 		t.Fatalf("heartbeat missing pending_path_check: %v", heartbeatResp)
@@ -206,7 +169,7 @@ func TestDaemonPathCheck_RoundTrip(t *testing.T) {
 	}
 
 	// The daemon reports the verdict.
-	wr := reportPathCheck(t, &h, runtimeID, requestID, map[string]any{
+	reportPathCheck(t, &h, runtimeID, requestID, map[string]any{
 		"status":       "completed",
 		"exists":       true,
 		"is_directory": true,
@@ -214,16 +177,11 @@ func TestDaemonPathCheck_RoundTrip(t *testing.T) {
 		"writable":     true,
 		"is_git_repo":  true,
 		"reason":       "",
-	})
-	if wr.Code != http.StatusOK {
-		t.Fatalf("report: expected 200, got %d: %s", wr.Code, wr.Body.String())
-	}
+	}).Want(http.StatusOK)
 
 	// The owner polls the result.
 	wp, pollBody := pollPathCheck(t, &h, testUserID, testWorkspaceID, daemonID, requestID)
-	if wp.Code != http.StatusOK {
-		t.Fatalf("poll: expected 200, got %d: %s", wp.Code, wp.Body.String())
-	}
+	wp.Want(http.StatusOK)
 	if pollBody["status"] != "completed" {
 		t.Fatalf("poll status = %v, want completed", pollBody["status"])
 	}
@@ -270,35 +228,26 @@ func TestDaemonPathCheck_SecondUserCannotPathCheck(t *testing.T) {
 
 	// The admin cannot initiate a check on the owner's daemon...
 	w, _ := initiatePathCheck(t, testHandler, adminID, testWorkspaceID, ownerDaemon, "/tmp/owner-project")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("admin initiate on owner daemon: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
+	w.Want(http.StatusNotFound)
 	// ...even against an unknown daemon id in the same workspace.
 	w, _ = initiatePathCheck(t, testHandler, adminID, testWorkspaceID, "no-such-daemon", "/tmp/x")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("initiate on unknown daemon: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
+	w.Want(http.StatusNotFound)
 	// ...and cannot poll the owner's real request.
 	wo, initBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, ownerDaemon, "/tmp/owner-project")
-	if wo.Code != http.StatusOK {
-		t.Fatalf("owner initiate: expected 200, got %d: %s", wo.Code, wo.Body.String())
-	}
+	wo.Want(http.StatusOK)
 	requestID, _ := initBody["id"].(string)
 	wa, _ := pollPathCheck(t, testHandler, adminID, testWorkspaceID, ownerDaemon, requestID)
-	if wa.Code != http.StatusNotFound {
-		t.Fatalf("admin poll of owner request: expected 404, got %d: %s", wa.Code, wa.Body.String())
-	}
+	wa.Want(http.StatusNotFound)
 	// ...and the report endpoint stays bound to the request's own runtime:
 	// a daemon token for the admin's runtime cannot report the owner's check.
 	wr := reportPathCheckWithDaemon(t, testHandler, adminDaemon, requestID, map[string]any{"status": "completed"})
-	if wr.Code != http.StatusNotFound {
-		t.Fatalf("cross-daemon report: expected 404, got %d: %s", wr.Code, wr.Body.String())
-	}
+	wr.Want(http.StatusNotFound)
 
 	// The owner's request is still pending and readable by the owner.
 	wp, pollBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, ownerDaemon, requestID)
-	if wp.Code != http.StatusOK || pollBody["status"] != "pending" {
-		t.Fatalf("owner poll after cross-daemon attempts: %d %v", wp.Code, pollBody)
+	wp.Want(http.StatusOK)
+	if pollBody["status"] != "pending" {
+		t.Fatalf("owner poll after cross-daemon attempts: %v", pollBody)
 	}
 }
 
@@ -316,22 +265,14 @@ func TestDaemonPathCheck_SharedDaemonIDCannotCrossPoll(t *testing.T) {
 	createPathCheckTestRuntimeForProvider(t, secondUserID, daemonID, "codex", "online", time.Now())
 
 	ownerResponse, ownerBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/owner-project")
-	if ownerResponse.Code != http.StatusOK {
-		t.Fatalf("owner initiate: expected 200, got %d: %s", ownerResponse.Code, ownerResponse.Body.String())
-	}
+	ownerResponse.Want(http.StatusOK)
 	secondResponse, secondBody := initiatePathCheck(t, testHandler, secondUserID, testWorkspaceID, daemonID, "/tmp/second-project")
-	if secondResponse.Code != http.StatusOK {
-		t.Fatalf("second user initiate: expected 200, got %d: %s", secondResponse.Code, secondResponse.Body.String())
-	}
+	secondResponse.Want(http.StatusOK)
 
 	ownerCrossPoll, _ := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, firstInitID(secondBody))
-	if ownerCrossPoll.Code != http.StatusNotFound {
-		t.Fatalf("owner cross-poll: expected 404, got %d: %s", ownerCrossPoll.Code, ownerCrossPoll.Body.String())
-	}
+	ownerCrossPoll.Want(http.StatusNotFound)
 	secondCrossPoll, _ := pollPathCheck(t, testHandler, secondUserID, testWorkspaceID, daemonID, firstInitID(ownerBody))
-	if secondCrossPoll.Code != http.StatusNotFound {
-		t.Fatalf("second user cross-poll: expected 404, got %d: %s", secondCrossPoll.Code, secondCrossPoll.Body.String())
-	}
+	secondCrossPoll.Want(http.StatusNotFound)
 }
 
 // Regression: the report route accepts only the runtime owner's user token or
@@ -358,30 +299,22 @@ func TestDaemonPathCheck_ReportRequiresRuntimeOwner(t *testing.T) {
 	}
 
 	attackerReport := reportPathCheckAsUser(t, testHandler, secondUserID, runtimeID, requestID, payload)
-	if attackerReport.Code != http.StatusNotFound {
-		t.Fatalf("non-owner user report: expected 404, got %d: %s", attackerReport.Code, attackerReport.Body.String())
-	}
+	attackerReport.Want(http.StatusNotFound)
 
 	wrongDaemonReq := withURLParams(
 		newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/path-checks/"+requestID+"/result", payload, testWorkspaceID, "another-daemon"),
 		"runtimeId", runtimeID,
 		"requestId", requestID,
 	)
-	wrongDaemonReport := httptest.NewRecorder()
-	testHandler.ReportDaemonPathCheckResult(wrongDaemonReport, wrongDaemonReq)
-	if wrongDaemonReport.Code != http.StatusNotFound {
-		t.Fatalf("wrong daemon report: expected 404, got %d: %s", wrongDaemonReport.Code, wrongDaemonReport.Body.String())
-	}
+	testutil.Call(t, testHandler.ReportDaemonPathCheckResult, wrongDaemonReq).Want(http.StatusNotFound)
 
 	ownerPoll, ownerBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, requestID)
-	if ownerPoll.Code != http.StatusOK || ownerBody["status"] != "pending" {
-		t.Fatalf("request changed after rejected reports: %d %v", ownerPoll.Code, ownerBody)
+	ownerPoll.Want(http.StatusOK)
+	if ownerBody["status"] != "pending" {
+		t.Fatalf("request changed after rejected reports: %v", ownerBody)
 	}
 
-	daemonReport := reportPathCheck(t, testHandler, runtimeID, requestID, payload)
-	if daemonReport.Code != http.StatusOK {
-		t.Fatalf("owner daemon report: expected 200, got %d: %s", daemonReport.Code, daemonReport.Body.String())
-	}
+	reportPathCheck(t, testHandler, runtimeID, requestID, payload).Want(http.StatusOK)
 
 	_, ownerBody = pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, requestID)
 	if ownerBody["status"] != "completed" {
@@ -389,13 +322,10 @@ func TestDaemonPathCheck_ReportRequiresRuntimeOwner(t *testing.T) {
 	}
 
 	_, userInitBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/auth-owner-user-token")
-	ownerUserReport := reportPathCheckAsUser(t, testHandler, testUserID, runtimeID, firstInitID(userInitBody), payload)
-	if ownerUserReport.Code != http.StatusOK {
-		t.Fatalf("owner user-token report: expected 200, got %d: %s", ownerUserReport.Code, ownerUserReport.Body.String())
-	}
+	reportPathCheckAsUser(t, testHandler, testUserID, runtimeID, firstInitID(userInitBody), payload).Want(http.StatusOK)
 }
 
-func reportPathCheckWithDaemon(t *testing.T, h *Handler, daemonID, requestID string, payload map[string]any) *httptest.ResponseRecorder {
+func reportPathCheckWithDaemon(t *testing.T, h *Handler, daemonID, requestID string, payload map[string]any) *testutil.Response {
 	t.Helper()
 
 	// The daemon token is workspace-scoped; the runtime id in the URL must
@@ -414,9 +344,7 @@ func reportPathCheckWithDaemon(t *testing.T, h *Handler, daemonID, requestID str
 		"runtimeId", runtimeID,
 		"requestId", requestID,
 	)
-	w := httptest.NewRecorder()
-	h.ReportDaemonPathCheckResult(w, req)
-	return w
+	return testutil.Call(t, h.ReportDaemonPathCheckResult, req)
 }
 
 // Acceptance: non-absolute and empty paths are rejected at the API boundary
@@ -441,15 +369,11 @@ func TestDaemonPathCheck_RejectsNonAbsolutePath(t *testing.T) {
 			"workspaceId", testWorkspaceID,
 			"daemonId", daemonID,
 		)
-		w := httptest.NewRecorder()
-		h.InitiateDaemonPathCheck(w, req)
+		w := testutil.Call(t, h.InitiateDaemonPathCheck, req)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("path %q: expected 400, got %d: %s", path, w.Code, w.Body.String())
 		}
-		var body map[string]any
-		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-			t.Fatalf("path %q: decode: %v", path, err)
-		}
+		body := w.Map()
 		if body["reason"] != "not_absolute" {
 			t.Fatalf("path %q: reason = %v, want not_absolute", path, body["reason"])
 		}
@@ -478,13 +402,8 @@ func TestDaemonPathCheck_MachineOffline(t *testing.T) {
 	createPathCheckTestRuntime(t, testUserID, daemonID, "offline")
 
 	w, _ := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/x")
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
-	}
-	var body map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	w.Want(http.StatusServiceUnavailable)
+	body := w.Map()
 	if body["code"] != "machine_offline" {
 		t.Fatalf("code = %v, want machine_offline", body["code"])
 	}
@@ -511,24 +430,19 @@ func TestDaemonPathCheck_Timeout(t *testing.T) {
 	ageRequestsForRuntime(t, store, runtimeID, daemonPathCheckPendingTimeout+time.Second)
 
 	w, pollBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, firstInitID(initBody))
-	if w.Code != http.StatusOK {
-		t.Fatalf("poll: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
+	w.Want(http.StatusOK)
 	if pollBody["status"] != "timeout" {
 		t.Fatalf("poll status = %v, want timeout", pollBody["status"])
 	}
 
 	// A late report after the timeout is accepted but ignored.
-	wr := reportPathCheck(t, testHandler, runtimeID, firstInitID(initBody), map[string]any{
+	reportPathCheck(t, testHandler, runtimeID, firstInitID(initBody), map[string]any{
 		"status":       "completed",
 		"exists":       true,
 		"is_directory": true,
 		"readable":     true,
 		"writable":     true,
-	})
-	if wr.Code != http.StatusOK {
-		t.Fatalf("late report: expected 200, got %d: %s", wr.Code, wr.Body.String())
-	}
+	}).Want(http.StatusOK)
 	_, pollBody = pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, firstInitID(initBody))
 	if pollBody["status"] != "timeout" {
 		t.Fatalf("poll after late report = %v, want timeout", pollBody["status"])
@@ -539,11 +453,7 @@ func TestDaemonPathCheck_Timeout(t *testing.T) {
 	heartbeatReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
 		"runtime_id": runtimeID,
 	}, testWorkspaceID, daemonID)
-	wb := httptest.NewRecorder()
-	testHandler.DaemonHeartbeat(wb, heartbeatReq)
-	if wb.Code != http.StatusOK {
-		t.Fatalf("heartbeat: expected 200, got %d: %s", wb.Code, wb.Body.String())
-	}
+	testutil.Call(t, testHandler.DaemonHeartbeat, heartbeatReq).Want(http.StatusOK)
 	ageRunningRequestsForRuntime(t, store, runtimeID, daemonPathCheckRunningTimeout+time.Second)
 
 	_, pollBody = pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, firstInitID(initBody))
@@ -610,11 +520,7 @@ func TestDaemonPathCheck_RateLimited(t *testing.T) {
 		"workspaceId", testWorkspaceID,
 		"daemonId", daemonID,
 	)
-	w := httptest.NewRecorder()
-	h.InitiateDaemonPathCheck(w, req)
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("third initiate: expected 429, got %d: %s", w.Code, w.Body.String())
-	}
+	w := testutil.Call(t, h.InitiateDaemonPathCheck, req).Want(http.StatusTooManyRequests)
 	if w.Header().Get("Retry-After") == "" {
 		t.Fatal("expected Retry-After header on 429")
 	}
@@ -643,11 +549,7 @@ func TestDaemonPathCheck_ReportRejectsCrossWorkspaceDaemonToken(t *testing.T) {
 		"runtimeId", runtimeID,
 		"requestId", requestID,
 	)
-	w := httptest.NewRecorder()
-	testHandler.ReportDaemonPathCheckResult(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
-	}
+	testutil.Call(t, testHandler.ReportDaemonPathCheckResult, req).Want(http.StatusNotFound)
 
 	// The request is untouched.
 	_, pollBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, requestID)
