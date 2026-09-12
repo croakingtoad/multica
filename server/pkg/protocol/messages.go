@@ -393,6 +393,7 @@ type DaemonHeartbeatAckPayload struct {
 	PendingUpdate           *DaemonHeartbeatPendingUpdate           `json:"pending_update,omitempty"`
 	PendingModelList        *DaemonHeartbeatPendingModelList        `json:"pending_model_list,omitempty"`
 	PendingLocalSkills      *DaemonHeartbeatPendingLocalSkills      `json:"pending_local_skills,omitempty"`
+	PendingHookRead         *DaemonHeartbeatPendingHookRead         `json:"pending_hook_read,omitempty"`
 	PendingLocalSkillImport *DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_import,omitempty"`
 	// PendingLocalSkillImports carries multiple import requests in a single
 	// heartbeat so the daemon can process them concurrently. Old daemons
@@ -422,6 +423,39 @@ type DaemonHeartbeatPendingModelList struct {
 // local-skill inventory.
 type DaemonHeartbeatPendingLocalSkills struct {
 	ID string `json:"id"`
+}
+
+// DaemonHeartbeatPendingHookRead asks a hooks-v1 daemon to inspect only the
+// provider-owned hook configuration paths compiled into the daemon. It
+// deliberately carries no path or other caller-controlled filesystem target.
+type DaemonHeartbeatPendingHookRead struct {
+	ID string `json:"id"`
+}
+
+// HookConfigSource is one checked provider file. A returned source with both
+// SourcePath and ContentHash nil means "checked and absent"; an omitted source
+// means it was not checked. Scope uses the hook_state_snapshot refresh-key
+// vocabulary. Format disambiguates Codex's hooks.json and inline config.toml
+// sources, which coexist and merge within one scope.
+type HookConfigSource struct {
+	Provider      string          `json:"provider"`
+	Scope         string          `json:"scope"`
+	Format        string          `json:"format"`
+	SourcePath    *string         `json:"source_path"`
+	ContentHash   *string         `json:"content_hash"`
+	Hooks         json.RawMessage `json:"hooks"`
+	DisabledHooks json.RawMessage `json:"disabled_hooks"`
+}
+
+// HookConfigReadReport is the daemon-to-server result contract for hook reads.
+// ObservedAt is host time for the complete observation. Sources contains every
+// compiled-in source checked for the runtime provider; new fields remain
+// optional so older servers can skip them under normal encoding/json behavior.
+type HookConfigReadReport struct {
+	Status     string             `json:"status"`
+	ObservedAt string             `json:"observed_at,omitempty"`
+	Sources    []HookConfigSource `json:"sources,omitempty"`
+	Error      string             `json:"error,omitempty"`
 }
 
 // DaemonHeartbeatPendingLocalSkillImport describes a request to import a

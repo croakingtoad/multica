@@ -4220,12 +4220,13 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp == nil {
 		return
 	}
-	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil {
+	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingHookRead != nil || resp.PendingLocalSkillImport != nil {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
 			"model_list", resp.PendingModelList != nil,
 			"local_skills", resp.PendingLocalSkills != nil,
+			"hook_read", resp.PendingHookRead != nil,
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
 		)
 	}
@@ -4240,6 +4241,11 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.PendingLocalSkills != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
 			go d.handleLocalSkillList(ctx, *rt, resp.PendingLocalSkills.ID)
+		}
+	}
+	if resp.PendingHookRead != nil {
+		if rt := d.findRuntime(runtimeID); rt != nil {
+			go d.handleHookRead(ctx, *rt, resp.PendingHookRead.ID)
 		}
 	}
 	// Prefer the batch field (new backend); fall back to singular (old backend).
