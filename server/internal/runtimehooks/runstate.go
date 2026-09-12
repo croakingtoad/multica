@@ -84,7 +84,10 @@ func (r Resolution) RunStates() ([]RunState, error) {
 	if err != nil {
 		return nil, err
 	}
-	codexState := r.codexStateEntries()
+	codexState, err := r.codexStateEntries()
+	if err != nil {
+		return nil, err
+	}
 	usedParked := make(map[string]struct{}, len(parked))
 	states := make([]RunState, 0, len(r.entries)+len(parked))
 
@@ -141,7 +144,7 @@ func sameHookDefinition(configured, parked ResolvedHook) bool {
 func (r Resolution) applyEffectiveness(state *RunState) error {
 	entry := cloneEntry(state.Hook)
 	entry.Matcher = ""
-	partition, err := (Resolution{Provider: r.Provider, entries: []ResolvedHook{entry}}).MatchEvent(entry.Event, "")
+	partition, err := matchEventEntries(r.Provider, entry.Event, "", []ResolvedHook{entry})
 	if err != nil {
 		return fmt.Errorf("classify %s hook %s: %w", r.Provider, entry.HookID, err)
 	}
@@ -272,39 +275,51 @@ func emptyJSONObject(raw json.RawMessage) bool {
 	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte(`{}`)) || bytes.Equal(trimmed, []byte(`null`))
 }
 
-func (r Resolution) codexStateEntries() map[string]codexStateEntry {
+func (r Resolution) codexStateEntries() (map[string]codexStateEntry, error) {
 	entries := make(map[string]codexStateEntry)
 	if r.Provider != ProviderCodex {
-		return entries
+		return entries, nil
 	}
 	for _, source := range r.Sources {
 		if source.State != SourceFound || emptyJSONObject(source.DisabledHooks) {
 			continue
 		}
 		// Observed option-A input from DP-LOCO-114-04-E, not a documented
-		// Codex contract. Unknown or changed envelopes degrade to pending review.
+		// Codex contract. ConfigurationLive must not be inferred when the file
+		// that records a disabled hook cannot be parsed.
 		var envelope map[string]json.RawMessage
-		if json.Unmarshal(source.DisabledHooks, &envelope) != nil {
-			continue
+		trimmedEnvelope := bytes.TrimSpace(source.DisabledHooks)
+		if len(trimmedEnvelope) == 0 || trimmedEnvelope[0] != '{' {
+			return nil, fmt.Errorf("decode Codex hook state from %s: envelope must be an object", describeSource(source.Source))
+		}
+		if err := json.Unmarshal(trimmedEnvelope, &envelope); err != nil {
+			return nil, fmt.Errorf("decode Codex hook state from %s: %w", describeSource(source.Source), err)
 		}
 		stateRaw, ok := envelope["state"]
 		if !ok {
-			continue
+			return nil, fmt.Errorf("decode Codex hook state from %s: missing state object", describeSource(source.Source))
 		}
 		var state map[string]json.RawMessage
-		if json.Unmarshal(stateRaw, &state) != nil {
-			continue
+		trimmedState := bytes.TrimSpace(stateRaw)
+		if len(trimmedState) == 0 || trimmedState[0] != '{' {
+			return nil, fmt.Errorf("decode Codex hook state from %s: state must be an object", describeSource(source.Source))
+		}
+		if err := json.Unmarshal(trimmedState, &state); err != nil {
+			return nil, fmt.Errorf("decode Codex hook state from %s: %w", describeSource(source.Source), err)
 		}
 		for key, raw := range state {
 			var record codexStateRecord
 			trimmed := bytes.TrimSpace(raw)
-			if len(trimmed) == 0 || trimmed[0] != '{' || json.Unmarshal(trimmed, &record) != nil {
-				continue
+			if len(trimmed) == 0 || trimmed[0] != '{' {
+				return nil, fmt.Errorf("decode Codex hook state %q from %s: record must be an object", key, describeSource(source.Source))
+			}
+			if err := json.Unmarshal(trimmed, &record); err != nil {
+				return nil, fmt.Errorf("decode Codex hook state %q from %s: %w", key, describeSource(source.Source), err)
 			}
 			entries[codexStateKey(source.Source.Scope, key)] = codexStateEntry{present: true, record: record}
 		}
 	}
-	return entries
+	return entries, nil
 }
 
 func (r Resolution) applyCodexConfiguration(state *RunState, entries map[string]codexStateEntry) {

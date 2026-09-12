@@ -1,6 +1,7 @@
 package runtimehooks
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -188,6 +189,67 @@ func TestCodexIfFieldDoesNotApplyClaudePermissionFiltering(t *testing.T) {
 	}
 	if len(result.Matched) != 1 || len(result.NeverRuns) != 0 {
 		t.Fatalf("result = %#v, want Codex entry matched", result)
+	}
+}
+
+func TestMatchEventExcludesParkedClaudeHookFromRuns(t *testing.T) {
+	ref := SourceRef{Scope: "local", Format: "json"}
+	path, hash := "/repo/.claude/settings.local.json", "settings-hash"
+	hooks := raw(`{"PreToolUse":[{"matcher":"Bash","hooks":[
+		{"type":"command","command":"./park.sh"},
+		{"type":"command","command":"./live.sh"}
+	]}]}`)
+	base := mustResolve(t, ProviderClaude, []ObservedSource{{
+		Source: ref, SourcePath: &path, ContentHash: &hash, Hooks: hooks,
+	}})
+	parkedHook := entriesByCommand(t, base.EntriesForEvent("PreToolUse"))["./park.sh"]
+	parked := fmt.Sprintf(`{%q:{"event":"PreToolUse","matcher":"Bash","handler":{"type":"command","command":"./park.sh"},"parked_at":"2026-09-12T08:00:00Z"}}`, parkedHook.HookID)
+	resolution := mustResolve(t, ProviderClaude, []ObservedSource{{
+		Source: ref, SourcePath: &path, ContentHash: &hash, Hooks: hooks, DisabledHooks: raw(parked),
+	}})
+
+	result, err := resolution.MatchEvent("PreToolUse", "Bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := resolution.MergeMatched(result.Matched)
+	if got := entriesByCommand(t, runs); len(got) != 1 || got["./live.sh"].HookID == "" {
+		t.Fatalf("runs = %#v, want only live hook", runs)
+	}
+	if len(result.ConfigurationExcluded) != 1 || result.ConfigurationExcluded[0].Configuration != ConfigurationParked || result.ConfigurationExcluded[0].ParkedAt == "" {
+		t.Fatalf("configuration-excluded = %#v, want parked hook with timestamp", result.ConfigurationExcluded)
+	}
+}
+
+func TestMatchEventExcludesDisabledCodexHookFromRuns(t *testing.T) {
+	ref := SourceRef{Scope: "user", Format: "json"}
+	configRef := SourceRef{Scope: "user", Format: "toml"}
+	hooksPath, configPath := "/home/marty/.codex/hooks.json", "/home/marty/.codex/config.toml"
+	hooksHash, configHash := "hooks-hash", "config-hash"
+	resolution := mustResolve(t, ProviderCodex, []ObservedSource{
+		{
+			Source: ref, SourcePath: &hooksPath, ContentHash: &hooksHash,
+			Hooks: raw(`{"PreToolUse":[{"matcher":"Bash","hooks":[
+				{"type":"command","command":"./off.sh"},
+				{"type":"command","command":"./live.sh"}
+			]}]}`),
+		},
+		{
+			Source: configRef, SourcePath: &configPath, ContentHash: &configHash, Hooks: raw(`{}`),
+			DisabledHooks: raw(`{"state":{"/home/marty/.codex/hooks.json:pre_tool_use:0:0":{"enabled":false}}}`),
+		},
+	})
+
+	result, err := resolution.MatchEvent("PreToolUse", "Bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := resolution.MergeMatched(result.Matched)
+	if got := entriesByCommand(t, runs); len(got) != 1 || got["./live.sh"].HookID == "" {
+		t.Fatalf("runs = %#v, want only live hook", runs)
+	}
+	if len(result.ConfigurationExcluded) != 1 || result.ConfigurationExcluded[0].Configuration != ConfigurationDisabled {
+		t.Fatalf("configuration-excluded = %#v, want disabled hook", result.ConfigurationExcluded)
 	}
 }
 

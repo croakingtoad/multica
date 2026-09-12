@@ -12,21 +12,53 @@ var (
 	claudeNarrowExactMatcher = regexp.MustCompile(`^[A-Za-z0-9_|]+$`)
 )
 
-// MatchResult partitions the unordered candidates for an event. NeverRuns
-// contains Claude handlers whose if pre-filter is set on an event where Claude
-// does not evaluate permission rules. Neither slice conveys execution order.
+// MatchResult partitions the unordered candidates for an event.
+// ConfigurationExcluded contains parked or disabled hooks, including their
+// configuration metadata. NeverRuns contains Claude handlers whose if
+// pre-filter is set on an event where Claude does not evaluate permission
+// rules. No slice conveys execution order.
 type MatchResult struct {
-	Matched   []ResolvedHook
-	NeverRuns []ResolvedHook
+	Matched               []ResolvedHook
+	NeverRuns             []ResolvedHook
+	ConfigurationExcluded []RunState
 }
 
 // MatchEvent applies the resolution provider's matcher semantics to the
 // unordered candidates for event. Value is the event-specific field described
 // by the provider, such as a tool name or session-start source.
 func (r Resolution) MatchEvent(event, value string) (MatchResult, error) {
+	states, err := r.RunStates()
+	if err != nil {
+		return MatchResult{}, fmt.Errorf("derive %s hook configuration: %w", r.Provider, err)
+	}
+
 	var result MatchResult
-	for _, entry := range r.EntriesForEvent(event) {
-		if r.Provider == ProviderClaude && !isClaudeToolEvent(event) {
+	var live []ResolvedHook
+	for _, state := range states {
+		if state.Hook.Event != event {
+			continue
+		}
+		if state.Configuration != ConfigurationLive {
+			result.ConfigurationExcluded = append(result.ConfigurationExcluded, state)
+			continue
+		}
+		live = append(live, state.Hook)
+	}
+	matched, err := matchEventEntries(r.Provider, event, value, live)
+	if err != nil {
+		return MatchResult{}, err
+	}
+	result.Matched = matched.Matched
+	result.NeverRuns = matched.NeverRuns
+	return result, nil
+}
+
+// matchEventEntries applies only provider matcher and effectiveness rules. It
+// is also used while deriving RunStates, before configuration is available.
+func matchEventEntries(provider Provider, event, value string, entries []ResolvedHook) (MatchResult, error) {
+	var result MatchResult
+	for _, entry := range entries {
+		if provider == ProviderClaude && !isClaudeToolEvent(event) {
 			hasIf, err := handlerHasIf(entry.Handler)
 			if err != nil {
 				return MatchResult{}, fmt.Errorf("inspect %s handler if pre-filter: %w", event, err)
@@ -37,7 +69,7 @@ func (r Resolution) MatchEvent(event, value string) (MatchResult, error) {
 			}
 		}
 
-		matched, err := providerMatcherMatches(r.Provider, event, entry.Matcher, value)
+		matched, err := providerMatcherMatches(provider, event, entry.Matcher, value)
 		if err != nil {
 			return MatchResult{}, err
 		}

@@ -489,6 +489,55 @@ func TestClaudeBooleanDisabledHookIsRejected(t *testing.T) {
 	}
 }
 
+func TestMalformedCodexStateSidecarsAreRejected(t *testing.T) {
+	tests := []struct {
+		name    string
+		sidecar string
+	}{
+		{name: "array envelope", sidecar: `[{"enabled":false}]`},
+		{name: "missing state key", sidecar: `{"hooks":{}}`},
+		{name: "array state", sidecar: `{"state":[]}`},
+		{name: "boolean record", sidecar: `{"state":{"k":false}}`},
+		{name: "invalid enabled type", sidecar: `{"state":{"k":{"enabled":"no"}}}`},
+		{name: "truncated record", sidecar: `{"state":{"k":{"enabled":fals`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution := codexResolutionWithStateSidecar(t, tt.sidecar)
+			states, err := resolution.RunStates()
+			if err == nil {
+				t.Fatalf("RunStates = %#v, nil error; malformed state must not report live", states)
+			}
+		})
+	}
+}
+
+func TestWellFormedCodexStateSidecarDisablesHook(t *testing.T) {
+	resolution := codexResolutionWithStateSidecar(t, `{"state":{"/home/marty/.codex/hooks.json:stop:0:0":{"enabled":false}}}`)
+	state := onlyRunState(t, resolution)
+	if state.Configuration != ConfigurationDisabled || state.Trust != TrustDisabled {
+		t.Fatalf("state = %#v, want disabled configuration and trust", state)
+	}
+}
+
+func codexResolutionWithStateSidecar(t *testing.T, sidecar string) Resolution {
+	t.Helper()
+	hooksRef := SourceRef{Scope: "user", Format: "json"}
+	stateRef := SourceRef{Scope: "user", Format: "toml"}
+	hooksPath, statePath := "/home/marty/.codex/hooks.json", "/home/marty/.codex/config.toml"
+	hooksHash, stateHash := "hooks-hash", "state-hash"
+	return mustResolve(t, ProviderCodex, []ObservedSource{
+		{
+			Source: hooksRef, SourcePath: &hooksPath, ContentHash: &hooksHash,
+			Hooks: raw(`{"Stop":[{"hooks":[{"type":"command","command":"./off.sh"}]}]}`),
+		},
+		{
+			Source: stateRef, SourcePath: &statePath, ContentHash: &stateHash,
+			Hooks: raw(`{}`), DisabledHooks: raw(sidecar),
+		},
+	})
+}
+
 func mustResolve(t *testing.T, provider Provider, observed []ObservedSource) Resolution {
 	t.Helper()
 	expected := make([]SourceRef, len(observed))
