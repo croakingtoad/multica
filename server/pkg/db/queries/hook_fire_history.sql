@@ -4,6 +4,8 @@
 -- leaving provider, event, execution_id, hook_spec, fired_at, provenance, outcome,
 -- and detail byte-for-byte unchanged. That preserves the append-only history
 -- intent while attaching the same observations to the surviving runtime.
+-- The one sanctioned DELETE in this query set is PruneHookFireHistory below:
+-- it applies the age and row-cap retention policy to one runtime's history.
 
 -- name: InsertHookFireHistory :execrows
 INSERT INTO hook_fire_history (

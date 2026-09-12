@@ -25,8 +25,9 @@
 -- Append-only: ordinary writes only INSERT. The only sanctioned deletion is
 -- the retention policy: after every accepted fire batch, delete rows older
 -- than 30 days and rows beyond the newest 30,000 for that runtime. The cap is
--- the pre-C3 10,000-row budget multiplied by the measured 2.94x volume and
--- rounded up; it is the hard bound when hook-heavy hosts fill 30 days early.
+-- the implementer's choice under LOCO-136, set at 30,000 as roughly 3x a
+-- 10,000-row order-of-magnitude starting point given the measured 2.94x C3
+-- volume; it is the hard bound when hook-heavy hosts fill 30 days early.
 -- No trigger enforces immutability: a trigger would fight retention's DELETE,
 -- and there is no ordinary UPDATE path in the query set, which is what keeps
 -- rows immutable. Retention deletes directly by predicate in one statement;
@@ -45,6 +46,9 @@
 -- runs after each accepted batch while the runtime row lock serializes writers.
 -- A runtime that sends no later batch cannot accumulate more rows, so there is
 -- no separate global sweep or snapshot-table coupling.
+-- Rows are pruned when their runtime next reports, so 30 days is the window a
+-- reporting runtime retains; an idle runtime's rows persist past it until it
+-- reports again, bounded only by the row cap.
 --
 -- Locks: CREATE TABLE plus one index on a new empty relation; no existing
 -- table is scanned or rewritten. Expected duration at production scale: <1

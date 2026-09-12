@@ -140,6 +140,8 @@ func (h *Handler) ReportHookFires(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to lock runtime for hook fires")
 		return
 	}
+	// inserted counts successful inserts before retention; rows pruned in this
+	// transaction remain included in the response count.
 	inserted := int64(0)
 	for _, value := range validated {
 		rows, err := qtx.InsertHookFireHistory(r.Context(), db.InsertHookFireHistoryParams{
