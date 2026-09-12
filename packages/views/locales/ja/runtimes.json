@@ -569,7 +569,6 @@
       "state_absent": "確認済み、存在しません",
       "state_not_checked": "未確認",
       "state_unknown": "認識できないソース状態: {{value}}",
-      "found_hint": "以下のパスから読み取りました。",
       "absent_hint": "Multica はこのファイルを探しましたが、存在しません。",
       "not_checked_hint": "ここは誰も見ていません。hook の読み取りはランタイムのハートビートから始まり、ハートビートはプロジェクトの識別情報を持たないため、Multica はまだプロジェクトのソースを特定できません。これは空だと分かったこととは別です。",
       "expected_path": "{{path}} から読み取る予定です",
@@ -650,7 +649,6 @@
       "parked": "待避中",
       "disabled": "無効",
       "unknown": "認識できない設定: {{value}}",
-      "live_hint": "有効なエントリーとしてソースに存在します。",
       "parked_at": "{{stamp}} に待避",
       "parked_hint": "Claude 自体に hook ごとの無効化がないため、有効な hooks ブロックではなく Multica 所有のサイドカーに保持されています。",
       "disabled_hint": "Codex 自身の /hooks ブラウザーで hook ごとにオフにされています。エントリーはファイルに残ります。"
@@ -661,7 +659,6 @@
       "never_runs": "決して実行されません",
       "trust_unknown": "信頼を確認できません",
       "unknown": "認識できない判定: {{value}}",
-      "will_run_hint": "プロバイダーはこのイベントでこの handler を評価します。",
       "reason_matcher_ineligible": "matcher に何が書かれていても、プロバイダーはこのイベントでこの handler を評価しません。",
       "reason_handler_unsupported_provider": "プロバイダーは handler の型 {{type}} をサポートしていません。エントリーを解析した上でスキップします。",
       "reason_handler_unsupported_event": "プロバイダーはこのイベントで handler の型 {{type}} をサポートしていません。エントリーを解析した上でスキップします。",
@@ -670,8 +667,6 @@
       "independent_note": "設定と判定は別のものです。一方を変えてももう一方の答えにはなりません。"
     },
     "trust": {
-      "label": "信頼",
-      "not_applicable": "該当しません",
       "pending_review": "未レビュー",
       "trusted_as_of_snapshot": "前回のレビュー時点では信頼済み",
       "disabled": "オフ",
@@ -684,7 +679,6 @@
       "title": "{{event}} の hook",
       "description": "Multica がこのエントリーについて観測したすべての内容です。この表示は読み取り専用です。",
       "close": "閉じる",
-      "identity": "識別情報",
       "hook_id": "hook id",
       "occurrence": "出現番号",
       "event": "イベント",
