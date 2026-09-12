@@ -65,8 +65,9 @@ CREATE TABLE hook_state_snapshot (
     -- parse, so no deeper shape check here.
     hooks JSONB NOT NULL DEFAULT '{}'::jsonb
         CHECK (jsonb_typeof(hooks) IN ('object', 'array')),
-    -- Claude's "_disabledHooks" sidecar (Park). Codex disable is a native
-    -- per-hook flag that rides inside hooks; Codex rows store '{}'.
+    -- Claude's "_disabledHooks" sidecar (Park), or Codex's reserved "state"
+    -- sub-table lifted out of "hooks". Hooks contains only event keys for
+    -- both providers.
     disabled_hooks JSONB NOT NULL DEFAULT '{}'::jsonb
         CHECK (jsonb_typeof(disabled_hooks) IN ('object', 'array')),
     -- Source-file identity (invariant 5). Both NULL = "checked and absent".
