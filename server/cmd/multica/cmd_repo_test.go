@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +26,7 @@ func newRepoRegistryTestCmd(serverURL string) *cobra.Command {
 }
 
 func TestRunRepoAddAppendsAndDedupes(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	initialRepos := []workspaceRepo{{URL: "https://git.example.com/web.git"}}
 	var patched []workspaceRepo
 	patchCount := 0
@@ -72,6 +74,7 @@ func TestRunRepoAddAppendsAndDedupes(t *testing.T) {
 }
 
 func TestRunRepoAddUpdatesDescriptionForExistingRepo(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	initialRepos := []workspaceRepo{{URL: "https://git.example.com/web.git", Description: "old"}}
 	var patched []workspaceRepo
 
@@ -121,6 +124,7 @@ func TestRunRepoAddRejectsDescriptionForMultipleRepos(t *testing.T) {
 }
 
 func TestRunRepoRemoveDeletesExistingRepos(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	initialRepos := []workspaceRepo{
 		{URL: "https://git.example.com/web.git"},
 		{URL: "https://git.example.com/api.git"},
@@ -160,6 +164,7 @@ func TestRunRepoRemoveDeletesExistingRepos(t *testing.T) {
 }
 
 func TestRunRepoRemoveRejectsMissingRepoWithoutPatch(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	patchCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

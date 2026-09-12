@@ -2519,6 +2519,51 @@ func TestInjectRuntimeConfigCodexWindowsUsesContentFile(t *testing.T) {
 	}
 }
 
+// TestInjectRuntimeConfigCommentFormattingCompositionRule pins the
+// in-flight composition ban (approved on LOCO-111) in the ## Comment
+// Formatting section on every host OS: the file that gets posted must
+// be the file the file-write tool produced, unmodified — no re-reading
+// a body into a shell- or Python-embedded script to tack on a mention,
+// footer, or verdict line. The sentence is asserted inside the section
+// slice, so it cannot be satisfied by text outside the section.
+//
+// Not parallel: mutates the package-level runtimeGOOS.
+func TestInjectRuntimeConfigCommentFormattingCompositionRule(t *testing.T) {
+	saved := runtimeGOOS
+	t.Cleanup(func() { runtimeGOOS = saved })
+
+	const compositionRule = "the file you post must be the file your file-write tool produced, unmodified. Never re-read a body into a shell- or Python-embedded script to add a mention, footer, or verdict line — write those into the file before posting."
+
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			runtimeGOOS = goos
+			dir := t.TempDir()
+			if _, err := InjectRuntimeConfig(dir, "codex", TaskContextForEnv{IssueID: "issue-1"}); err != nil {
+				t.Fatalf("InjectRuntimeConfig failed: %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+			if err != nil {
+				t.Fatalf("read AGENTS.md: %v", err)
+			}
+			s := string(data)
+
+			// Scope to the section: a whole-file Contains would stay
+			// green if the rule migrated out of ## Comment Formatting.
+			cfStart := strings.Index(s, "\n## Comment Formatting\n")
+			if cfStart < 0 {
+				t.Fatalf("AGENTS.md missing ## Comment Formatting section\n---\n%s", s)
+			}
+			cf := s[cfStart+1:]
+			if next := strings.Index(cf[3:], "\n## "); next >= 0 {
+				cf = cf[:next+3]
+			}
+			if !strings.Contains(cf, compositionRule) {
+				t.Errorf("%s Comment Formatting section missing in-flight composition rule %q\n---\n%s", goos, compositionRule, cf)
+			}
+		})
+	}
+}
+
 func TestInjectRuntimeConfigQuickCreateOutputPrefixAgnostic(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
