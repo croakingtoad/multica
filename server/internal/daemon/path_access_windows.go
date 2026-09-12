@@ -13,8 +13,8 @@ import (
 // means — ACLs and the read-only attribute resolved by the OS, not by
 // reading the mode bits.
 const (
-	pathAccessReadOnly  = 2 // R_OK
-	pathAccessWriteOnly = 1 // W_OK
+	pathAccessReadOnly  = 4 // R_OK
+	pathAccessWriteOnly = 2 // W_OK
 )
 
 var ucrtbaseDLL = windows.NewLazySystemDLL("ucrtbase.dll")

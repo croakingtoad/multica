@@ -419,7 +419,7 @@ func (h *Handler) GetDaemonPathCheck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rt, ok := h.resolveOwnedRuntimeForPathCheckPoll(w, r, workspaceID, daemonID, member)
+	ownedRuntimeIDs, ok := h.resolveOwnedRuntimeIDsForPathCheckPoll(w, r, workspaceID, daemonID, member)
 	if !ok {
 		return
 	}
@@ -430,7 +430,11 @@ func (h *Handler) GetDaemonPathCheck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load request: "+err.Error())
 		return
 	}
-	if req == nil || req.RuntimeID != uuidToString(rt.ID) {
+	if req == nil {
+		writeError(w, http.StatusNotFound, "request not found")
+		return
+	}
+	if _, owned := ownedRuntimeIDs[req.RuntimeID]; !owned {
 		writeError(w, http.StatusNotFound, "request not found")
 		return
 	}
@@ -438,29 +442,32 @@ func (h *Handler) GetDaemonPathCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, req)
 }
 
-// resolveOwnedRuntimeForPathCheckPoll is the polling variant of the
+// resolveOwnedRuntimeIDsForPathCheckPoll is the polling variant of the
 // resolver: the daemon may have gone offline between initiation and the
-// last poll, so it returns the caller's most recent runtime under the
-// daemon without requiring an online one. The request record names the
-// exact runtime it ran on, and the caller only ever gets 200 for a request
-// that ran on one of their own runtimes — that match is what keeps a
-// second user's requests unreadable.
-func (h *Handler) resolveOwnedRuntimeForPathCheckPoll(
+// last poll, so it returns every runtime the caller owns under the daemon
+// without requiring an online one. The request record names the exact
+// runtime it ran on, and the caller only ever gets 200 for a request that
+// ran on one of their own runtimes — that match is what keeps a second
+// user's requests unreadable.
+func (h *Handler) resolveOwnedRuntimeIDsForPathCheckPoll(
 	w http.ResponseWriter,
 	r *http.Request,
 	workspaceID, daemonID string,
 	member db.Member,
-) (db.AgentRuntime, bool) {
+) (map[string]struct{}, bool) {
 	runtimes, ok := h.listOwnedRuntimesForDaemon(w, r, workspaceID, daemonID, member)
 	if !ok {
-		return db.AgentRuntime{}, false
+		return nil, false
 	}
 	if len(runtimes) == 0 {
 		writeError(w, http.StatusNotFound, "not found")
-		return db.AgentRuntime{}, false
+		return nil, false
 	}
-	// Most recently seen first (query order).
-	return runtimes[0], true
+	ownedRuntimeIDs := make(map[string]struct{}, len(runtimes))
+	for _, rt := range runtimes {
+		ownedRuntimeIDs[uuidToString(rt.ID)] = struct{}{}
+	}
+	return ownedRuntimeIDs, true
 }
 
 // ReportDaemonPathCheckResult receives the daemon's verdict.

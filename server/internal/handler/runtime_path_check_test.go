@@ -13,6 +13,10 @@ import (
 )
 
 func createPathCheckTestRuntime(t *testing.T, ownerID, daemonID, status string) string {
+	return createPathCheckTestRuntimeForProvider(t, ownerID, daemonID, "claude", status, time.Now())
+}
+
+func createPathCheckTestRuntimeForProvider(t *testing.T, ownerID, daemonID, provider, status string, lastSeenAt time.Time) string {
 	t.Helper()
 
 	runtimeName := fmt.Sprintf("path-check-%d", time.Now().UnixNano())
@@ -22,9 +26,9 @@ func createPathCheckTestRuntime(t *testing.T, ownerID, daemonID, status string) 
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at
 		)
-		VALUES ($1, $2, $3, 'local', 'claude', $4, 'Path Check Test', '{}'::jsonb, $5, now())
+		VALUES ($1, $2, $3, 'local', $4, $5, 'Path Check Test', '{}'::jsonb, $6, $7)
 		RETURNING id
-	`, testWorkspaceID, daemonID, runtimeName, status, ownerID).Scan(&runtimeID)
+	`, testWorkspaceID, daemonID, runtimeName, provider, status, ownerID, lastSeenAt).Scan(&runtimeID)
 	if err != nil {
 		t.Fatalf("create path check runtime: %v", err)
 	}
@@ -34,6 +38,36 @@ func createPathCheckTestRuntime(t *testing.T, ownerID, daemonID, status string) 
 	})
 
 	return runtimeID
+}
+
+// Regression: polling must authorize against every provider runtime the owner
+// has registered under the daemon, not only the most recently seen runtime.
+func TestDaemonPathCheck_OwnerPollsOnlineProviderWhenNewestProviderIsOffline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	const daemonID = "path-check-multi-provider-daemon"
+	now := time.Now()
+	onlineRuntimeID := createPathCheckTestRuntimeForProvider(t, testUserID, daemonID, "codex", "online", now.Add(-time.Minute))
+	createPathCheckTestRuntimeForProvider(t, testUserID, daemonID, "claude", "offline", now)
+
+	w, initBody := initiatePathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, "/tmp/multi-provider-project")
+	if w.Code != http.StatusOK {
+		t.Fatalf("initiate: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if initBody["runtime_id"] != onlineRuntimeID {
+		t.Fatalf("initiate runtime_id = %v, want online runtime %s", initBody["runtime_id"], onlineRuntimeID)
+	}
+
+	requestID, _ := initBody["id"].(string)
+	wp, pollBody := pollPathCheck(t, testHandler, testUserID, testWorkspaceID, daemonID, requestID)
+	if wp.Code != http.StatusOK {
+		t.Fatalf("poll: expected 200, got %d: %s", wp.Code, wp.Body.String())
+	}
+	if pollBody["runtime_id"] != onlineRuntimeID {
+		t.Fatalf("poll runtime_id = %v, want %s", pollBody["runtime_id"], onlineRuntimeID)
+	}
 }
 
 func initiatePathCheck(t *testing.T, h *Handler, userID, workspaceID, daemonID, path string) (*httptest.ResponseRecorder, map[string]any) {
