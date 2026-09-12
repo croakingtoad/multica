@@ -480,6 +480,9 @@ describe("HookFiresSection — feed completeness and states", () => {
     // The load-bearing clause: an empty feed is never evidence that no hook
     // ran. It survives the retention widening below unchanged.
     expect(screen.getByText(/not that no hook ran/i)).toBeTruthy();
+    // Both halves of the claim need a pin. Without this one a copy edit could
+    // drop "nothing was reported" and leave the suite green.
+    expect(screen.getByText(/nothing was reported/i)).toBeTruthy();
   });
 
   it("allows retention as a reason an empty feed is empty", () => {
