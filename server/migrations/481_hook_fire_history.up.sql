@@ -22,9 +22,12 @@
 -- execution; it MUST NOT be presented as stable configured-hook identity.
 -- For Codex the available identity remains its content-stable trust hash.
 --
--- Append-only: ordinary writes only INSERT. The only sanctioned deletion is
--- the retention policy: after every accepted fire batch, delete rows older
--- than 30 days and rows beyond the newest 30,000 for that runtime. The cap is
+-- Append-only: ordinary writes only INSERT through InsertHookFireHistory. The one
+-- sanctioned retention deletion is PruneHookFireHistory, and the two sanctioned
+-- cascade deletions are DeleteRuntimeHookData in runtime.sql and
+-- DeleteWorkspaceRuntimeHookData in workspace_delete.sql; after every accepted
+-- fire batch, retention deletes rows older than 30 days and rows beyond the newest
+-- 30,000 for that runtime. The cap is
 -- the implementer's choice under LOCO-136, set at 30,000 as roughly 3x a
 -- 10,000-row order-of-magnitude starting point given the measured 2.94x C3
 -- volume; it is the hard bound when hook-heavy hosts fill 30 days early.

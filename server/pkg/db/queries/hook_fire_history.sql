@@ -4,8 +4,12 @@
 -- leaving provider, event, execution_id, hook_spec, fired_at, provenance, outcome,
 -- and detail byte-for-byte unchanged. That preserves the append-only history
 -- intent while attaching the same observations to the surviving runtime.
--- The one sanctioned DELETE in this query set is PruneHookFireHistory below:
--- it applies the age and row-cap retention policy to one runtime's history.
+-- The one sanctioned INSERT in this query set is InsertHookFireHistory below:
+-- it appends observed fire rows without changing existing rows.
+-- The one sanctioned retention DELETE in this query set is PruneHookFireHistory
+-- below: it applies the age and row-cap retention policy to one runtime's history.
+-- The two sanctioned cascade DELETEs in this query set are DeleteRuntimeHookData
+-- in runtime.sql and DeleteWorkspaceRuntimeHookData in workspace_delete.sql.
 
 -- name: InsertHookFireHistory :execrows
 INSERT INTO hook_fire_history (
