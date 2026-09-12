@@ -14,7 +14,7 @@ import (
 const insertHookFireHistory = `-- name: InsertHookFireHistory :execrows
 
 INSERT INTO hook_fire_history (
-    id, runtime_id, provider, event, hook_id, hook_spec,
+    id, runtime_id, provider, event, execution_id, hook_spec,
     fired_at, provenance, outcome, detail
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
@@ -24,22 +24,22 @@ ON CONFLICT (id) DO NOTHING
 `
 
 type InsertHookFireHistoryParams struct {
-	ID         pgtype.UUID        `json:"id"`
-	RuntimeID  pgtype.UUID        `json:"runtime_id"`
-	Provider   string             `json:"provider"`
-	Event      string             `json:"event"`
-	HookID     string             `json:"hook_id"`
-	HookSpec   []byte             `json:"hook_spec"`
-	FiredAt    pgtype.Timestamptz `json:"fired_at"`
-	Provenance string             `json:"provenance"`
-	Outcome    string             `json:"outcome"`
-	Detail     []byte             `json:"detail"`
+	ID          pgtype.UUID        `json:"id"`
+	RuntimeID   pgtype.UUID        `json:"runtime_id"`
+	Provider    string             `json:"provider"`
+	Event       string             `json:"event"`
+	ExecutionID string             `json:"execution_id"`
+	HookSpec    []byte             `json:"hook_spec"`
+	FiredAt     pgtype.Timestamptz `json:"fired_at"`
+	Provenance  string             `json:"provenance"`
+	Outcome     string             `json:"outcome"`
+	Detail      []byte             `json:"detail"`
 }
 
 // Hook fire rows are append-only in their observed identity and result. The
 // one sanctioned UPDATE in this query set is MergeRuntimeHookData in
 // runtime.sql: it may re-point runtime_id during a legacy-runtime merge while
-// leaving provider, event, hook_id, hook_spec, fired_at, provenance, outcome,
+// leaving provider, event, execution_id, hook_spec, fired_at, provenance, outcome,
 // and detail byte-for-byte unchanged. That preserves the append-only history
 // intent while attaching the same observations to the surviving runtime.
 func (q *Queries) InsertHookFireHistory(ctx context.Context, arg InsertHookFireHistoryParams) (int64, error) {
@@ -48,7 +48,7 @@ func (q *Queries) InsertHookFireHistory(ctx context.Context, arg InsertHookFireH
 		arg.RuntimeID,
 		arg.Provider,
 		arg.Event,
-		arg.HookID,
+		arg.ExecutionID,
 		arg.HookSpec,
 		arg.FiredAt,
 		arg.Provenance,

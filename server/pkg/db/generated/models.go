@@ -737,17 +737,17 @@ type GithubPullRequestCheckSuite struct {
 }
 
 type HookFireHistory struct {
-	ID         pgtype.UUID        `json:"id"`
-	RuntimeID  pgtype.UUID        `json:"runtime_id"`
-	Provider   string             `json:"provider"`
-	Event      string             `json:"event"`
-	HookID     string             `json:"hook_id"`
-	HookSpec   []byte             `json:"hook_spec"`
-	FiredAt    pgtype.Timestamptz `json:"fired_at"`
-	Provenance string             `json:"provenance"`
-	Outcome    string             `json:"outcome"`
-	Detail     []byte             `json:"detail"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID          pgtype.UUID        `json:"id"`
+	RuntimeID   pgtype.UUID        `json:"runtime_id"`
+	Provider    string             `json:"provider"`
+	Event       string             `json:"event"`
+	ExecutionID string             `json:"execution_id"`
+	HookSpec    []byte             `json:"hook_spec"`
+	FiredAt     pgtype.Timestamptz `json:"fired_at"`
+	Provenance  string             `json:"provenance"`
+	Outcome     string             `json:"outcome"`
+	Detail      []byte             `json:"detail"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type HookStateSnapshot struct {

@@ -427,9 +427,9 @@ func TestReportHookFiresPersistsObservedIdentityAndOutcomes(t *testing.T) {
 	})
 	firedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
 	report := protocol.HookFireReport{Fires: []protocol.HookFire{
-		{ID: "019946d0-e800-7000-8000-000000000001", Event: "PostToolUse", HookID: "sha256:success", HookSpec: json.RawMessage(`{"type":"command","command":"ok"}`), FiredAt: firedAt.Format(time.RFC3339Nano), Outcome: "success", Detail: json.RawMessage(`{"debug_outcome":"success"}`)},
-		{ID: "019946d0-e800-7000-8000-000000000002", Event: "Stop", HookID: "sha256:failure", HookSpec: json.RawMessage(`{"type":"command","command":"bad"}`), FiredAt: firedAt.Add(time.Second).Format(time.RFC3339Nano), Outcome: "failure", Detail: json.RawMessage(`{"debug_outcome":"error"}`)},
-		{ID: "019946d0-e800-7000-8000-000000000003", Event: "SessionStart", HookID: "sha256:skipped", HookSpec: json.RawMessage(`{"type":"command","command":"missing"}`), FiredAt: firedAt.Add(2 * time.Second).Format(time.RFC3339Nano), Outcome: "skipped", Detail: json.RawMessage(`{"debug_outcome":"error"}`)},
+		{ID: "019946d0-e800-7000-8000-000000000001", Event: "PostToolUse", ExecutionID: "execution-success", HookSpec: json.RawMessage(`{"type":"command","command":"ok"}`), FiredAt: firedAt.Format(time.RFC3339Nano), Provenance: "debug_log", Outcome: "success", Detail: json.RawMessage(`{"debug_outcome":"success"}`)},
+		{ID: "019946d0-e800-7000-8000-000000000002", Event: "Stop", ExecutionID: "execution-failure", HookSpec: json.RawMessage(`{"type":"command","command":"bad"}`), FiredAt: firedAt.Add(time.Second).Format(time.RFC3339Nano), Provenance: "inferred", Outcome: "failure", Detail: json.RawMessage(`{"debug_outcome":"error"}`)},
+		{ID: "019946d0-e800-7000-8000-000000000003", Event: "SessionStart", ExecutionID: "execution-skipped", HookSpec: json.RawMessage(`{"type":"command","command":"missing"}`), FiredAt: firedAt.Add(2 * time.Second).Format(time.RFC3339Nano), Provenance: "inferred", Outcome: "skipped", Detail: json.RawMessage(`{"debug_outcome":"error"}`)},
 	}}
 	req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/hook-fires", report, testWorkspaceID, "daemon"), "runtimeId", runtimeID)
 	req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityHooksV1)
@@ -441,24 +441,26 @@ func TestReportHookFiresPersistsObservedIdentityAndOutcomes(t *testing.T) {
 	testutil.Call(t, testHandler.ReportHookFires, retry).Want(http.StatusOK)
 
 	rows, err := testPool.Query(context.Background(), `
-		SELECT provider, event, hook_id, hook_spec, fired_at, provenance, outcome
+		SELECT provider, event, execution_id, hook_spec, fired_at, provenance, outcome
 		FROM hook_fire_history WHERE runtime_id = $1 ORDER BY fired_at`, runtimeID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	var outcomes []string
+	var provenances []string
 	for rows.Next() {
-		var provider, event, hookID, provenance, outcome string
+		var provider, event, executionID, provenance, outcome string
 		var hookSpec []byte
 		var storedAt time.Time
-		if err := rows.Scan(&provider, &event, &hookID, &hookSpec, &storedAt, &provenance, &outcome); err != nil {
+		if err := rows.Scan(&provider, &event, &executionID, &hookSpec, &storedAt, &provenance, &outcome); err != nil {
 			t.Fatal(err)
 		}
-		if provider != "claude" || provenance != "debug_log" || hookID == "" || len(hookSpec) == 0 {
-			t.Fatalf("row lost denormalized identity/provenance: provider=%q event=%q id=%q spec=%s provenance=%q", provider, event, hookID, hookSpec, provenance)
+		if provider != "claude" || executionID == "" || len(hookSpec) == 0 {
+			t.Fatalf("row lost denormalized identity: provider=%q event=%q id=%q spec=%s provenance=%q", provider, event, executionID, hookSpec, provenance)
 		}
 		outcomes = append(outcomes, outcome)
+		provenances = append(provenances, provenance)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -466,15 +468,18 @@ func TestReportHookFiresPersistsObservedIdentityAndOutcomes(t *testing.T) {
 	if got, want := outcomes, []string{"success", "failure", "skipped"}; !slices.Equal(got, want) {
 		t.Fatalf("outcomes = %v, want %v", got, want)
 	}
+	if got, want := provenances, []string{"debug_log", "inferred", "inferred"}; !slices.Equal(got, want) {
+		t.Fatalf("provenances = %v, want %v", got, want)
+	}
 }
 
 func TestReportHookFiresRejectsImplausibleHostTimestamp(t *testing.T) {
 	runtimeID := createProviderRuntime(t, "claude")
 	report := protocol.HookFireReport{Fires: []protocol.HookFire{{
-		ID: "019946d0-e800-7000-8000-000000000004", Event: "Stop", HookID: "sha256:future",
-		HookSpec: json.RawMessage(`{"type":"command","command":"ok"}`),
-		FiredAt:  time.Now().UTC().Add(100 * 365 * 24 * time.Hour).Format(time.RFC3339Nano),
-		Outcome:  "success", Detail: json.RawMessage(`{}`),
+		ID: "019946d0-e800-7000-8000-000000000004", Event: "Stop", ExecutionID: "execution-future",
+		HookSpec:   json.RawMessage(`{"type":"command","command":"ok"}`),
+		FiredAt:    time.Now().UTC().Add(100 * 365 * 24 * time.Hour).Format(time.RFC3339Nano),
+		Provenance: "inferred", Outcome: "success", Detail: json.RawMessage(`{}`),
 	}}}
 	req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/hook-fires", report, testWorkspaceID, "daemon"), "runtimeId", runtimeID)
 	req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityHooksV1)
@@ -486,11 +491,22 @@ func TestReportHookFiresRejectsImplausibleHostTimestamp(t *testing.T) {
 
 func TestValidateHookFireRejectsZeroTimestamp(t *testing.T) {
 	fire := protocol.HookFire{
-		ID: "019946d0-e800-7000-8000-000000000005", Event: "Stop", HookID: "execution-1",
+		ID: "019946d0-e800-7000-8000-000000000005", Event: "Stop", ExecutionID: "execution-1",
 		HookSpec: json.RawMessage(`{}`), FiredAt: time.Time{}.Format(time.RFC3339Nano),
-		Outcome: "unknown", Detail: json.RawMessage(`{}`),
+		Provenance: "inferred", Outcome: "unknown", Detail: json.RawMessage(`{}`),
 	}
 	if _, err := validateHookFire(fire, time.Now()); err == nil || err.Error() != "fired_at must not predate the Unix epoch" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateHookFireRejectsUnknownProvenance(t *testing.T) {
+	fire := protocol.HookFire{
+		ID: "019946d0-e800-7000-8000-000000000006", Event: "Stop", ExecutionID: "execution-1",
+		HookSpec: json.RawMessage(`{}`), FiredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Provenance: "", Outcome: "unknown", Detail: json.RawMessage(`{}`),
+	}
+	if _, err := validateHookFire(fire, time.Now()); err == nil || err.Error() != "provenance is not recognized" {
 		t.Fatalf("error = %v", err)
 	}
 }

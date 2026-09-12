@@ -54,8 +54,8 @@ func validateHookFire(fire protocol.HookFire, now time.Time) (validatedHookFire,
 	if strings.TrimSpace(fire.Event) == "" || len(fire.Event) > 128 {
 		return validatedHookFire{}, fmt.Errorf("event must be between 1 and 128 characters")
 	}
-	if strings.TrimSpace(fire.HookID) == "" || len(fire.HookID) > 256 {
-		return validatedHookFire{}, fmt.Errorf("hook_id must be between 1 and 256 characters")
+	if strings.TrimSpace(fire.ExecutionID) == "" || len(fire.ExecutionID) > 256 {
+		return validatedHookFire{}, fmt.Errorf("execution_id must be between 1 and 256 characters")
 	}
 	hookSpec, err := validateHookFireJSON("hook_spec", fire.HookSpec)
 	if err != nil {
@@ -80,13 +80,17 @@ func validateHookFire(fire protocol.HookFire, now time.Time) (validatedHookFire,
 	default:
 		return validatedHookFire{}, fmt.Errorf("outcome is not recognized")
 	}
+	switch fire.Provenance {
+	case "debug_log", "inferred":
+	default:
+		return validatedHookFire{}, fmt.Errorf("provenance is not recognized")
+	}
 	return validatedHookFire{id: id, firedAt: firedAt, hookSpec: hookSpec, detail: detail, fire: fire}, nil
 }
 
-// ReportHookFires is the sole Claude debug-log write path into the
-// server-authoritative hook_fire_history table. Runtime identity and
-// provenance come from the authenticated route, never from host-supplied
-// fields.
+// ReportHookFires is the sole Claude hook-fire write path into the
+// server-authoritative hook_fire_history table. Runtime identity comes from
+// the authenticated route; per-record provenance is validated above.
 func (h *Handler) ReportHookFires(w http.ResponseWriter, r *http.Request) {
 	if !requestHasClientCapability(r, protocol.DaemonCapabilityHooksV1) {
 		writeError(w, http.StatusUpgradeRequired, "hooks-v1 client capability required")
@@ -98,7 +102,7 @@ func (h *Handler) ReportHookFires(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rt.Provider != "claude" {
-		writeError(w, http.StatusBadRequest, "debug-log hook fires require a claude runtime")
+		writeError(w, http.StatusBadRequest, "hook fires require a claude runtime")
 		return
 	}
 
@@ -139,9 +143,9 @@ func (h *Handler) ReportHookFires(w http.ResponseWriter, r *http.Request) {
 	for _, value := range validated {
 		rows, err := qtx.InsertHookFireHistory(r.Context(), db.InsertHookFireHistoryParams{
 			ID: value.id, RuntimeID: rt.ID, Provider: "claude", Event: value.fire.Event,
-			HookID: value.fire.HookID, HookSpec: value.hookSpec,
+			ExecutionID: value.fire.ExecutionID, HookSpec: value.hookSpec,
 			FiredAt:    pgtype.Timestamptz{Time: value.firedAt, Valid: true},
-			Provenance: "debug_log", Outcome: value.fire.Outcome, Detail: value.detail,
+			Provenance: value.fire.Provenance, Outcome: value.fire.Outcome, Detail: value.detail,
 		})
 		if err != nil {
 			slog.Error("hook fire insert failed", "runtime_id", runtimeID, "fire_id", value.fire.ID, "error", err)

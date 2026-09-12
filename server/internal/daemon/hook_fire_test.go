@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -74,10 +73,10 @@ func TestClaudeHookFireCaptureJoinsStructuredResponsesToRealDebugRecords(t *test
 		"52ed1f27-9596-4028-8180-ed6c4096e4e5": "success",
 	}
 	for i, fire := range fires {
-		if fire.Outcome != wantOutcomes[fire.HookID] {
-			t.Errorf("fire %d = %#v, want outcome %q", i, fire, wantOutcomes[fire.HookID])
+		if fire.Outcome != wantOutcomes[fire.ExecutionID] {
+			t.Errorf("fire %d = %#v, want outcome %q", i, fire, wantOutcomes[fire.ExecutionID])
 		}
-		if len(fire.HookSpec) == 0 || fire.FiredAt == "" || fire.ID == "" {
+		if len(fire.HookSpec) == 0 || fire.FiredAt == "" || fire.ID == "" || fire.Provenance != "debug_log" {
 			t.Errorf("fire %d omitted observed identity or debug timestamp: %#v", i, fire)
 		}
 	}
@@ -86,62 +85,91 @@ func TestClaudeHookFireCaptureJoinsStructuredResponsesToRealDebugRecords(t *test
 	}
 }
 
-func TestClaudeHookFireCapturePersistsMatcherInsensitiveMultipleHandlers(t *testing.T) {
+func TestClaudeHookFireIDDoesNotChangeWhenDebugEvidenceUpgradesRow(t *testing.T) {
 	capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
-	writeClaudeHookDebugLog(t, capture, `2026-09-12T12:00:00Z [DEBUG] "Hook Stop (Stop) success:\nsame-output"
-2026-09-12T12:00:01Z [DEBUG] "Hook Stop (Stop) success:\nsame-output"
-2026-09-12T12:00:02Z [DEBUG] "Hook Stop (Stop) success:\nsame-output"
-`)
-	for _, id := range []string{"stream-one", "stream-two", "stream-three"} {
-		capture.observe(agent.ClaudeHookResponse{
-			HookID: id, HookName: "Stop", HookEvent: "Stop",
-			Stdout: "same-output", Output: "same-output", ExitCode: intPointer(0), Outcome: "success",
-		})
-	}
-	fires, err := capture.read("runtime-1", "task-1")
+	capture.observe(agent.ClaudeHookResponse{
+		HookID: "execution-1", HookName: "Stop", HookEvent: "Stop",
+		Stdout: "same-output\n", ExitCode: intPointer(0), Outcome: "success",
+	})
+	baseline, err := capture.read("runtime-1", "task-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fires) != 3 {
-		t.Fatalf("matcher-insensitive fires = %#v, want all three", fires)
+	writeClaudeHookDebugLog(t, capture, "2020-01-02T03:04:05Z [DEBUG] \"Hook Stop (Stop) success:\\nsame-output\"\n")
+	upgraded, err := capture.read("runtime-1", "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(baseline) != 1 || len(upgraded) != 1 {
+		t.Fatalf("baseline=%#v upgraded=%#v, want one row each", baseline, upgraded)
+	}
+	if baseline[0].Provenance != "inferred" || upgraded[0].Provenance != "debug_log" {
+		t.Fatalf("baseline=%#v upgraded=%#v, want provenance upgrade", baseline[0], upgraded[0])
+	}
+	if baseline[0].ID != upgraded[0].ID {
+		t.Fatalf("row ID changed on debug upgrade: %q != %q", baseline[0].ID, upgraded[0].ID)
 	}
 }
 
-func TestClaudeHookFireCaptureBreaksIdenticalOutputTiesDeterministically(t *testing.T) {
-	read := func(order []string) map[string]string {
-		capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
-		writeClaudeHookDebugLog(t, capture, `2026-09-12T12:00:02Z [DEBUG] "Hook Stop (Stop) success:\nsame-output"
-2026-09-12T12:00:01Z [DEBUG] "Hook Stop (Stop) success:\nsame-output"
-`)
-		for _, id := range order {
-			capture.observe(agent.ClaudeHookResponse{
-				HookID: id, HookName: "Stop", HookEvent: "Stop",
-				Stdout: "same-output\n", Output: "same-output\n", ExitCode: intPointer(0), Outcome: "success",
-			})
-		}
-		fires, err := capture.read("runtime-1", "task-1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := make(map[string]string, len(fires))
-		for _, fire := range fires {
-			got[fire.HookID] = fire.FiredAt
-		}
-		return got
+func TestClaudeHookFireCaptureRefusesAmbiguousAndEmptySignatureUpgrades(t *testing.T) {
+	tests := []struct {
+		name      string
+		debugLog  string
+		responses []agent.ClaudeHookResponse
+		wantRows  int
+	}{
+		{
+			name:     "ambiguous stream bucket",
+			debugLog: "2026-09-12T12:00:00Z [DEBUG] \"Hook Stop (Stop) success:\\nsame-output\"\n",
+			responses: []agent.ClaudeHookResponse{
+				{HookID: "stream-one", HookName: "Stop", HookEvent: "Stop", Stdout: "same-output", Outcome: "success"},
+				{HookID: "stream-two", HookName: "Stop", HookEvent: "Stop", Stdout: "same-output", Outcome: "success"},
+			},
+			wantRows: 2,
+		},
+		{
+			name: "ambiguous debug bucket",
+			debugLog: "2026-09-12T12:00:00Z [DEBUG] \"Hook Stop (Stop) success:\\nsame-output\"\n" +
+				"2026-09-12T12:00:01Z [DEBUG] \"Hook Stop (Stop) success:\\nsame-output\"\n",
+			responses: []agent.ClaudeHookResponse{
+				{HookID: "stream-one", HookName: "Stop", HookEvent: "Stop", Stdout: "same-output", Outcome: "success"},
+			},
+			wantRows: 1,
+		},
+		{
+			name:     "empty normalized signature",
+			debugLog: "2026-09-12T12:00:00Z [DEBUG] \"Hook Stop (Stop) success:\\n   \"\n",
+			responses: []agent.ClaudeHookResponse{
+				{HookID: "stream-empty", HookName: "Stop", HookEvent: "Stop", Stdout: " \r\n\t", Outcome: "success"},
+			},
+			wantRows: 1,
+		},
 	}
-	forward := read([]string{"stream-b", "stream-a"})
-	reverse := read([]string{"stream-a", "stream-b"})
-	if forward["stream-a"] != reverse["stream-a"] || forward["stream-b"] != reverse["stream-b"] {
-		t.Fatalf("tie-break changed with response arrival order: forward=%v reverse=%v", forward, reverse)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
+			writeClaudeHookDebugLog(t, capture, test.debugLog)
+			for _, response := range test.responses {
+				capture.observe(response)
+			}
+			fires, err := capture.read("runtime-1", "task-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fires) != test.wantRows {
+				t.Fatalf("fires = %#v, want %d rows", fires, test.wantRows)
+			}
+			for _, fire := range fires {
+				if fire.Provenance != "inferred" {
+					t.Fatalf("ambiguous or empty bucket upgraded fire: %#v", fire)
+				}
+			}
+		})
 	}
 }
 
-func TestClaudeHookFireCaptureRequiresStructuredAndDebugEvidence(t *testing.T) {
-	// Coverage limit: Claude does not write a debug record for a hook with no
-	// output. Such a structured-only response has neither a debug_log source
-	// record nor its timestamp, so the ingestion path intentionally omits it.
+func TestClaudeHookFireCaptureEmitsEmptyOutputResponse(t *testing.T) {
 	capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
-	writeClaudeHookDebugLog(t, capture, "2026-09-12T12:00:00Z [DEBUG] Hook Stop (Stop) success:\ndebug-only\n")
 	capture.observe(agent.ClaudeHookResponse{
 		HookID: "stream-only", HookName: "Stop", HookEvent: "Stop",
 		ExitCode: intPointer(0), Outcome: "success",
@@ -150,14 +178,14 @@ func TestClaudeHookFireCaptureRequiresStructuredAndDebugEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fires) != 0 {
-		t.Fatalf("unmatched observations produced fires: %#v", fires)
+	if len(fires) != 1 || fires[0].Provenance != "inferred" || fires[0].FiredAt == "" {
+		t.Fatalf("empty-output response = %#v, want one receipt-timed inferred row", fires)
 	}
 }
 
 func TestClaudeHookFireCaptureDoesNotAttributeAbsentHandlerToSnapshot(t *testing.T) {
 	capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
-	writeClaudeHookDebugLog(t, capture, "2026-09-12T12:00:00Z [DEBUG] Hook Stop (Stop) success:\nplugin-output\n")
+	writeClaudeHookDebugLog(t, capture, "2026-09-12T12:00:00Z [DEBUG] \"Hook Stop (Stop) success:\\nplugin-output\"\n")
 	capture.observe(agent.ClaudeHookResponse{
 		HookID: "plugin-execution-id", HookName: "Stop", HookEvent: "Stop",
 		Stdout: "plugin-output", Output: "plugin-output", ExitCode: intPointer(0), Outcome: "success",
@@ -169,9 +197,41 @@ func TestClaudeHookFireCaptureDoesNotAttributeAbsentHandlerToSnapshot(t *testing
 	if len(fires) != 1 {
 		t.Fatalf("fires = %#v, want one positively observed plugin fire", fires)
 	}
-	if fires[0].HookID != "plugin-execution-id" || strings.Contains(string(fires[0].HookSpec), "configured-command") {
+	if fires[0].ExecutionID != "plugin-execution-id" || strings.Contains(string(fires[0].HookSpec), "configured-command") {
 		t.Fatalf("absent handler was attributed to snapshot state: %#v", fires[0])
 	}
+}
+
+func TestClaudeHookFireCaptureJanitorRemovesOnlyOrphanedLogs(t *testing.T) {
+	envRoot := t.TempDir()
+	debugDir := filepath.Join(envRoot, ".multica", "claude-hook-debug")
+	if err := os.MkdirAll(debugDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(debugDir, "orphan.log")
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	first := d.startClaudeHookFireCapture("runtime-1", "task-1", envRoot)
+	if first == nil {
+		t.Fatal("first capture is nil")
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan stat error = %v, want not exist", err)
+	}
+	if err := os.WriteFile(first.debugPath, []byte("active"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := d.startClaudeHookFireCapture("runtime-1", "task-2", envRoot)
+	if second == nil {
+		t.Fatal("second capture is nil")
+	}
+	if _, err := os.Stat(first.debugPath); err != nil {
+		t.Fatalf("active capture removed by janitor: %v", err)
+	}
+	d.finishClaudeHookFireCapture(second, "runtime-1", "task-2")
+	d.finishClaudeHookFireCapture(first, "runtime-1", "task-1")
 }
 
 func TestHookFireOutcomeDoesNotCallUnknownErrorFailure(t *testing.T) {
@@ -267,10 +327,9 @@ func TestReportHookFiresUsesCapabilityGatedEndpoint(t *testing.T) {
 }
 
 func TestHookFireIDIsStableAndRecordSpecific(t *testing.T) {
-	firedAt := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	a := hookFireID("runtime", "task", "stream-a", firedAt)
-	b := hookFireID("runtime", "task", "stream-a", firedAt)
-	c := hookFireID("runtime", "task", "stream-b", firedAt)
+	a := hookFireID("runtime", "task", "stream-a")
+	b := hookFireID("runtime", "task", "stream-a")
+	c := hookFireID("runtime", "task", "stream-b")
 	if a != b || a == c {
 		t.Fatalf("ids a=%q b=%q c=%q", a, b, c)
 	}

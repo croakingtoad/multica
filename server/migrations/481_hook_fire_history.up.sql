@@ -15,12 +15,12 @@
 -- reckoning. An FK would either cascade history away on an edit or block the
 -- edit. This is a correctness requirement, not a normalization preference.
 -- The identity observed at fire time is therefore denormalized here:
--- provider, event, hook_id, hook_spec.
+-- provider, event, execution_id, hook_spec.
 --
--- hook_id contract (host-side, stage 2/3): stable across fires of an
--- unedited hook, and changes when the hook's content changes. On Codex it is
--- the provider's own trust hash. The schema cannot enforce this; the reader
--- does.
+-- execution_id has provider-specific semantics grounded in the available
+-- source. For Claude it is hook_response.hook_id, a fresh identity for that
+-- execution; it MUST NOT be presented as stable configured-hook identity.
+-- For Codex the available identity remains its content-stable trust hash.
 --
 -- Append-only: the only write is INSERT. The only sanctioned deletion is the
 -- retention policy (stage 7; intended default 30 days plus a per-runtime row
@@ -28,9 +28,9 @@
 -- DELETE, and there is no UPDATE path in the query set, which is what keeps
 -- rows immutable.
 --
--- provenance is rendered on screen: the UI must state that Claude fires are
--- read from the debug log (observed) while Codex fires are inferred from
--- exit codes and statusMessage (not direct observation).
+-- provenance is per row and rendered on screen. A Claude fire is debug_log
+-- only when its stream response has a unique debug-record match; all other
+-- Claude fires and Codex fires are inferred.
 --
 -- No updated_at (documented exception to the house timestamp rule): rows are
 -- never updated. created_at is server insert time; fired_at is the
@@ -64,8 +64,8 @@ CREATE TABLE hook_fire_history (
     -- purpose: provider event catalogs (33 Claude / 12 Codex) evolve with
     -- provider releases; a CHECK enum would churn.
     event TEXT NOT NULL,
-    -- Provider-derived identity of the hook at fire time (contract above).
-    hook_id TEXT NOT NULL,
+    -- Provider-derived execution reference at fire time (contract above).
+    execution_id TEXT NOT NULL,
     -- The observed handler spec at fire time, so the feed can show what the
     -- hook was after it was edited or deleted.
     hook_spec JSONB NOT NULL DEFAULT '{}'::jsonb

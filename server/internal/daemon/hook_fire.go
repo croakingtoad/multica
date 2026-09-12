@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -30,32 +30,36 @@ var (
 	claudeHookFirePattern  = regexp.MustCompile(`(?s)^Hook (.+) \(([A-Za-z][A-Za-z0-9]*)\) (success|error|cancelled):(?:\n(.*))?$`)
 )
 
-// claudeHookFireCapture joins two host-observed records of the same
-// invocation. Claude's structured hook_response supplies per-execution
-// identity and exit status; its debug log supplies the durable provenance and
-// host timestamp required by hook_fire_history. Neither source alone is
-// sufficient, so unmatched records are never persisted.
+// claudeHookFireCapture records every valid structured hook_response. A
+// provably unique debug-log match can upgrade the response's timestamp,
+// provenance, and message, but it never supplies row identity.
 type claudeHookFireCapture struct {
 	debugPath string
 
 	mu        sync.Mutex
-	responses []agent.ClaudeHookResponse
+	responses []observedClaudeHookResponse
+}
+
+type observedClaudeHookResponse struct {
+	response   agent.ClaudeHookResponse
+	receivedAt time.Time
 }
 
 func (c *claudeHookFireCapture) observe(response agent.ClaudeHookResponse) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	receivedAt := time.Now()
 	if response.ExitCode != nil {
 		exitCode := *response.ExitCode
 		response.ExitCode = &exitCode
 	}
-	c.mu.Lock()
-	c.responses = append(c.responses, response)
-	c.mu.Unlock()
+	c.responses = append(c.responses, observedClaudeHookResponse{response: response, receivedAt: receivedAt})
 }
 
-func (c *claudeHookFireCapture) responseSnapshot() []agent.ClaudeHookResponse {
+func (c *claudeHookFireCapture) responseSnapshot() []observedClaudeHookResponse {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]agent.ClaudeHookResponse(nil), c.responses...)
+	return append([]observedClaudeHookResponse(nil), c.responses...)
 }
 
 type claudeDebugFire struct {
@@ -112,12 +116,15 @@ func claudeResponseDebugOutput(response agent.ClaudeHookResponse) string {
 	return response.Output
 }
 
-func claudeFireSignature(hookName, event, outcome, output string) string {
-	// Claude's structured hook_response retains the command's trailing newline,
-	// while its debug logger removes it. Preserve every other byte so the join
-	// remains exact rather than becoming a fuzzy output match.
-	output = strings.TrimRight(output, "\n")
-	return hookName + "\x00" + event + "\x00" + outcome + "\x00" + output
+func claudeFireSignature(hookName, event, outcome, output string) (string, bool) {
+	// Claude's debug logger applies JavaScript trimEnd() to the selected output.
+	// Mirror its Unicode-whitespace behavior, but never treat an empty result as
+	// evidence: an empty bucket has no output bytes with which to prove a join.
+	output = strings.TrimRightFunc(output, unicode.IsSpace)
+	if output == "" {
+		return "", false
+	}
+	return hookName + "\x00" + event + "\x00" + outcome + "\x00" + output, true
 }
 
 func hookFireOutcome(response agent.ClaudeHookResponse) string {
@@ -141,9 +148,9 @@ func hookFireOutcome(response agent.ClaudeHookResponse) string {
 	}
 }
 
-func hookFireID(runtimeID, taskID, streamHookID string, firedAt time.Time) string {
+func hookFireID(runtimeID, taskID, executionID string) string {
 	hash := sha256.New()
-	for _, value := range []string{runtimeID, taskID, streamHookID, firedAt.Format(time.RFC3339Nano)} {
+	for _, value := range []string{runtimeID, taskID, executionID} {
 		_, _ = hash.Write([]byte(value))
 		_, _ = hash.Write([]byte{0})
 	}
@@ -203,37 +210,31 @@ func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookF
 	}
 	bySignature := make(map[string][]claudeDebugFire, len(debugRecords))
 	for _, record := range debugRecords {
-		key := claudeFireSignature(record.hookName, record.event, record.debugOutcome, record.output)
+		key, matchable := claudeFireSignature(record.hookName, record.event, record.debugOutcome, record.output)
+		if !matchable {
+			continue
+		}
 		bySignature[key] = append(bySignature[key], record)
 	}
-	for key := range bySignature {
-		slices.SortFunc(bySignature[key], func(a, b claudeDebugFire) int {
-			return a.firedAt.Compare(b.firedAt)
-		})
-	}
 
-	fires := make([]protocol.HookFire, 0)
 	responses := c.responseSnapshot()
-	// Concurrent hook responses need not arrive in debug-log order. Sort by the
-	// provider's per-execution ID so identical-output fires always receive the
-	// same timestamp assignment regardless of callback scheduling.
-	slices.SortFunc(responses, func(a, b agent.ClaudeHookResponse) int {
-		aKey := claudeFireSignature(a.HookName, a.HookEvent, a.Outcome, claudeResponseDebugOutput(a)) + "\x00" + a.HookID
-		bKey := claudeFireSignature(b.HookName, b.HookEvent, b.Outcome, claudeResponseDebugOutput(b)) + "\x00" + b.HookID
-		return strings.Compare(aKey, bKey)
-	})
-	for _, response := range responses {
+	responseCounts := make(map[string]int, len(responses))
+	for _, observed := range responses {
+		response := observed.response
 		if response.HookID == "" || response.HookName == "" || response.HookEvent == "" {
 			continue
 		}
-		key := claudeFireSignature(response.HookName, response.HookEvent, response.Outcome, claudeResponseDebugOutput(response))
-		matches := bySignature[key]
-		if len(matches) == 0 {
+		if key, matchable := claudeFireSignature(response.HookName, response.HookEvent, response.Outcome, claudeResponseDebugOutput(response)); matchable {
+			responseCounts[key]++
+		}
+	}
+
+	fires := make([]protocol.HookFire, 0, len(responses))
+	for _, observed := range responses {
+		response := observed.response
+		if response.HookID == "" || response.HookName == "" || response.HookEvent == "" {
 			continue
 		}
-		record := matches[0]
-		bySignature[key] = matches[1:]
-
 		// hook_response deliberately does not expose the configured handler.
 		// Persist the execution identity it does expose and an honest observed
 		// spec marker; binding this record to any current settings handler would
@@ -248,7 +249,15 @@ func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookF
 		outcome := hookFireOutcome(response)
 		detailValue := map[string]any{
 			"debug_outcome": response.Outcome,
-			"message":       truncateHookFireDetail(record.firstLine),
+		}
+		firedAt := observed.receivedAt
+		provenance := "inferred"
+		key, matchable := claudeFireSignature(response.HookName, response.HookEvent, response.Outcome, claudeResponseDebugOutput(response))
+		if matchable && responseCounts[key] == 1 && len(bySignature[key]) == 1 {
+			record := bySignature[key][0]
+			firedAt = record.firedAt
+			provenance = "debug_log"
+			detailValue["message"] = truncateHookFireDetail(record.firstLine)
 		}
 		if response.ExitCode != nil {
 			detailValue["exit_code"] = *response.ExitCode
@@ -258,9 +267,10 @@ func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookF
 			return nil, fmt.Errorf("encode Claude hook fire detail: %w", err)
 		}
 		fires = append(fires, protocol.HookFire{
-			ID:    hookFireID(runtimeID, taskID, response.HookID, record.firedAt),
-			Event: response.HookEvent, HookID: response.HookID, HookSpec: hookSpec,
-			FiredAt: record.firedAt.Format(time.RFC3339Nano), Outcome: outcome, Detail: detail,
+			ID: hookFireID(runtimeID, taskID, response.HookID), Event: response.HookEvent,
+			ExecutionID: response.HookID, HookSpec: hookSpec,
+			FiredAt: firedAt.Format(time.RFC3339Nano), Provenance: provenance,
+			Outcome: outcome, Detail: detail,
 		})
 	}
 	return fires, nil
@@ -272,9 +282,31 @@ func (d *Daemon) startClaudeHookFireCapture(runtimeID, taskID, envRoot string) *
 		d.logger.Warn("Claude hook fire capture directory unavailable", "runtime_id", runtimeID, "task_id", taskID, "error", err)
 		return nil
 	}
-	return &claudeHookFireCapture{
-		debugPath: filepath.Join(debugDir, fmt.Sprintf("%s-%d.log", taskID, time.Now().UnixNano())),
+	debugPath := filepath.Join(debugDir, fmt.Sprintf("%s-%d.log", taskID, time.Now().UnixNano()))
+	d.hookFireCaptureMu.Lock()
+	defer d.hookFireCaptureMu.Unlock()
+	entries, err := os.ReadDir(debugDir)
+	if err != nil {
+		d.logger.Warn("Claude hook fire capture directory unreadable", "runtime_id", runtimeID, "task_id", taskID, "error", err)
+		return nil
 	}
+	for _, entry := range entries {
+		path := filepath.Join(debugDir, entry.Name())
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+			continue
+		}
+		if _, active := d.activeHookFireCaptures[path]; active {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			d.logger.Warn("orphaned Claude hook fire debug log cleanup failed", "path", path, "error", err)
+		}
+	}
+	if d.activeHookFireCaptures == nil {
+		d.activeHookFireCaptures = make(map[string]struct{})
+	}
+	d.activeHookFireCaptures[debugPath] = struct{}{}
+	return &claudeHookFireCapture{debugPath: debugPath}
 }
 
 func (d *Daemon) finishClaudeHookFireCapture(capture *claudeHookFireCapture, runtimeID, taskID string) {
@@ -285,6 +317,9 @@ func (d *Daemon) finishClaudeHookFireCapture(capture *claudeHookFireCapture, run
 		if err := os.Remove(capture.debugPath); err != nil && !os.IsNotExist(err) {
 			d.logger.Warn("Claude hook fire debug log cleanup failed", "runtime_id", runtimeID, "task_id", taskID, "error", err)
 		}
+		d.hookFireCaptureMu.Lock()
+		delete(d.activeHookFireCaptures, capture.debugPath)
+		d.hookFireCaptureMu.Unlock()
 	}()
 	fires, err := capture.read(runtimeID, taskID)
 	if err != nil {
