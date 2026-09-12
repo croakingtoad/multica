@@ -29,6 +29,10 @@ const (
 	hookReadPendingTimeout = 30 * time.Second
 	hookReadRunningTimeout = 60 * time.Second
 	hookReadStoreRetention = 2 * time.Minute
+
+	// Preserve the host's observation time while allowing ordinary NTP drift.
+	// Larger future offsets would make an old snapshot appear fresh indefinitely.
+	maxHookObservationFutureSkew = 5 * time.Minute
 )
 
 type HookReadRequest struct {
@@ -419,6 +423,7 @@ func nullableText(value *string) pgtype.Text {
 }
 
 func (h *Handler) refreshHookSnapshot(ctx context.Context, runtimeID pgtype.UUID, provider string, observedAt time.Time, sources []protocol.HookConfigSource) error {
+	// Keep this store-level guard in addition to the handler's 400-producing validation so no future caller can write unvalidated sources.
 	seen, expected, err := validateHookSources(provider, sources)
 	if err != nil {
 		return err
@@ -497,6 +502,10 @@ func (h *Handler) ReportHookReadResult(w http.ResponseWriter, r *http.Request) {
 		observedAt, err := time.Parse(time.RFC3339Nano, report.ObservedAt)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "completed hook read requires a valid observed_at")
+			return
+		}
+		if observedAt.After(time.Now().Add(maxHookObservationFutureSkew)) {
+			writeError(w, http.StatusBadRequest, "observed_at must not be more than 5 minutes in the future")
 			return
 		}
 		if _, _, err := validateHookSources(rt.Provider, report.Sources); err != nil {

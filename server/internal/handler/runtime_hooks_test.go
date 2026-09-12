@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -269,6 +270,60 @@ func TestReportHookReadResultRequiresHooksCapability(t *testing.T) {
 	(&Handler{}).ReportHookReadResult(w, req)
 	if w.Code != http.StatusUpgradeRequired {
 		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusUpgradeRequired, w.Body.String())
+	}
+}
+
+func TestReportHookReadResultBoundsFutureObservedAt(t *testing.T) {
+	h, runtimeID, store, _ := hookReadWebHandler(t, "claude")
+	tests := []struct {
+		name       string
+		offset     time.Duration
+		wantStatus int
+		wantError  string
+	}{
+		{
+			name:       "far future rejected",
+			offset:     100 * 365 * 24 * time.Hour,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "observed_at must not be more than 5 minutes in the future",
+		},
+		{
+			name:       "clock skew tolerated",
+			offset:     4 * time.Minute,
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request, err := store.Create(t.Context(), runtimeID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observedAt := time.Now().UTC().Add(tt.offset).Truncate(time.Microsecond)
+			report := protocol.HookConfigReadReport{
+				Status: "completed", ObservedAt: observedAt.Format(time.RFC3339Nano), Sources: []protocol.HookConfigSource{},
+			}
+			req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/hooks/"+request.ID+"/result", report, testWorkspaceID, "daemon"),
+				"runtimeId", runtimeID, "requestId", request.ID)
+			req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityHooksV1)
+
+			response := testutil.Call(t, h.ReportHookReadResult, req).Want(tt.wantStatus)
+			if tt.wantError != "" {
+				if got := response.Map()["error"]; got != tt.wantError {
+					t.Fatalf("error = %q, want %q", got, tt.wantError)
+				}
+				return
+			}
+
+			stored, err := store.Get(t.Context(), request.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored == nil || stored.ObservedAt == nil || !stored.ObservedAt.Equal(observedAt) {
+				t.Fatalf("stored observed_at = %#v, want original host value %s", stored, observedAt)
+			}
+		})
 	}
 }
 

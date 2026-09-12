@@ -39,7 +39,13 @@ export function runtimeHooksOptions(runtimeId: string | null | undefined) {
       : runtimeHooksKeys.all(),
     queryFn: () => resolveRuntimeHooks(runtimeId as string),
     enabled: Boolean(runtimeId),
+    // Snapshot invariant 1: an online runtime must render only the observation
+    // produced by the discovery initiated for the current mount. staleTime: 0
+    // forces that discovery instead of extending a prior observation's
+    // freshness, while gcTime: 0 removes that observation when its final
+    // observer unmounts so it cannot render during the next discovery.
     staleTime: 0,
+    gcTime: 0,
     retry: false,
   });
 }
