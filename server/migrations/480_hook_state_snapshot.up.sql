@@ -58,6 +58,11 @@ CREATE TABLE hook_state_snapshot (
     -- Claude: user / project / local. Codex layers are a subset
     -- (user / project); 'local' is a superset value it never uses.
     scope TEXT NOT NULL CHECK (scope IN ('user', 'project', 'local')),
+    -- Source format is identity, not decoration. Codex merges hooks.json
+    -- with inline [hooks] in config.toml within one scope and neither wins,
+    -- so format distinguishes two coexisting source files. Claude rows always
+    -- use 'json'.
+    format TEXT NOT NULL CHECK (format IN ('json', 'toml')),
     -- Provider-native hook entries as observed for this scope. Shape is
     -- provider-specific (object for Claude's "hooks" key); stage 3 owns the
     -- parse, so no deeper shape check here.
@@ -77,11 +82,13 @@ CREATE TABLE hook_state_snapshot (
     observed_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- THE lookup key (mandated). One index, three jobs: offline-view lookup
-    -- (runtime_id leading), ON CONFLICT arbiter for the refresh upsert, and
-    -- the FK enforcement index for runtime_id (leading prefix).
-    CONSTRAINT hook_state_snapshot_runtime_id_provider_scope_key
-        UNIQUE (runtime_id, provider, scope),
+    -- The widened lookup key gives each source file its own row. Its
+    -- (runtime_id, provider, scope) leading prefix still lets one index serve
+    -- offline-view lookup, the refresh-upsert arbiter, and FK enforcement on
+    -- runtime_id. The disjoint-index rationale for splitting state from fire
+    -- history therefore survives unchanged.
+    CONSTRAINT hook_state_snapshot_runtime_id_provider_scope_format_key
+        UNIQUE (runtime_id, provider, scope, format),
     CONSTRAINT hook_state_snapshot_source_identity_check
         CHECK ((source_path IS NULL) = (content_hash IS NULL))
 );
