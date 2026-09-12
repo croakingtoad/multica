@@ -1445,6 +1445,25 @@ func (h *Handler) processHeartbeat(ctx context.Context, runtimeID string, suppor
 		}
 	}
 
+	// Hook reads deliberately have no client capability gate here: a heartbeat
+	// can be served over HTTP or WS, while the capability is carried on the
+	// daemon's result POST. An older daemon ignores this additive field and the
+	// claimed request reaches its distinct timed_out state.
+	probeHookCtx, cancelProbeHook := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasHookRead, probeHookErr := h.HookReadStore.HasPending(probeHookCtx, runtimeID)
+	cancelProbeHook()
+	switch {
+	case probeHookErr == nil && hasHookRead:
+		pendingHookRead, popErr := h.HookReadStore.PopPending(ctx, runtimeID)
+		if popErr != nil {
+			slog.Warn("hook read PopPending failed", "error", popErr, "runtime_id", runtimeID)
+		} else if pendingHookRead != nil {
+			ack.PendingHookRead = &protocol.DaemonHeartbeatPendingHookRead{ID: pendingHookRead.ID}
+		}
+	case probeHookErr != nil:
+		slog.Warn("hook read HasPending failed", "error", probeHookErr, "runtime_id", runtimeID)
+	}
+
 	probeImportStart := time.Now()
 	probeImportCtx, cancelProbeImport := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
 	hasImport, probeErr := h.LocalSkillImportStore.HasPending(probeImportCtx, runtimeID)
