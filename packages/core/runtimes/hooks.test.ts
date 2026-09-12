@@ -7,7 +7,7 @@ import {
   resolveRuntimeHooks,
   runtimeHooksKeys,
   runtimeHooksOptions,
-  type RuntimeHookDiscoveryPhase,
+  type RuntimeHookDiscoveryProgress,
 } from "./hooks";
 
 const initiateHookRead = vi.fn();
@@ -85,12 +85,18 @@ describe("runtime hooks", () => {
           observed_at: "2026-09-12T12:00:00Z",
         });
 
-      const phases: RuntimeHookDiscoveryPhase[] = [];
-      const settled = resolveRuntimeHooks("rt-1", (phase) => phases.push(phase));
+      const progress: RuntimeHookDiscoveryProgress[] = [];
+      const settled = resolveRuntimeHooks("rt-1", (step) =>
+        progress.push(step),
+      );
       await vi.advanceTimersByTimeAsync(HOOK_READ_POLL_INTERVAL_MS * 3);
 
       await expect(settled).resolves.toMatchObject({ status: "completed" });
-      expect(phases).toEqual(["initiating", "queued", "reading"]);
+      expect(progress.map((step) => step.phase)).toEqual([
+        "initiating",
+        "queued",
+        "reading",
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -105,10 +111,99 @@ describe("runtime hooks", () => {
       observed_at: "2026-09-12T12:00:00Z",
     });
 
-    const phases: RuntimeHookDiscoveryPhase[] = [];
-    await resolveRuntimeHooks("rt-1", (phase) => phases.push(phase));
+    const progress: RuntimeHookDiscoveryProgress[] = [];
+    await resolveRuntimeHooks("rt-1", (step) => progress.push(step));
 
-    expect(phases).toEqual(["initiating"]);
+    expect(progress).toEqual([
+      { phase: "initiating", phaseTimeoutSeconds: null },
+    ]);
+  });
+
+  // R1: the bound a progress screen shows has to be the server's own, so the
+  // only thing this layer is allowed to do with `phase_timeout_seconds` is
+  // carry it. The values below are deliberately not 30 and 60 — a transport
+  // that substituted the real constants, or any constant, would fail here.
+  it("carries the server's per-phase bound through to progress", async () => {
+    vi.useFakeTimers();
+    try {
+      initiateHookRead.mockResolvedValue({
+        id: "req-1",
+        runtime_id: "rt-1",
+        status: "pending",
+        cached: false,
+        offline: false,
+        phase_timeout_seconds: 17,
+      });
+      getHookReadResult
+        .mockResolvedValueOnce({
+          id: "req-1",
+          runtime_id: "rt-1",
+          status: "running",
+          cached: false,
+          offline: false,
+          phase_timeout_seconds: 41,
+        })
+        .mockResolvedValueOnce({
+          id: "req-1",
+          runtime_id: "rt-1",
+          status: "completed",
+          cached: false,
+          offline: false,
+          observed_at: "2026-09-12T12:00:00Z",
+        });
+
+      const progress: RuntimeHookDiscoveryProgress[] = [];
+      const settled = resolveRuntimeHooks("rt-1", (step) =>
+        progress.push(step),
+      );
+      await vi.advanceTimersByTimeAsync(HOOK_READ_POLL_INTERVAL_MS * 3);
+      await expect(settled).resolves.toMatchObject({ status: "completed" });
+
+      expect(progress).toEqual([
+        { phase: "initiating", phaseTimeoutSeconds: null },
+        { phase: "queued", phaseTimeoutSeconds: 17 },
+        { phase: "reading", phaseTimeoutSeconds: 41 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A backend that predates the field reports no bound, and the progress
+  // screen then shows no number rather than one this layer made up.
+  it("reports no bound when the server sends none", async () => {
+    vi.useFakeTimers();
+    try {
+      initiateHookRead.mockResolvedValue({
+        id: "req-1",
+        runtime_id: "rt-1",
+        status: "pending",
+        cached: false,
+        offline: false,
+      });
+      getHookReadResult.mockResolvedValue({
+        id: "req-1",
+        runtime_id: "rt-1",
+        status: "completed",
+        cached: false,
+        offline: false,
+        observed_at: "2026-09-12T12:00:00Z",
+      });
+
+      const progress: RuntimeHookDiscoveryProgress[] = [];
+      const settled = resolveRuntimeHooks("rt-1", (step) =>
+        progress.push(step),
+      );
+      await vi.advanceTimersByTimeAsync(HOOK_READ_POLL_INTERVAL_MS * 2);
+      await settled;
+
+      expect(progress).toEqual([
+        { phase: "initiating", phaseTimeoutSeconds: null },
+        { phase: "queued", phaseTimeoutSeconds: null },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("builds disabled and per-runtime query options", () => {

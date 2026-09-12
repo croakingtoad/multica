@@ -7,7 +7,7 @@ import type { AgentRuntime, RuntimeHookEntry } from "@multica/core/types";
 import {
   runtimeHooksKeys,
   runtimeHooksOptions,
-  type RuntimeHookDiscoveryPhase,
+  type RuntimeHookDiscoveryProgress,
 } from "@multica/core/runtimes";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -74,7 +74,12 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<RuntimeHookEntry | null>(null);
-  const [phase, setPhase] = useState<RuntimeHookDiscoveryPhase>("initiating");
+  // Phase plus the bound the server reported for it. Held together because
+  // the card renders them together and neither is derivable from the other.
+  const [progress, setProgress] = useState<RuntimeHookDiscoveryProgress>({
+    phase: "initiating",
+    phaseTimeoutSeconds: null,
+  });
   // Keyed by runtime rather than a bare boolean so switching runtimes cannot
   // carry one host's "yes, show me the stale copy" over to another's.
   const [revealedRuntimeId, setRevealedRuntimeId] = useState<string | null>(
@@ -85,7 +90,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   // not overridden here — read the comment above them before touching either.
   // Snapshot invariant 1 depends on both being 0.
   const { data, error, isFetching } = useQuery(
-    runtimeHooksOptions(supported ? runtime.id : null, setPhase),
+    runtimeHooksOptions(supported ? runtime.id : null, setProgress),
   );
 
   // `Date.now()` is read once per render rather than held in state: its only
@@ -155,7 +160,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0 space-y-4">
         {view.kind === "discovering" ? (
-          <HookDiscoveryCard runtimeName={runtime.name} phase={phase} />
+          <HookDiscoveryCard runtimeName={runtime.name} progress={progress} />
         ) : offlineGate ? (
           <HookOfflineCard
             runtimeName={runtime.name}
@@ -211,13 +216,40 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
                   </div>
                 ) : null}
 
+                {/* Zero entries has two causes and only one of them is
+                    "there are none". When resolution failed, Multica did not
+                    establish that the sources held no entries — it
+                    established that it could not interpret them, which is the
+                    rule server/internal/runtimehooks/projection.go states for
+                    exactly this shape. So the error case replaces the whole
+                    empty card rather than only its body: HookEmptyCard's
+                    headline makes a claim about what was read too, and a
+                    guard that swapped only the body would leave the stronger
+                    sentence on screen. A partly-resolved read (error plus
+                    entries) is not this branch and still renders its list. */}
                 {entries.length === 0 ? (
-                  <HookEmptyCard
-                    runtimeName={runtime.name}
-                    summary={emptySummary}
-                    observedAt={view.observedAt}
-                    timeAgo={timeAgo}
-                  />
+                  view.resolutionError ? (
+                    <Empty className="border border-dashed">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <TriangleAlert aria-hidden="true" />
+                        </EmptyMedia>
+                        <EmptyTitle>
+                          {t(($) => $.hooks.events.unresolved_title)}
+                        </EmptyTitle>
+                        <EmptyDescription>
+                          {t(($) => $.hooks.events.unresolved_body)}
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : (
+                    <HookEmptyCard
+                      runtimeName={runtime.name}
+                      summary={emptySummary}
+                      observedAt={view.observedAt}
+                      timeAgo={timeAgo}
+                    />
+                  )
                 ) : (
                   <>
                     <div className="relative max-w-sm">

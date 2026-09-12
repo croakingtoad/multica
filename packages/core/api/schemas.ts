@@ -3535,6 +3535,12 @@ export const RuntimeHookReadRequestSchema = z.object({
   // the field omits it, and `false` is the safe fallback — it keeps that case
   // reading as a failed read, which is what shipped before the field existed.
   offline: z.boolean().default(false),
+  // The bound the server will enforce on this read's current phase, in
+  // seconds. Present only while the read is in flight, and phase-specific:
+  // queued and running are bounded separately. Carried so the in-progress
+  // screen states the server's own number instead of keeping a copy of a
+  // server constant, which is what drifts.
+  phase_timeout_seconds: z.number().optional(),
   observed_at: z.string().optional(),
   // Absent `sources` is meaningful: a queued read has no observation yet, and
   // an empty array would claim every expected scope was checked and empty.

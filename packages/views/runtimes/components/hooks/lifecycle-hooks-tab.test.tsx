@@ -27,10 +27,12 @@ vi.mock("@tanstack/react-query", async () => {
 vi.mock("@multica/core/runtimes", () => ({
   runtimeHooksKeys: { forRuntime: (id: string) => ["runtimes", "hooks", id] },
   runtimeHooksOptions: (id: string | null) => ({ queryKey: ["runtimes", "hooks", id] }),
-  // The discovery card prints the real poll interval and timeout, so the mock
-  // has to carry them rather than let the screen invent friendlier numbers.
+  // The discovery card prints the real poll interval, so the mock has to
+  // carry it rather than let the screen invent a friendlier number. It no
+  // longer prints a client-side timeout: the bound it shows comes from the
+  // server's `phase_timeout_seconds`, and this suite mocks useQuery, so the
+  // card renders here with the tab's initial no-bound progress.
   HOOK_READ_POLL_INTERVAL_MS: 500,
-  HOOK_READ_POLL_TIMEOUT_MS: 100_000,
 }));
 
 import { LifecycleHooksTab } from "./lifecycle-hooks-tab";
@@ -370,7 +372,7 @@ describe("LifecycleHooksTab", () => {
     expect(discoveringText).toMatch(/Polling/);
     expect(discoveringText).toMatch(/Waiting for the daemon/);
     expect(discoveringText).toMatch(/Nothing is shown until this read returns/);
-    expect(discoveringText).not.toMatch(/No lifecycle hooks/);
+    expect(discoveringText).not.toMatch(/No hook entries in the sources/);
     discovering.unmount();
 
     const empty = observation({ observed_at: "2026-09-12T09:00:00Z" });
@@ -380,7 +382,9 @@ describe("LifecycleHooksTab", () => {
     const settledText = settled.container.textContent ?? "";
 
     expect(
-      screen.getByText("No lifecycle hooks on claude (daemon-1)"),
+      screen.getByText(
+        "No hook entries in the sources Multica read on claude (daemon-1)",
+      ),
     ).toBeInTheDocument();
     expect(settledText).not.toMatch(/Polling/);
     expect(settledText).not.toMatch(/Waiting for the daemon/);
@@ -426,10 +430,112 @@ describe("LifecycleHooksTab", () => {
     mount();
 
     expect(
-      screen.getByText(/None of the sources Multica looks for exist/),
+      screen.getByText(/None of the sources Multica checked exist/),
+    ).toBeInTheDocument();
+    // R2, the nothing-read half: the headline is limited to the scopes that
+    // were checked too, not just the body.
+    expect(
+      screen.getByText(
+        "No hook source was found on claude (daemon-1) in the scopes Multica checked",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("Checked, absent:")).toBeInTheDocument();
     expect(screen.queryByText("Read:")).not.toBeInTheDocument();
+  });
+
+  // R2. LOCO-126's acceptance criterion: a scope nobody checked must never
+  // read as "no hooks". The headline is what a reader takes away, so the
+  // qualifier has to be in it — the base observation leaves project and local
+  // never checked, so an unqualified runtime-wide headline would assert more
+  // than was read.
+  it("keeps the empty headline limited to the sources that were read", () => {
+    const empty = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    empty.resolved!.entries = [];
+    hookQuery.mockReturnValue({ data: empty, error: null, isFetching: false });
+
+    mount();
+
+    const headline = screen.getByText(/No hook entries/);
+    expect(headline.textContent).toBe(
+      "No hook entries in the sources Multica read on claude (daemon-1)",
+    );
+    // The unqualified runtime-wide claim this replaced.
+    expect(screen.queryByText(/^No lifecycle hooks on/)).not.toBeInTheDocument();
+    // Positive control: the scopes the headline says nothing about are on
+    // screen, so the qualifier is not decorating an empty exclusion.
+    expect(screen.getByText("Not checked:")).toBeInTheDocument();
+  });
+
+  // R3. Ported from LOCO-392, which fixed this at the call site HookEmptyCard
+  // replaced. A completed, dated read whose projection could not be resolved
+  // has established nothing about what the sources hold — projection.go says
+  // the honest report is "could not be resolved", not "no hooks". The guard
+  // has to take out the headline as well as the body, because the headline
+  // makes the claim too.
+  it("never claims the sources held nothing when resolution failed", () => {
+    const unresolved = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    unresolved.resolved = {
+      provider: "claude",
+      entries: [],
+      error: "user:json: invalid character '}' looking for beginning of value",
+    };
+    hookQuery.mockReturnValue({
+      data: unresolved,
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount();
+    const text = container.textContent ?? "";
+
+    // The headline.
+    expect(screen.queryByText(/No hook entries in the sources/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^No hook source was found on/)).not.toBeInTheDocument();
+    // The body.
+    expect(text).not.toMatch(/Every source Multica could read on this host/);
+    expect(text).not.toMatch(/None of the sources Multica checked exist/);
+    // What it says instead.
+    expect(
+      screen.getByText(
+        "Multica cannot list entries from sources it could not resolve",
+      ),
+    ).toBeInTheDocument();
+    expect(text).toMatch(/could not interpret them/);
+  });
+
+  // The positive control for the assertion above: the same shape with the
+  // resolution error removed renders the empty card, so the absence is caused
+  // by the error and not by the state failing to render at all.
+  it("still shows the empty card when resolution succeeded", () => {
+    const empty = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    empty.resolved = { provider: "claude", entries: [] };
+    hookQuery.mockReturnValue({ data: empty, error: null, isFetching: false });
+
+    mount();
+
+    expect(
+      screen.getByText(/No hook entries in the sources/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Multica cannot list entries/),
+    ).not.toBeInTheDocument();
+  });
+
+  // R3, the partly-resolved case: one malformed source must not hide the
+  // sources that did resolve. Error plus entries keeps the list.
+  it("renders the entries of a partly-resolved read", () => {
+    const partial = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    partial.resolved!.error =
+      "project:json: invalid character '}' looking for beginning of value";
+    hookQuery.mockReturnValue({ data: partial, error: null, isFetching: false });
+
+    mount();
+
+    expect(screen.getAllByRole("table").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("guard.sh")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Multica cannot list entries/),
+    ).not.toBeInTheDocument();
   });
 
   // A matcher Multica cannot evaluate gets its own state and an explicit "the

@@ -9,7 +9,16 @@ export const runtimeHooksKeys = {
 };
 
 export const HOOK_READ_POLL_INTERVAL_MS = 500;
-export const HOOK_READ_POLL_TIMEOUT_MS = 100_000;
+
+/**
+ * A backstop against a server that never returns a terminal status, and only
+ * that. It is deliberately far longer than any bound the server enforces —
+ * `applyHookReadTimeout` ends a queued read at 30 s and a running one at 60 s
+ * — so reaching this value means the response stopped changing rather than
+ * that the read ran out of time. It is not the timeout a reader should be
+ * shown: that number is `phase_timeout_seconds`, which the server sends.
+ */
+export const HOOK_READ_POLL_BACKSTOP_MS = 100_000;
 
 /**
  * Where a discovery has actually got to. Reported as it happens so the
@@ -22,19 +31,35 @@ export const HOOK_READ_POLL_TIMEOUT_MS = 100_000;
  */
 export type RuntimeHookDiscoveryPhase = "initiating" | "queued" | "reading";
 
+/**
+ * A phase plus the bound the server says applies to it. The bound travels with
+ * the phase because it is phase-specific and because it is not ours to know:
+ * the server enforces it, so the server reports it, and `null` until an answer
+ * carrying one has arrived. A screen with `null` here shows no number, which
+ * is the only honest alternative to repeating a server constant.
+ */
+export interface RuntimeHookDiscoveryProgress {
+  phase: RuntimeHookDiscoveryPhase;
+  phaseTimeoutSeconds: number | null;
+}
+
 export async function resolveRuntimeHooks(
   runtimeId: string,
-  onPhase?: (phase: RuntimeHookDiscoveryPhase) => void,
+  onProgress?: (progress: RuntimeHookDiscoveryProgress) => void,
 ): Promise<RuntimeHookReadRequest> {
-  onPhase?.("initiating");
+  // Nothing has answered yet, so there is no bound to report with it.
+  onProgress?.({ phase: "initiating", phaseTimeoutSeconds: null });
   const initial = await api.initiateHookRead(runtimeId);
   const start = Date.now();
   let current = initial;
 
   while (current.status === "pending" || current.status === "running") {
-    onPhase?.(current.status === "pending" ? "queued" : "reading");
-    if (Date.now() - start > HOOK_READ_POLL_TIMEOUT_MS) {
-      throw new Error("runtime hook discovery timed out while polling");
+    onProgress?.({
+      phase: current.status === "pending" ? "queued" : "reading",
+      phaseTimeoutSeconds: current.phase_timeout_seconds ?? null,
+    });
+    if (Date.now() - start > HOOK_READ_POLL_BACKSTOP_MS) {
+      throw new Error("runtime hook discovery stopped answering while polling");
     }
     if (!initial.id) {
       throw new Error("runtime hook discovery did not return a request id");
@@ -50,13 +75,13 @@ export async function resolveRuntimeHooks(
 
 export function runtimeHooksOptions(
   runtimeId: string | null | undefined,
-  onPhase?: (phase: RuntimeHookDiscoveryPhase) => void,
+  onProgress?: (progress: RuntimeHookDiscoveryProgress) => void,
 ) {
   return queryOptions({
     queryKey: runtimeId
       ? runtimeHooksKeys.forRuntime(runtimeId)
       : runtimeHooksKeys.all(),
-    queryFn: () => resolveRuntimeHooks(runtimeId as string, onPhase),
+    queryFn: () => resolveRuntimeHooks(runtimeId as string, onProgress),
     enabled: Boolean(runtimeId),
     // Snapshot invariant 1: an online runtime must render only the observation
     // produced by the discovery initiated for the current mount. staleTime: 0

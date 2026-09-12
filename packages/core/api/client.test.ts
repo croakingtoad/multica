@@ -3023,6 +3023,37 @@ describe("ApiClient lifecycle hook reads", () => {
     expect(result.cached).toBe(false);
   });
 
+  // R1: the in-progress screen's bound is the server's number, so the parser
+  // has to carry it and has to leave it absent when the server sends none.
+  // 23 is neither of the server's real bounds on purpose — a parser that
+  // substituted a constant would pass a 30-or-60 assertion.
+  it("carries the server's phase bound and leaves it absent when unsent", async () => {
+    stubHookJSON({
+      id: "req-1",
+      runtime_id: "rt-1",
+      status: "pending",
+      cached: false,
+      offline: false,
+      phase_timeout_seconds: 23,
+    });
+
+    const bounded = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-1");
+    expect(bounded.phase_timeout_seconds).toBe(23);
+
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: false,
+      offline: false,
+      observed_at: "2026-09-12T11:00:00Z",
+    });
+
+    const terminal = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-1");
+    expect(terminal.phase_timeout_seconds).toBeUndefined();
+  });
+
   it("defaults offline to false when a backend omits it", async () => {
     stubHookJSON({
       runtime_id: "rt-1",

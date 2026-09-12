@@ -79,6 +79,22 @@ func applyHookReadTimeout(req *HookReadRequest, now time.Time) bool {
 	return false
 }
 
+// hookReadPhaseTimeout reports the bound this server will actually enforce on
+// a request in the given phase, in seconds. applyHookReadTimeout is what ends
+// the read, so these constants are the only honest source of that number: a
+// second copy in a client would be a guess that drifts the moment either
+// constant moves. Terminal statuses have no bound left to report.
+func hookReadPhaseTimeout(status HookReadStatus) (int, bool) {
+	switch status {
+	case HookReadPending:
+		return int(hookReadPendingTimeout / time.Second), true
+	case HookReadRunning:
+		return int(hookReadRunningTimeout / time.Second), true
+	default:
+		return 0, false
+	}
+}
+
 func hookReadTerminal(status HookReadStatus) bool {
 	return status == HookReadCompleted || status == HookReadFailed || status == HookReadTimedOut
 }
@@ -202,17 +218,24 @@ type hookSourceResponse struct {
 // offline runtime with nothing ever observed is the one case that needs both,
 // and it is a state to name rather than a read that failed.
 type hookReadResponse struct {
-	ID         string                   `json:"id,omitempty"`
-	RuntimeID  string                   `json:"runtime_id"`
-	Status     HookReadStatus           `json:"status"`
-	Cached     bool                     `json:"cached"`
-	Offline    bool                     `json:"offline"`
-	ObservedAt *time.Time               `json:"observed_at,omitempty"`
-	Sources    []hookSourceResponse     `json:"sources,omitempty"`
-	Resolved   *runtimehooks.Projection `json:"resolved,omitempty"`
-	Error      string                   `json:"error,omitempty"`
-	CreatedAt  *time.Time               `json:"created_at,omitempty"`
-	UpdatedAt  *time.Time               `json:"updated_at,omitempty"`
+	ID        string         `json:"id,omitempty"`
+	RuntimeID string         `json:"runtime_id"`
+	Status    HookReadStatus `json:"status"`
+	Cached    bool           `json:"cached"`
+	Offline   bool           `json:"offline"`
+	// The bound the server will enforce on this request's current phase, in
+	// seconds, omitted once the status is terminal. A read in flight is the
+	// only thing that has a deadline left, and the deadline differs by phase:
+	// waiting for the daemon to collect the read is bounded separately from
+	// the daemon's own run. Sent so a progress screen can state the real bound
+	// instead of keeping its own copy of a server constant.
+	PhaseTimeoutSeconds *int                     `json:"phase_timeout_seconds,omitempty"`
+	ObservedAt          *time.Time               `json:"observed_at,omitempty"`
+	Sources             []hookSourceResponse     `json:"sources,omitempty"`
+	Resolved            *runtimehooks.Projection `json:"resolved,omitempty"`
+	Error               string                   `json:"error,omitempty"`
+	CreatedAt           *time.Time               `json:"created_at,omitempty"`
+	UpdatedAt           *time.Time               `json:"updated_at,omitempty"`
 }
 
 // hookObservation is one read of the snapshot: the per-source states, the
@@ -327,10 +350,14 @@ func (h *Handler) InitiateHookRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.requestDaemonPendingWork(runtimeID, protocol.PendingWorkKindHookRead)
-	writeJSON(w, http.StatusOK, hookReadResponse{
+	initiated := hookReadResponse{
 		ID: req.ID, RuntimeID: req.RuntimeID, Status: req.Status,
 		CreatedAt: &req.CreatedAt, UpdatedAt: &req.UpdatedAt,
-	})
+	}
+	if seconds, bounded := hookReadPhaseTimeout(req.Status); bounded {
+		initiated.PhaseTimeoutSeconds = &seconds
+	}
+	writeJSON(w, http.StatusOK, initiated)
 }
 
 // GetHookReadRequest reports lifecycle state and attaches the observation only
@@ -360,6 +387,12 @@ func (h *Handler) GetHookReadRequest(w http.ResponseWriter, r *http.Request) {
 		ID: req.ID, RuntimeID: req.RuntimeID, Status: req.Status,
 		ObservedAt: req.ObservedAt, Error: req.Error,
 		CreatedAt: &req.CreatedAt, UpdatedAt: &req.UpdatedAt,
+	}
+	// Read after the store's own applyHookReadTimeout has run, so the bound
+	// reported is the one still outstanding for the phase the request is in
+	// now, not the one it was in when the poll arrived.
+	if seconds, bounded := hookReadPhaseTimeout(req.Status); bounded {
+		response.PhaseTimeoutSeconds = &seconds
 	}
 	if req.Status == HookReadCompleted {
 		observation, loadErr := h.loadHookSnapshotResponse(r.Context(), rt.ID, rt.Provider)

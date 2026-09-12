@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { Check, Clock, RefreshCw } from "lucide-react";
 import {
   HOOK_READ_POLL_INTERVAL_MS,
-  HOOK_READ_POLL_TIMEOUT_MS,
   type RuntimeHookDiscoveryPhase,
+  type RuntimeHookDiscoveryProgress,
 } from "@multica/core/runtimes";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -19,8 +19,15 @@ import { useT } from "../../../i18n";
  *
  * Every phase shown is one the read actually reported. There is no progress
  * bar and no percentage, because the pipeline produces neither — initiate,
- * wait for a heartbeat, read — and a fraction would be invented. The two
- * numbers on screen are the real poll interval and the real timeout.
+ * wait for a heartbeat, read — and a fraction would be invented.
+ *
+ * Both numbers on screen are measured or reported, never assumed. The poll
+ * interval is this client's own, so it is ours to state. The bound is not:
+ * the server ends the read (`applyHookReadTimeout`) and each phase has its
+ * own bound, so the card renders `phase_timeout_seconds` from the answer it
+ * is already polling and shows nothing when no answer has carried one. The
+ * client's `HOOK_READ_POLL_BACKSTOP_MS` is a guard against a server that
+ * stops answering and is deliberately not shown as a deadline.
  */
 const PHASE_ORDER: RuntimeHookDiscoveryPhase[] = [
   "initiating",
@@ -30,13 +37,14 @@ const PHASE_ORDER: RuntimeHookDiscoveryPhase[] = [
 
 export function HookDiscoveryCard({
   runtimeName,
-  phase,
+  progress,
 }: {
   runtimeName: string;
-  phase: RuntimeHookDiscoveryPhase;
+  progress: RuntimeHookDiscoveryProgress;
 }) {
   const { t } = useT("runtimes");
   const elapsed = useElapsedSeconds();
+  const { phase, phaseTimeoutSeconds } = progress;
   const current = PHASE_ORDER.indexOf(phase);
 
   const label: Record<RuntimeHookDiscoveryPhase, string> = {
@@ -74,11 +82,25 @@ export function HookDiscoveryCard({
             {t(($) => $.hooks.discovery.timing, {
               interval: HOOK_READ_POLL_INTERVAL_MS,
               elapsed,
-              timeout: Math.round(HOOK_READ_POLL_TIMEOUT_MS / 1000),
             })}
+            {phaseTimeoutSeconds === null
+              ? null
+              : ` · ${t(($) => $.hooks.discovery.phase_timeout, {
+                  timeout: phaseTimeoutSeconds,
+                })}`}
           </span>
         </div>
-        <ol className="space-y-2.5 px-4 py-3" role="status" aria-live="polite">
+        {/* The phase list is a list, so it keeps list semantics and carries no
+            live role of its own: its full text never changes, which is why the
+            previous `role="status"` on it announced the three steps once at
+            mount and then nothing as the phase advanced. The announcement is
+            this separate region, holding only the phase currently active. The
+            elapsed seconds stay out of both — a screen reader wants the phase
+            change, not a stopwatch. */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {label[phase]}
+        </p>
+        <ol className="space-y-2.5 px-4 py-3">
           {PHASE_ORDER.map((step, index) => {
             const done = index < current;
             const active = index === current;

@@ -1409,6 +1409,13 @@ export interface RuntimeHookReadRequest {
   // and it is a state to name rather than a read that failed. Backends that
   // predate the field omit it; the parser defaults it to `false`.
   offline: boolean;
+  /**
+   * Seconds the server will give this read's current phase before it ends the
+   * read itself. Absent once the status is terminal, and absent from backends
+   * that predate the field — in both cases there is no number to show, which
+   * is the honest alternative to a client-side guess.
+   */
+  phase_timeout_seconds?: number;
   observed_at?: string;
   sources?: RuntimeHookSource[];
   resolved?: RuntimeHookResolution;

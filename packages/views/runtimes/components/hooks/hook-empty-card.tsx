@@ -20,6 +20,12 @@ import type { HookEmptySummary } from "./hooks-model";
  * It carries the observation date itself rather than relying on the banner
  * above it: "no hooks" is a claim about a moment, and an undated one would
  * read as timeless (snapshot invariant 3).
+ *
+ * The headline is scope-limited, not just the body. A reader takes the
+ * headline away, and a runtime whose local scope was never checked has not
+ * earned "no lifecycle hooks on this runtime" — so the title names what was
+ * read, and the two reasons for zero entries get their own title as well as
+ * their own body.
  */
 export function HookEmptyCard({
   runtimeName,
@@ -40,7 +46,11 @@ export function HookEmptyCard({
           <Webhook aria-hidden="true" />
         </EmptyMedia>
         <EmptyTitle>
-          {t(($) => $.hooks.events.empty_title, { name: runtimeName })}
+          {summary.nothingRead
+            ? t(($) => $.hooks.events.empty_nothing_read_title, {
+                name: runtimeName,
+              })
+            : t(($) => $.hooks.events.empty_title, { name: runtimeName })}
         </EmptyTitle>
         <EmptyDescription>
           {summary.nothingRead

@@ -61,6 +61,11 @@ func TestInitiateHookReadOnlineAlwaysQueuesLiveDiscovery(t *testing.T) {
 	if response.Status != HookReadPending || response.Cached || response.Offline || response.ObservedAt != nil || len(response.Sources) != 0 {
 		t.Fatalf("online initiation served snapshot: %#v", response)
 	}
+	// The first answer already carries the phase bound, so the progress screen
+	// never has to fill the gap with a number of its own.
+	if response.PhaseTimeoutSeconds == nil {
+		t.Fatalf("initiation did not advertise a phase bound: %#v", response)
+	}
 	stored, err := store.Get(context.Background(), response.ID)
 	if err != nil || stored == nil {
 		t.Fatalf("stored request = %#v, %v", stored, err)
@@ -442,5 +447,104 @@ func TestReportHookReadResultPersistsCodexSourcesAndOmissionState(t *testing.T) 
 	}
 	if siblingHash != tomlHash {
 		t.Fatalf("JSON upsert changed TOML sibling hash to %q", siblingHash)
+	}
+}
+
+// R1: the bound the poll response advertises has to be the bound the server
+// actually enforces. The assertion deliberately reads the number out of the
+// response and drives applyHookReadTimeout with it rather than comparing
+// against 30 or 60 — a literal here would pass against a client-side copy of
+// the constant, which is the defect this field exists to remove.
+func TestHookReadResponseAdvertisesTheTimeoutItEnforces(t *testing.T) {
+	h, runtimeID, store, _ := hookReadWebHandler(t, "claude")
+	ctx := context.Background()
+
+	poll := func(requestID string) hookReadResponse {
+		r := withURLParams(newRequestAsUser(testUserID, http.MethodGet, "/api/runtimes/"+runtimeID+"/hooks/"+requestID, nil), "runtimeId", runtimeID, "requestId", requestID)
+		w := httptest.NewRecorder()
+		h.GetHookReadRequest(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+		}
+		return decodeHookReadResponse(t, w)
+	}
+
+	// Pending: the advertised bound runs from CreatedAt.
+	pending, err := store.Create(ctx, runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := poll(pending.ID)
+	if response.Status != HookReadPending || response.PhaseTimeoutSeconds == nil {
+		t.Fatalf("pending response = %#v", response)
+	}
+	pendingBound := time.Duration(*response.PhaseTimeoutSeconds) * time.Second
+
+	now := time.Now()
+	inside := &HookReadRequest{Status: HookReadPending, CreatedAt: now.Add(-pendingBound + time.Second)}
+	if applyHookReadTimeout(inside, now) {
+		t.Fatalf("pending read ended before its advertised %s bound", pendingBound)
+	}
+	outside := &HookReadRequest{Status: HookReadPending, CreatedAt: now.Add(-pendingBound - time.Second)}
+	if !applyHookReadTimeout(outside, now) || outside.Status != HookReadTimedOut {
+		t.Fatalf("pending read survived past its advertised %s bound: %#v", pendingBound, outside)
+	}
+
+	// Running: a different phase with a different bound, measured from the
+	// daemon's own start rather than from the queue. The first request is
+	// retired first so PopPending, which takes the oldest pending one, hands
+	// back the request this half of the test is about.
+	if err := store.Fail(ctx, pending.ID, "retired by the test"); err != nil {
+		t.Fatal(err)
+	}
+	running, err := store.Create(ctx, runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	popped, err := store.PopPending(ctx, runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if popped == nil || popped.ID != running.ID {
+		t.Fatalf("popped %#v, want the request just created", popped)
+	}
+	response = poll(running.ID)
+	if response.Status != HookReadRunning || response.PhaseTimeoutSeconds == nil {
+		t.Fatalf("running response = %#v", response)
+	}
+	runningBound := time.Duration(*response.PhaseTimeoutSeconds) * time.Second
+	if runningBound == pendingBound {
+		t.Fatalf("phases advertise one shared bound (%s); the per-phase claim is then untested", runningBound)
+	}
+
+	startedInside := now.Add(-runningBound + time.Second)
+	inside = &HookReadRequest{Status: HookReadRunning, RunStartedAt: &startedInside}
+	if applyHookReadTimeout(inside, now) {
+		t.Fatalf("running read ended before its advertised %s bound", runningBound)
+	}
+	startedOutside := now.Add(-runningBound - time.Second)
+	outside = &HookReadRequest{Status: HookReadRunning, RunStartedAt: &startedOutside}
+	if !applyHookReadTimeout(outside, now) || outside.Status != HookReadTimedOut {
+		t.Fatalf("running read survived past its advertised %s bound: %#v", runningBound, outside)
+	}
+
+	// Terminal reads have no bound left to advertise, so the screen has no
+	// number to show rather than a stale one.
+	done, err := store.Create(ctx, runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Now().UTC().Truncate(time.Microsecond)
+	if err := h.Queries.UpsertHookStateSnapshot(ctx, db.UpsertHookStateSnapshotParams{
+		RuntimeID: parseUUID(runtimeID), Provider: "claude", Scope: "user", Format: "json",
+		Hooks: []byte(`{}`), DisabledHooks: []byte(`{}`), ObservedAt: pgtype.Timestamptz{Time: observedAt, Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Complete(ctx, done.ID, observedAt); err != nil {
+		t.Fatal(err)
+	}
+	if response := poll(done.ID); response.PhaseTimeoutSeconds != nil {
+		t.Fatalf("completed response advertises a bound: %#v", response)
 	}
 }
