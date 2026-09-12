@@ -12,6 +12,8 @@ export const runtimeKeys = {
   // by-hour now follows the viewer's tz, like the other reports.
   usageByHour: (rid: string, days: number, tz: string) =>
     ["runtimes", "usage", "by-hour", rid, days, tz] as const,
+  hookFires: (rid: string, limit: number) =>
+    ["runtimes", "hook-fires", rid, limit] as const,
 };
 
 // `tz` is the viewer's IANA name — all reports follow the viewer's tz.
@@ -44,6 +46,26 @@ export function runtimeUsageByHourOptions(runtimeId: string, days: number, tz: s
     queryKey: runtimeKeys.usageByHour(runtimeId, days, tz),
     queryFn: () => api.getRuntimeUsageByHour(runtimeId, { days, tz }),
     staleTime: 60 * 1000,
+  });
+}
+
+/**
+ * Hook-fire feed for one runtime, newest first.
+ *
+ * Deliberately NOT tz-parameterized like the usage reports: those bucket by
+ * calendar day server-side, whereas this feed returns raw per-record
+ * timestamps whose meaning depends on the row's own `provenance`. Bucketing
+ * them would blur that distinction, and the screen has to keep it visible.
+ *
+ * Shorter staleTime than the usage reports because this is a live diagnostic
+ * surface — a user checking whether a hook just fired should not be reading a
+ * minute-old answer.
+ */
+export function runtimeHookFiresOptions(runtimeId: string, limit = 100) {
+  return queryOptions({
+    queryKey: runtimeKeys.hookFires(runtimeId, limit),
+    queryFn: () => api.listRuntimeHookFires(runtimeId, { limit }),
+    staleTime: 15 * 1000,
   });
 }
 

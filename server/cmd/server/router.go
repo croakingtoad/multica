@@ -2200,6 +2200,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/local-skills/import/{requestId}", h.GetLocalSkillImportRequest)
 					r.Post("/hooks", h.InitiateHookRead)
 					r.Get("/hooks/{requestId}", h.GetHookReadRequest)
+					// Read-only hook-fire feed (LOCO-135). Authorised by
+					// DP-LOCO-114-03: the capture path keeps zero reads of
+					// hook_fire_history, and this SELECT renders the stored
+					// per-row `provenance` verbatim rather than deriving it.
+					r.Get("/hook-fires", h.ListHookFires)
 					r.Delete("/", h.DeleteAgentRuntime)
 					// Confirmed variant of DELETE: unbind every agent bound to
 					// this runtime (they keep their configuration and chats and

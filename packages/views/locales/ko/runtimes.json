@@ -449,5 +449,55 @@
     "table_cache_r": "캐시 R",
     "table_cache_w": "캐시 W",
     "no_data": "아직 사용량 데이터가 없습니다"
+  },
+  "hook_fires": {
+    "title": "훅 실행 기록",
+    "subtitle": "최신순. 공급자가 보고한 실행 1건이 1행입니다.",
+    "loading": "훅 실행 기록을 불러오는 중…",
+    "error": "훅 실행 기록을 불러올 수 없습니다.",
+    "empty": "이 런타임에 기록된 훅 실행이 아직 없습니다.",
+    "empty_hint": "Multica는 작업의 구조화된 출력 스트림에서 공급자가 실행을 보고할 때 기록합니다. 기록이 비어 있다는 것은 보고된 내용이 없다는 뜻이며, 훅이 실행되지 않았다는 뜻은 아닙니다.",
+    "truncated": "최근 {{count}}건을 표시합니다. 더 오래된 실행은 이 페이지에 없습니다.",
+    "how_we_know_title": "Multica가 이 실행을 아는 근거",
+    "how_we_know_intro": "근거는 공급자 단위가 아니라 행 단위로 표시합니다. 이 런타임의 기록에는 아래 두 가지가 섞일 수 있으며, 표시되는 시각의 의미도 각각 다릅니다.",
+    "mix_summary": "이 페이지에서는 {{total}}행 중 {{inferred}}행이 호스트가 기록한 시각이 아니라 Multica의 수신 시각을 나타냅니다.",
+    "counts_debug_log": "호스트 기록 시각 {{count}}건",
+    "counts_inferred": "수신 시각 {{count}}건",
+    "counts_unrecognized": "인식할 수 없음 {{count}}건",
+    "stored_value_label": "저장된 근거 값",
+    "execution_ref_note": "실행마다 새로 발급되는 실행 단위 참조입니다. 설정된 훅의 식별자가 아니며, 실행을 묶는 기준도 아닙니다.",
+    "provenance": {
+      "debug_log": {
+        "label": "호스트 기록 시각",
+        "meaning": "호스트의 디버그 로그가 이 실행을 기록했고 Multica가 고유하게 대응시켰습니다. 표시되는 시각은 호스트가 기록한 시각입니다."
+      },
+      "inferred": {
+        "label": "수신 시각",
+        "meaning": "Multica는 공급자의 구조화된 스트림을 통해 이 훅이 실행된 사실과 결과, 종료 코드를 알고 있습니다. 다만 호스트에 대응시킬 타임스탬프가 없었기 때문에, 표시되는 시각은 Multica가 기록을 수신한 시각입니다. 호스트 기록 시각보다 분명히 약한 주장입니다."
+      },
+      "unrecognized": {
+        "label": "인식할 수 없음",
+        "meaning": "이 기록의 근거 값은 현재 버전의 Multica가 인식하지 못하는 값입니다. 따라서 표시되는 시각의 의미에 대해 Multica는 아무것도 주장하지 않습니다."
+      }
+    },
+    "outcome": {
+      "success": "성공",
+      "failure": "실패",
+      "blocked": "차단",
+      "skipped": "건너뜀",
+      "unknown": "알 수 없음",
+      "unrecognized": "인식할 수 없음"
+    },
+    "unknown_cause": {
+      "spawn_ambiguous": "종료 코드 {{code}}: 공급자가 실행 실패를 나타내는 필드를 제공하지 않기 때문에, 실행된 뒤 {{code}}으로 종료된 훅과 셸이 아예 시작하지 못한 훅을 구별할 수 없습니다.",
+      "no_exit_code": "공급자가 오류를 보고했지만 종료 코드가 없어 결과를 더 좁힐 수 없습니다.",
+      "provider_state": "공급자가 이 훅을 \"{{state}}\"(으)로 보고했습니다. 예를 들어 시간이 초과된 훅이 여기에 해당합니다.",
+      "unclassified": "공급자의 보고에는 이 결과를 분류할 만한 정보가 없었습니다."
+    },
+    "row": {
+      "hook_unknown": "핸들러 미보고",
+      "exit_code": "종료 코드 {{code}}",
+      "execution_ref": "실행 참조"
+    }
   }
 }

@@ -44,6 +44,7 @@ import { availabilityConfig, workloadConfig } from "../../agents/presence";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UsageSection } from "./usage-section";
+import { HookFiresSection } from "./hook-fires-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { DeleteRuntimeProfileDialog } from "./delete-runtime-profile-dialog";
 import { runtimeRowLabel } from "./runtime-machines";
@@ -196,6 +197,9 @@ export function RuntimeDetail({
               daemonShort={daemonShort}
             />
             {canReadRuntime && <UsageSection runtime={runtime} />}
+            {/* Hook fires (LOCO-135). Same read gate as usage: this is
+                per-runtime diagnostic history, not configuration. */}
+            {canReadRuntime && <HookFiresSection runtime={runtime} />}
           </div>
 
           {/* Right rail: serving agents + diagnostics */}

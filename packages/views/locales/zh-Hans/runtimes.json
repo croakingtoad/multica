@@ -449,5 +449,55 @@
     "table_cache_r": "缓存读",
     "table_cache_w": "缓存写",
     "no_data": "还没有使用数据"
+  },
+  "hook_fires": {
+    "title": "钩子触发记录",
+    "subtitle": "按时间倒序。供应商报告的每次触发对应一行。",
+    "loading": "正在加载钩子触发记录…",
+    "error": "无法加载钩子触发记录。",
+    "empty": "这个运行时还没有钩子触发记录。",
+    "empty_hint": "当供应商在任务的结构化输出流中报告一次触发时，Multica 才会记录。记录为空说明没有任何报告，而不是说明没有钩子运行过。",
+    "truncated": "显示最近 {{count}} 条触发记录，更早的不在本页。",
+    "how_we_know_title": "Multica 如何得知这些钩子运行过",
+    "how_we_know_intro": "来源按行标注，而不是按供应商标注。这个运行时的记录可能同时包含以下两种，两者所显示的时间含义并不相同。",
+    "mix_summary": "本页 {{total}} 行中有 {{inferred}} 行显示的是 Multica 的接收时间，而不是主机记录的时间。",
+    "counts_debug_log": "主机记录时间 {{count}} 条",
+    "counts_inferred": "接收时间 {{count}} 条",
+    "counts_unrecognized": "无法识别 {{count}} 条",
+    "stored_value_label": "存储的来源值",
+    "execution_ref_note": "这是按次执行的引用，每次触发都会变化。它不是已配置钩子的身份标识，也不能用来把多次触发归为一组。",
+    "provenance": {
+      "debug_log": {
+        "label": "主机记录时间",
+        "meaning": "主机自己的调试日志记录了这次执行，并且 Multica 唯一地匹配到了它。所显示的时间就是主机记录的时间。"
+      },
+      "inferred": {
+        "label": "接收时间",
+        "meaning": "Multica 从供应商自己的结构化流中得知这个钩子运行过，也知道它的结果和退出码。但主机没有可供匹配的时间戳，因此所显示的时间是 Multica 收到这条记录的时间——这是一个明显弱于主机记录时间的说法。"
+      },
+      "unrecognized": {
+        "label": "无法识别",
+        "meaning": "这条记录的来源值是当前版本 Multica 无法识别的值，因此 Multica 不对所显示时间的含义作任何声明。"
+      }
+    },
+    "outcome": {
+      "success": "成功",
+      "failure": "失败",
+      "blocked": "已阻止",
+      "skipped": "已跳过",
+      "unknown": "未知",
+      "unrecognized": "无法识别"
+    },
+    "unknown_cause": {
+      "spawn_ambiguous": "退出码 {{code}}：供应商没有暴露启动失败字段，因此无法区分「运行后以 {{code}} 退出的钩子」和「shell 根本没有启动它」。",
+      "no_exit_code": "供应商报告了错误但没有退出码，因此无法进一步判定结果。",
+      "provider_state": "供应商把这个钩子报告为「{{state}}」——例如超时的钩子会落到这里。",
+      "unclassified": "供应商的报告不足以对这个结果进行归类。"
+    },
+    "row": {
+      "hook_unknown": "未报告处理程序",
+      "exit_code": "退出码 {{code}}",
+      "execution_ref": "执行引用"
+    }
   }
 }
