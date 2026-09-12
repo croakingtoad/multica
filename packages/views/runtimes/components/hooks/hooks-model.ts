@@ -336,7 +336,10 @@ export type HookAnswerKind =
   | "asking"
   /** The server has no observation to answer from. */
   | "unobserved"
-  /** The request failed, or the payload was a parse refusal. */
+  /**
+   * The request failed, the payload was a parse refusal, or the answer
+   * arrived with no observation date behind it.
+   */
   | "failed"
   /** The server answered that it cannot answer this event. */
   | "unanswerable"
@@ -408,6 +411,20 @@ export function hookAnswerView(
       error: data.error ?? null,
     };
   }
+  if (!observedAt) {
+    // An answer with no observation date is a refusal too, and for the same
+    // reason as the branch above: counts and sets would be a claim about a
+    // host state nobody dated. Today's server cannot produce this body, but
+    // an installed client meets newer backends, so the shape is refused here
+    // rather than trusted. The tab's own observation is deliberately not
+    // borrowed as a date — it is a different read.
+    return {
+      ...IDLE_ANSWER,
+      kind: "failed",
+      cached,
+      error: data.error ?? data.answer.error ?? null,
+    };
+  }
   const mismatch = Boolean(tabObservedAt && observedAt && tabObservedAt !== observedAt);
   if (data.answer.answerable !== true) {
     return {
@@ -440,13 +457,20 @@ export interface HookAnswerTotals {
   providerSkips: number;
   /** Live configuration this value does not satisfy. */
   notMatched: number;
-  /** Live configuration the provider will not act on for this event at all. */
+  /**
+   * Live configuration the provider's pre-matcher filter excluded before any
+   * matcher ran. Not every entry the provider will not act on: one it parses
+   * and skips is in `matched`, counted as `providerSkips`.
+   */
   neverRuns: number;
   /** Parked or disabled, so the provider never sees it. */
   excluded: number;
   /**
-   * Matched entries the provider's own cross-source rule collapsed. A
-   * deduplication of one definition seen twice, never one source winning.
+   * Definitions the provider's own cross-source rule absorbed: the extra
+   * copies, not the rows that survived them. Three byte-identical copies of
+   * one handler are one row carrying three sources and two absorbed
+   * definitions, and two is the number the chip states. A deduplication of
+   * one definition seen more than once, never one source winning.
    */
   collapsed: number;
 }
@@ -477,7 +501,10 @@ export function hookAnswerTotals(
     notMatched: notMatched.length,
     neverRuns: neverRuns.length,
     excluded: excluded.length,
-    collapsed: matched.filter((entry) => entry.sources.length > 1).length,
+    collapsed: matched.reduce(
+      (total, entry) => total + Math.max(0, entry.sources.length - 1),
+      0,
+    ),
   };
 }
 
@@ -486,16 +513,4 @@ export function hookAnsweredEvents(entries: RuntimeHookEntry[]): string[] {
   return [...new Set(entries.map((entry) => entry.event))].sort((left, right) =>
     left.localeCompare(right),
   );
-}
-
-/**
- * Whether supplying a value can change this event's answer at all. An event
- * whose matcher the provider parses and discards fires on every occurrence,
- * so the value is inert — said out loud rather than left for the reader to
- * infer from an answer that never changes.
- */
-export function hookAnswerValueIsInert(
-  answer: RuntimeHookEventAnswer | null,
-): boolean {
-  return answer?.value_role === "ignored";
 }

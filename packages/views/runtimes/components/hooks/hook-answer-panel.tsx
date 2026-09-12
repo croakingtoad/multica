@@ -38,6 +38,7 @@ import {
   ScopeBadge,
   TrustBadge,
   hookToneClass,
+  hookToneIconClass,
   useHookValueRoleLabel,
   useNeverRunsReason,
 } from "./hook-state-badges";
@@ -269,10 +270,18 @@ function AnswerBody({
 
   if (view.kind === "unobserved" || view.kind === "failed") {
     const unobserved = view.kind === "unobserved";
+    // The same shape the badge tones took: destructive text on a destructive
+    // tint is 4.36:1 in the light theme, under the 4.5:1 floor for this size.
+    // The tint and the border stay as the recognition cue, the icon keeps the
+    // state colour at the 3:1 non-text floor, and the title moves to
+    // foreground — 18.21:1 light, 16.01:1 dark.
     return (
       <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3">
-        <p className="flex items-start gap-2 text-label font-medium text-destructive">
-          <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <p className="flex items-start gap-2 text-label font-medium text-foreground">
+          <CircleAlert
+            aria-hidden="true"
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive"
+          />
           {unobserved
             ? t(($) => $.hooks.answer.unobserved_title)
             : t(($) => $.hooks.answer.failed_title)}
@@ -541,16 +550,12 @@ function AnswerSet({
             open ? "" : "-rotate-90",
           )}
         />
+        {/* The tone's icon colour comes from hook-state-badges, not from a
+            pair written out here: one measured source per tone is what keeps
+            the badges and this heading saying the same thing. */}
         <Icon
           aria-hidden="true"
-          className={cn(
-            "h-3.5 w-3.5 shrink-0",
-            tone === "ok"
-              ? "text-success"
-              : tone === "bad"
-                ? "text-destructive"
-                : "text-muted-foreground",
-          )}
+          className={cn("h-3.5 w-3.5 shrink-0", hookToneIconClass(tone))}
         />
         <span className="text-label font-medium">{title}</span>
         <Badge variant="ghost" className="bg-muted text-muted-foreground">

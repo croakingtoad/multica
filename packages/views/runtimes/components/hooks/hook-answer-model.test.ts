@@ -8,7 +8,6 @@ import type {
 import {
   hookAnsweredEvents,
   hookAnswerTotals,
-  hookAnswerValueIsInert,
   hookAnswerView,
 } from "./hooks-model";
 
@@ -172,6 +171,52 @@ describe("hookAnswerView", () => {
     expect(view.kind).toBe("unanswerable");
   });
 
+  it("treats an answer with no observation date as a refusal", () => {
+    // Acceptance rule: nothing renders as "these fire" without a value and a
+    // dated observation behind it. Today's server returns early with no
+    // answer when it has no date, but an installed client meets newer
+    // backends, so the undated body is refused here rather than trusted.
+    const view = hookAnswerView(
+      result({ observed_at: undefined, answer: answer({ matched: [entry()] }) }),
+      false,
+      null,
+      "Bash",
+      "2026-09-12T12:00:00Z",
+    );
+    expect(view.kind).toBe("failed");
+    expect(view.answer).toBeNull();
+    expect(view.observedAt).toBeNull();
+  });
+
+  it("does not borrow the tab's observation to date an undated answer", () => {
+    const view = hookAnswerView(
+      result({ observed_at: undefined }),
+      false,
+      null,
+      "Bash",
+      "2026-09-12T12:00:00Z",
+    );
+    expect(view.observedAt).toBeNull();
+    expect(view.observationMismatch).toBe(false);
+  });
+
+  it("refuses an undated unanswerable body too", () => {
+    // Both answer branches take the same date rule: unanswerable is still a
+    // statement about a host state somebody read.
+    const view = hookAnswerView(
+      result({
+        observed_at: undefined,
+        answer: answer({ answerable: false, error: "compile claude matcher failed" }),
+      }),
+      false,
+      null,
+      "Bash",
+      null,
+    );
+    expect(view.kind).toBe("failed");
+    expect(view.error).toBe("compile claude matcher failed");
+  });
+
   it("carries the answer's own observation date and cached flag", () => {
     const view = hookAnswerView(
       result({ cached: true, observed_at: "2026-09-11T09:00:00Z" }),
@@ -304,6 +349,28 @@ describe("hookAnswerTotals", () => {
     expect(totals.collapsed).toBe(1);
   });
 
+  it("counts the definitions absorbed, not the rows that absorbed them", () => {
+    // Three byte-identical copies are one row carrying three sources, and two
+    // definitions were folded away. Two is what the chip says.
+    const totals = hookAnswerTotals(
+      answer({
+        matched: [
+          entry({
+            hook_id: "a",
+            sources: [
+              { scope: "user", format: "json", kind: "settings" },
+              { scope: "project", format: "json", kind: "settings" },
+              { scope: "local", format: "json", kind: "settings" },
+            ],
+          }),
+          entry({ hook_id: "b", matcher: "Write" }),
+        ],
+      }),
+    );
+    expect(totals.configured).toBe(2);
+    expect(totals.collapsed).toBe(2);
+  });
+
   it("is all zeroes for a null answer rather than throwing", () => {
     expect(hookAnswerTotals(null).configured).toBe(0);
     expect(hookAnswerTotals(null).runs).toBe(0);
@@ -323,14 +390,5 @@ describe("hookAnsweredEvents", () => {
 
   it("is empty when nothing is configured", () => {
     expect(hookAnsweredEvents([])).toEqual([]);
-  });
-});
-
-describe("hookAnswerValueIsInert", () => {
-  it("is true only where the provider discards the matcher", () => {
-    expect(hookAnswerValueIsInert(answer({ value_role: "ignored" }))).toBe(true);
-    expect(hookAnswerValueIsInert(answer({ value_role: "tool_name" }))).toBe(false);
-    expect(hookAnswerValueIsInert(answer({ value_role: "unspecified" }))).toBe(false);
-    expect(hookAnswerValueIsInert(null)).toBe(false);
   });
 });

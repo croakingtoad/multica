@@ -123,6 +123,9 @@ type EventAnswer struct {
 	// Matched is the answer: live entries whose matcher Value satisfies. Each
 	// one still carries both axes, because a matched entry can still be one
 	// the provider will not act on or one whose Codex trust is unconfirmed.
+	// An entry the provider parses and skips — an unsupported handler type,
+	// say — stays here, carrying Effectiveness never_runs; membership of this
+	// set is about the matcher, not about whether the provider acts.
 	// Claude's cross-source collapse has been applied, so a handler defined
 	// byte-identically in two settings files appears once, carrying both
 	// sources — a deduplication of one definition seen twice, not one source
@@ -131,8 +134,11 @@ type EventAnswer struct {
 	// NotMatched is live configuration this Value does not satisfy. It is
 	// here so the answer is legible as a selection from the configured set.
 	NotMatched []ProjectedEntry `json:"not_matched"`
-	// NeverRuns is live configuration the provider will not act on for this
-	// event at all, whatever Value is.
+	// NeverRuns is live configuration the provider's own pre-matcher filter
+	// excludes before any matcher is evaluated: Claude entries carrying an if
+	// pre-filter on an event where Claude evaluates no permission rules. It is
+	// not every entry the provider will not act on — one it parses and skips
+	// for any later reason stays in Matched with the never-runs axis on it.
 	NeverRuns []ProjectedEntry `json:"never_runs"`
 	// ConfigurationExcluded is parked or disabled, so the provider never sees
 	// it. Configuration, not effectiveness: each entry keeps its own verdict.

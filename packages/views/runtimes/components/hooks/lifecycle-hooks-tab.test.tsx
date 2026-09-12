@@ -710,6 +710,7 @@ describe("LifecycleHooksTab — what actually runs", () => {
     const text = container.textContent ?? "";
 
     expect(text).toMatch(/1 of 1 handlers configured on this event run/);
+    expect(text).toMatch(/1 duplicate definition absorbed/);
     expect(text).toMatch(/one definition seen twice and runs once/);
     expect(text).toMatch(/neither displaces the other/);
     expect(text).not.toMatch(/shadow|overrid|precedence|\bwins\b/i);
@@ -760,6 +761,29 @@ describe("LifecycleHooksTab — what actually runs", () => {
 
     expect(text).toMatch(/Observed at 2026-09-11T09:00:00Z/);
     expect(text).toMatch(/They are two different reads/);
+  });
+
+  it("renders an answer with no observation date as a refusal, with no counts and no sets", () => {
+    // The acceptance rule this panel exists for: nothing renders as "these
+    // fire" without a value and a dated observation behind it. The body is
+    // one a newer backend could send — a full answer, no date. Scoped to the
+    // panel, because the tab's own rows and banner have their own dated read.
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }, { observed_at: undefined }),
+    );
+    const panel = container.querySelector(
+      'section[aria-labelledby="hook-answer-title"]',
+    );
+    const text = panel?.textContent ?? "";
+
+    expect(text).toMatch(/The answer did not come back/);
+    // No headline count, no count chip, no set.
+    expect(text).not.toMatch(/handlers configured on this event run/);
+    expect(text).not.toMatch(/will run/);
+    expect(text).not.toMatch(/Matched by this value/);
+    // And no observation line under it: the answer has no date to show.
+    expect(text).not.toMatch(/Answered from the read/);
+    expect(text).not.toMatch(/Answered from the last known state/);
   });
 
   it("reports an unobserved runtime rather than an event with nothing on it", () => {

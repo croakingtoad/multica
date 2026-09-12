@@ -493,7 +493,7 @@
       "count_runs": "{{count}} 件が実行",
       "count_trust_unconfirmed": "{{count}} 件は Multica が確認できない信頼状態",
       "count_provider_skips": "{{count}} 件はマッチしたがプロバイダーがスキップ",
-      "count_collapsed": "{{count}} 件は複数のソースで定義",
+      "count_collapsed_other": "重複定義 {{count}} 件を統合",
       "unordered": "これは順序ではなく集合です。どちらのプロバイダーも実行順序を公表していないため、Multica は実行順序を把握しておらず、順序も表示しません。",
       "provider_note_claude": "Claude にはフックごとの無効化も信頼ゲートもありません。マッチした登録済みハンドラーは実行され、それを取り除く手段は元のファイルを編集することだけです。",
       "provider_note_codex": "Codex には Claude にない 2 つのゲートがあります。管理対象外のフックは Codex 自身の /hooks ブラウザーで個別に無効化でき、フックはその正確な定義がホスト上で信頼されている間だけ実行されます。",

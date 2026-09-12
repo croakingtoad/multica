@@ -493,7 +493,7 @@
       "count_runs": "{{count}} 个会运行",
       "count_trust_unconfirmed": "{{count}} 个的信任状态 Multica 无法确认",
       "count_provider_skips": "{{count}} 个已匹配但被提供方跳过",
-      "count_collapsed": "{{count}} 个在多个来源中定义",
+      "count_collapsed_other": "已合并 {{count}} 个重复定义",
       "unordered": "这是一个集合，不是序列。两个提供方都未公布执行顺序，因此 Multica 不知道它们的运行顺序，也不展示任何顺序。",
       "provider_note_claude": "Claude 既没有逐个钩子的停用开关，也没有信任门。匹配上的已注册处理器就会运行，唯一能移除它的办法是编辑它所在的文件。",
       "provider_note_codex": "Codex 有两道 Claude 没有的门：非托管钩子可以在它自己的 /hooks 浏览器里逐个关闭，而钩子只在其确切定义于宿主上受信任期间运行。",
