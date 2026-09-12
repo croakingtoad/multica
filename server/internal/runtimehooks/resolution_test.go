@@ -80,7 +80,11 @@ func TestMergeMatchedDeduplicatesClaudeSettingsHandlersAcrossFiles(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := resolution.MergeMatched(resolution.EntriesForEvent("PreToolUse"))
+	matched, err := resolution.MatchEvent("PreToolUse", "Bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := resolution.MergeMatched(matched.Matched)
 	if len(runs) != 1 {
 		t.Fatalf("runs = %#v, want one deduplicated handler", runs)
 	}
@@ -101,7 +105,11 @@ func TestMergeMatchedKeepsClaudePluginAndSkillCopiesSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := resolution.MergeMatched(resolution.EntriesForEvent("Stop"))
+	matched, err := resolution.MatchEvent("Stop", "anything")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := resolution.MergeMatched(matched.Matched)
 	if len(runs) != 3 {
 		t.Fatalf("runs = %#v, want separate settings, plugin, and skill copies", runs)
 	}

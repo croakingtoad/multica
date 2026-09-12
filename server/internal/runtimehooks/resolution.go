@@ -64,10 +64,20 @@ type ResolvedSource struct {
 	DisabledHooks json.RawMessage
 }
 
+// ResolvedHookMember is one configured entry that reached a resolved row.
+// Source, Matcher and HookID are the original entry's identity; Occurrence
+// distinguishes byte-identical duplicates within one source.
+type ResolvedHookMember struct {
+	HookID     string
+	Occurrence int
+	Matcher    string
+	Source     SourceRef
+}
+
 // ResolvedHook is one handler contributed by one or more source files.
 // Sources has multiple elements only when Claude deduplicates the same
-// settings handler across files. The source slice carries provenance, not an
-// execution sequence.
+// settings handler across files. Members preserves every original entry's
+// identity; neither slice carries an execution sequence.
 type ResolvedHook struct {
 	HookID     string
 	Occurrence int
@@ -75,6 +85,7 @@ type ResolvedHook struct {
 	Matcher    string
 	Handler    json.RawMessage
 	Sources    []SourceRef
+	Members    []ResolvedHookMember
 
 	groupIndex   int
 	handlerIndex int
@@ -173,7 +184,9 @@ func (r Resolution) EntriesForEvent(event string) []ResolvedHook {
 // MergeMatched applies the providers' cross-source execution rule to a set of
 // entries whose matchers already matched. Codex keeps every source copy.
 // Claude runs an identical settings handler once across settings files while
-// retaining each plugin and skill copy as a separate run.
+// retaining each plugin and skill copy as a separate run. Every collapsed
+// entry remains in Members with its original identity. Because the input is
+// already matched, that member set is scoped to the queried value.
 func (r Resolution) MergeMatched(matched []ResolvedHook) []ResolvedHook {
 	if r.Provider != ProviderClaude {
 		return cloneEntries(matched)
@@ -202,6 +215,7 @@ func (r Resolution) MergeMatched(matched []ResolvedHook) []ResolvedHook {
 			continue
 		}
 		merged[found].Sources = append(merged[found].Sources, entry.Sources...)
+		merged[found].Members = append(merged[found].Members, entry.Members...)
 	}
 	return merged
 }
@@ -237,9 +251,13 @@ func parseEntries(source SourceRef, raw json.RawMessage) ([]ResolvedHook, []Unre
 				canonicalKey := string(canonicalMatcher) + "\x00" + string(canonical)
 				occurrence := occurrences[canonicalKey]
 				occurrences[canonicalKey]++
+				hookID := hookID(source, event, group.Matcher, canonical, occurrence)
 				entries = append(entries, ResolvedHook{
-					HookID: hookID(source, event, group.Matcher, canonical, occurrence), Occurrence: occurrence,
+					HookID: hookID, Occurrence: occurrence,
 					Event: event, Matcher: group.Matcher, Handler: canonical, Sources: []SourceRef{source},
+					Members: []ResolvedHookMember{{
+						HookID: hookID, Occurrence: occurrence, Matcher: group.Matcher, Source: source,
+					}},
 					groupIndex: groupIndex, handlerIndex: handlerIndex,
 				})
 			}
@@ -331,6 +349,7 @@ func cloneEntries(entries []ResolvedHook) []ResolvedHook {
 func cloneEntry(entry ResolvedHook) ResolvedHook {
 	entry.Handler = cloneRaw(entry.Handler)
 	entry.Sources = append([]SourceRef(nil), entry.Sources...)
+	entry.Members = append([]ResolvedHookMember(nil), entry.Members...)
 	return entry
 }
 

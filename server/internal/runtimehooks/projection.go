@@ -20,24 +20,36 @@ type ProjectedSourceRef struct {
 	Name   string `json:"name,omitempty"`
 }
 
+// ProjectedHookMember preserves one configured entry's identity after a
+// provider collapses several matching entries into one run.
+type ProjectedHookMember struct {
+	HookID       string             `json:"hook_id"`
+	Occurrence   int                `json:"occurrence"`
+	Matcher      string             `json:"matcher"`
+	MatcherKind  string             `json:"matcher_kind"`
+	MatcherError string             `json:"matcher_error,omitempty"`
+	Source       ProjectedSourceRef `json:"source"`
+}
+
 // ProjectedEntry keeps Configuration and Effectiveness as two fields on
 // purpose. A hook can be parked and matcher-ineligible at once, and one
 // collapsed badge cannot say that unparking it still would not make it run.
 type ProjectedEntry struct {
-	HookID          string               `json:"hook_id"`
-	Event           string               `json:"event"`
-	Matcher         string               `json:"matcher"`
-	MatcherKind     string               `json:"matcher_kind"`
-	MatcherError    string               `json:"matcher_error,omitempty"`
-	Handler         json.RawMessage      `json:"handler"`
-	HandlerType     string               `json:"handler_type"`
-	Sources         []ProjectedSourceRef `json:"sources"`
-	Configuration   string               `json:"configuration"`
-	ParkedAt        string               `json:"parked_at,omitempty"`
-	Effectiveness   string               `json:"effectiveness"`
-	NeverRunsReason string               `json:"never_runs_reason,omitempty"`
-	Trust           string               `json:"trust"`
-	TrustCaveat     string               `json:"trust_caveat,omitempty"`
+	HookID          string                `json:"hook_id"`
+	Event           string                `json:"event"`
+	Matcher         string                `json:"matcher"`
+	MatcherKind     string                `json:"matcher_kind"`
+	MatcherError    string                `json:"matcher_error,omitempty"`
+	Handler         json.RawMessage       `json:"handler"`
+	HandlerType     string                `json:"handler_type"`
+	Sources         []ProjectedSourceRef  `json:"sources"`
+	Members         []ProjectedHookMember `json:"members"`
+	Configuration   string                `json:"configuration"`
+	ParkedAt        string                `json:"parked_at,omitempty"`
+	Effectiveness   string                `json:"effectiveness"`
+	NeverRunsReason string                `json:"never_runs_reason,omitempty"`
+	Trust           string                `json:"trust"`
+	TrustCaveat     string                `json:"trust_caveat,omitempty"`
 }
 
 // ProjectedUnrecognizedKey is a source key that was not an event's
@@ -134,6 +146,7 @@ func projectEntry(provider Provider, state RunState) ProjectedEntry {
 		Handler:         state.Hook.Handler,
 		HandlerType:     state.Hook.HandlerType(),
 		Sources:         make([]ProjectedSourceRef, 0, len(state.Hook.Sources)),
+		Members:         make([]ProjectedHookMember, 0, len(state.Hook.Members)),
 		Configuration:   string(state.Configuration),
 		ParkedAt:        state.ParkedAt,
 		Effectiveness:   string(state.Effectiveness),
@@ -145,6 +158,14 @@ func projectEntry(provider Provider, state RunState) ProjectedEntry {
 	}
 	for _, ref := range state.Hook.Sources {
 		entry.Sources = append(entry.Sources, projectSourceRef(ref))
+	}
+	for _, member := range state.Hook.Members {
+		memberMatcher := EvaluateMatcher(provider, state.Hook.Event, member.Matcher)
+		entry.Members = append(entry.Members, ProjectedHookMember{
+			HookID: member.HookID, Occurrence: member.Occurrence,
+			Matcher: member.Matcher, MatcherKind: string(memberMatcher.Kind),
+			MatcherError: memberMatcher.Error, Source: projectSourceRef(member.Source),
+		})
 	}
 	return entry
 }

@@ -15,7 +15,7 @@ import {
   Shuffle,
   TriangleAlert,
 } from "lucide-react";
-import type { RuntimeHookEntry } from "@multica/core/types";
+import type { RuntimeHookEntry, RuntimeHookMember } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -34,7 +34,6 @@ import { handlerTarget } from "./hook-event-section";
 import {
   ConfigurationBadge,
   EffectivenessBadge,
-  MatcherKindNote,
   ScopeBadge,
   TrustBadge,
   hookToneClass,
@@ -45,6 +44,7 @@ import {
 import {
   type HookAnswerTotals,
   type HookAnswerView,
+  hookAnswerMembers,
   hookAnswerTotals,
 } from "./hooks-model";
 
@@ -105,7 +105,7 @@ export function HookAnswerPanel({
   timeAgo: (value: string) => string;
   tabObservedAt: string | null;
   notCheckedSources: number;
-  onSelectEntry: (entry: RuntimeHookEntry) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
   const totals = useMemo(() => hookAnswerTotals(view.answer), [view.answer]);
@@ -239,7 +239,7 @@ function AnswerBody({
   tabObservedAt: string | null;
   notCheckedSources: number;
   onReask: () => void;
-  onSelectEntry: (entry: RuntimeHookEntry) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
 
@@ -527,7 +527,7 @@ function AnswerSet({
   entries: RuntimeHookEntry[];
   tone: "ok" | "bad" | "muted";
   defaultOpen?: boolean;
-  onSelectEntry: (entry: RuntimeHookEntry) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
   const [open, setOpen] = useState(defaultOpen);
@@ -585,11 +585,12 @@ function AnswerEntry({
   onSelectEntry,
 }: {
   entry: RuntimeHookEntry;
-  onSelectEntry: (entry: RuntimeHookEntry) => void;
+  onSelectEntry: (entry: RuntimeHookEntry, member: RuntimeHookMember) => void;
 }) {
   const { t } = useT("runtimes");
   const neverRunsReason = useNeverRunsReason(entry);
   const target = handlerTarget(entry);
+  const members = hookAnswerMembers(entry);
 
   return (
     <li className="rounded-md border bg-background p-2.5">
@@ -601,30 +602,16 @@ function AnswerEntry({
               t(($) => $.hooks.table.no_target)}
           </p>
           <p className="text-caption text-muted-foreground">
-            {t(($) => $.hooks.answer.entry_matcher, {
-              matcher: entry.matcher || t(($) => $.hooks.table.matcher_all),
+            {t(($) => $.hooks.answer.entry_handler, {
               type: entry.handler_type || t(($) => $.hooks.detail.handler_type_undeclared),
             })}
           </p>
-          <MatcherKindNote entry={entry} />
           {neverRunsReason ? (
             <p className="flex items-start gap-1 text-caption text-destructive">
               <CircleSlash aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
               <span className="min-w-0 break-words">{neverRunsReason}</span>
             </p>
           ) : null}
-          {/* Every source, none of them marked as the winner. More than one is
-              a handler seen twice and run once, not a layer taking priority. */}
-          <div className="flex flex-wrap gap-1.5">
-            {entry.sources.map((source) => (
-              <ScopeBadge
-                key={`${source.scope}:${source.format}:${source.kind}:${source.name ?? ""}`}
-                scope={source.scope}
-                format={source.format}
-                writable={source.scope === "user"}
-              />
-            ))}
-          </div>
         </div>
         {/* Both axes, side by side, on the answer too. A matched entry the
             provider skips shows a matched membership and a never-runs verdict
@@ -635,16 +622,51 @@ function AnswerEntry({
           <TrustBadge entry={entry} />
         </div>
       </div>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="mt-1 h-7"
-        onClick={() => onSelectEntry(entry)}
-        title={t(($) => $.hooks.table.open_details)}
-      >
-        {t(($) => $.hooks.table.actions)}
-      </Button>
+      {members.length > 1 ? (
+        <p className="mt-2 text-caption text-muted-foreground">
+          {t(($) => $.hooks.answer.members_for_value, { count: members.length })}
+        </p>
+      ) : null}
+      <ul className="mt-2 space-y-1.5">
+        {members.map((member) => (
+          <li
+            key={`${member.source.scope}:${member.source.format}:${member.source.kind}:${member.source.name ?? ""}:${member.hook_id}:${member.occurrence}`}
+            className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-surface-border px-2 py-1.5"
+          >
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <ScopeBadge
+                  scope={member.source.scope}
+                  format={member.source.format}
+                  writable={member.source.scope === "user"}
+                />
+                <span className="font-mono text-caption text-muted-foreground">
+                  {member.source.kind}
+                  {member.source.name ? `:${member.source.name}` : ""}
+                </span>
+                <span className="text-caption text-muted-foreground">
+                  {t(($) => $.hooks.answer.member_matcher, {
+                    matcher: member.matcher || t(($) => $.hooks.table.matcher_all),
+                  })}
+                </span>
+              </div>
+              <p className="font-mono text-caption break-all text-muted-foreground">
+                {member.hook_id}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7"
+              onClick={() => onSelectEntry(entry, member)}
+              title={t(($) => $.hooks.table.open_details)}
+            >
+              {t(($) => $.hooks.table.actions)}
+            </Button>
+          </li>
+        ))}
+      </ul>
     </li>
   );
 }

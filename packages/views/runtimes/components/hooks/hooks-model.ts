@@ -2,6 +2,7 @@ import type {
   RuntimeHookEntry,
   RuntimeHookEventAnswer,
   RuntimeHookEventAnswerResult,
+  RuntimeHookMember,
   RuntimeHookReadRequest,
   RuntimeHookSource,
 } from "@multica/core/types";
@@ -533,6 +534,24 @@ export interface HookAnswerTotals {
 }
 
 /**
+ * The server-projected identities represented by one answer row. The fallback
+ * only keeps an installed client usable with an older backend: it repeats the
+ * surviving row identity once per source because that wire shape did not
+ * retain the identities the backend discarded.
+ */
+export function hookAnswerMembers(entry: RuntimeHookEntry): RuntimeHookMember[] {
+  if (entry.members && entry.members.length > 0) return entry.members;
+  return entry.sources.map((source) => ({
+    hook_id: entry.hook_id,
+    occurrence: 0,
+    matcher: entry.matcher,
+    matcher_kind: entry.matcher_kind,
+    matcher_error: entry.matcher_error,
+    source,
+  }));
+}
+
+/**
  * Each entry lands in exactly one of the answer's four sets, and within the
  * matched set each entry has exactly one effectiveness, so nothing below
  * counts an entry twice — including a parked entry that would also never run,
@@ -559,7 +578,7 @@ export function hookAnswerTotals(
     neverRuns: neverRuns.length,
     excluded: excluded.length,
     collapsed: matched.reduce(
-      (total, entry) => total + Math.max(0, entry.sources.length - 1),
+      (total, entry) => total + Math.max(0, hookAnswerMembers(entry).length - 1),
       0,
     ),
   };

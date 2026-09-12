@@ -3278,6 +3278,72 @@ describe("ApiClient lifecycle hook reads", () => {
     expect(result.answer?.error).toMatch(/compile claude matcher/);
   });
 
+  it("parses every projected member identity on a collapsed answer row", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      provider: "claude",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      answer: {
+        provider: "claude",
+        event: "PreToolUse",
+        value: "Bash",
+        value_role: "tool_name",
+        answerable: true,
+        matched: [{
+          hook_id: "sha256:user",
+          event: "PreToolUse",
+          matcher: "Bash",
+          matcher_kind: "exact",
+          handler: { type: "command", command: "guard.sh" },
+          handler_type: "command",
+          sources: [
+            { scope: "user", format: "json", kind: "settings" },
+            { scope: "project", format: "json", kind: "settings" },
+          ],
+          members: [
+            {
+              hook_id: "sha256:user",
+              occurrence: 0,
+              matcher: "Bash",
+              matcher_kind: "exact",
+              source: { scope: "user", format: "json", kind: "settings" },
+            },
+            {
+              hook_id: "sha256:project",
+              occurrence: 1,
+              matcher: "Bash|Read",
+              matcher_kind: "regex",
+              source: { scope: "project", format: "json", kind: "settings" },
+            },
+          ],
+          configuration: "live",
+          effectiveness: "will_run",
+          trust: "not_applicable",
+        }],
+        not_matched: [],
+        never_runs: [],
+        configuration_excluded: [],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .answerHookEvent("rt-1", "PreToolUse", "Bash");
+
+    expect(result.answer?.matched[0]?.members).toEqual([
+      expect.objectContaining({
+        hook_id: "sha256:user",
+        occurrence: 0,
+        matcher: "Bash",
+      }),
+      expect.objectContaining({
+        hook_id: "sha256:project",
+        occurrence: 1,
+        matcher: "Bash|Read",
+      }),
+    ]);
+  });
+
   // A malformed answer must not parse into an answerable one: an empty
   // matched set would then read as "nothing fires", which is the exact
   // statement this endpoint exists not to make.

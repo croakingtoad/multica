@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type {
   AgentRuntime,
@@ -987,7 +987,7 @@ describe("LifecycleHooksTab — what actually runs", () => {
     expect(screen.getAllByText("Will never run").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders a cross-source collapse as one entry with both sources", () => {
+  it("renders every value-scoped member and opens the second member's detail", () => {
     const { container } = mountWithAnswer(
       answerResult({
         matched: [
@@ -995,6 +995,22 @@ describe("LifecycleHooksTab — what actually runs", () => {
             sources: [
               { scope: "user", format: "json", kind: "settings" },
               { scope: "project", format: "json", kind: "settings" },
+            ],
+            members: [
+              {
+                hook_id: "sha256:user",
+                occurrence: 0,
+                matcher: "Bash",
+                matcher_kind: "exact",
+                source: { scope: "user", format: "json", kind: "settings" },
+              },
+              {
+                hook_id: "sha256:project",
+                occurrence: 1,
+                matcher: "Bash|Read",
+                matcher_kind: "regex",
+                source: { scope: "project", format: "json", kind: "settings" },
+              },
             ],
           }),
         ],
@@ -1006,8 +1022,30 @@ describe("LifecycleHooksTab — what actually runs", () => {
     expect(text).toMatch(/1 duplicate definition absorbed/);
     expect(text).toMatch(/one definition seen twice and runs once/);
     expect(text).toMatch(/neither displaces the other/);
+    expect(text).toMatch(
+      /For the value you asked about, 2 configured entries reached this handler; it runs once\./,
+    );
+    expect(text).toMatch(/Matcher Bash/);
+    expect(text).toMatch(/Matcher Bash\|Read/);
+    expect(text).toMatch(/sha256:user/);
+    expect(text).toMatch(/sha256:project/);
     expect(text).not.toMatch(/shadow|overrid|precedence|\bwins\b/i);
     expect(screen.getAllByText("project/json").length).toBeGreaterThanOrEqual(1);
+
+    const panel = container.querySelector(
+      'section[aria-labelledby="hook-answer-title"]',
+    );
+    if (!(panel instanceof HTMLElement)) throw new Error("answer panel not found");
+    const actions = within(panel).getAllByRole("button", { name: "Details" });
+    const secondAction = actions[1];
+    if (!secondAction) throw new Error("second member action not found");
+    fireEvent.click(secondAction);
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("sha256:project")).toBeInTheDocument();
+    expect(within(dialog).getByText("Bash|Read")).toBeInTheDocument();
+    expect(within(dialog).getByText("Occurrence").parentElement?.textContent).toMatch(/1/);
+    expect(within(dialog).getByText("project/json")).toBeInTheDocument();
   });
 
   it("teaches Claude's absent per-hook disable and trust gate", () => {

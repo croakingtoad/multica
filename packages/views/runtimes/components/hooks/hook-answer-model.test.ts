@@ -330,7 +330,7 @@ describe("hookAnswerTotals", () => {
     expect(totals.trustUnconfirmed).toBe(1);
   });
 
-  it("counts a cross-source collapse as one entry with two sources", () => {
+  it("counts a cross-source collapse as one row with two projected members", () => {
     const totals = hookAnswerTotals(
       answer({
         matched: [
@@ -339,6 +339,22 @@ describe("hookAnswerTotals", () => {
             sources: [
               { scope: "user", format: "json", kind: "settings" },
               { scope: "project", format: "json", kind: "settings" },
+            ],
+            members: [
+              {
+                hook_id: "a",
+                occurrence: 0,
+                matcher: "Bash",
+                matcher_kind: "exact",
+                source: { scope: "user", format: "json", kind: "settings" },
+              },
+              {
+                hook_id: "b",
+                occurrence: 0,
+                matcher: "Bash|Read",
+                matcher_kind: "regex",
+                source: { scope: "project", format: "json", kind: "settings" },
+              },
             ],
           }),
         ],
@@ -350,7 +366,7 @@ describe("hookAnswerTotals", () => {
   });
 
   it("counts the definitions absorbed, not the rows that absorbed them", () => {
-    // Three byte-identical copies are one row carrying three sources, and two
+    // Three byte-identical copies are one row carrying three members, and two
     // definitions were folded away. Two is what the chip says.
     const totals = hookAnswerTotals(
       answer({
@@ -362,6 +378,13 @@ describe("hookAnswerTotals", () => {
               { scope: "project", format: "json", kind: "settings" },
               { scope: "local", format: "json", kind: "settings" },
             ],
+            members: ["user", "project", "local"].map((scope) => ({
+              hook_id: scope,
+              occurrence: 0,
+              matcher: "Bash",
+              matcher_kind: "exact" as const,
+              source: { scope, format: "json", kind: "settings" },
+            })),
           }),
           entry({ hook_id: "b", matcher: "Write" }),
         ],

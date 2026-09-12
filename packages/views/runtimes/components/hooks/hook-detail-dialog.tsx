@@ -1,7 +1,7 @@
 "use client";
 
 import { Lock } from "lucide-react";
-import type { RuntimeHookEntry } from "@multica/core/types";
+import type { RuntimeHookEntry, RuntimeHookMember } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -60,10 +60,12 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export function HookDetailDialog({
   entry,
+  member,
   provider,
   onOpenChange,
 }: {
   entry: RuntimeHookEntry | null;
+  member?: RuntimeHookMember;
   provider: string;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -73,6 +75,7 @@ export function HookDetailDialog({
   return (
     <HookDetailBody
       entry={entry}
+      member={member}
       provider={provider}
       onOpenChange={onOpenChange}
     />
@@ -81,17 +84,30 @@ export function HookDetailDialog({
 
 function HookDetailBody({
   entry,
+  member,
   provider,
   onOpenChange,
 }: {
   entry: RuntimeHookEntry;
+  member?: RuntimeHookMember;
   provider: string;
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useT("runtimes");
-  const matcher = useMatcherKindLabel(entry);
-  const neverRunsReason = useNeverRunsReason(entry);
-  const trust = useTrustLabel(entry);
+  const detailEntry = member
+    ? {
+        ...entry,
+        hook_id: member.hook_id,
+        matcher: member.matcher,
+        matcher_kind: member.matcher_kind,
+        matcher_error: member.matcher_error,
+        sources: [member.source],
+        members: [member],
+      }
+    : entry;
+  const matcher = useMatcherKindLabel(detailEntry);
+  const neverRunsReason = useNeverRunsReason(detailEntry);
+  const trust = useTrustLabel(detailEntry);
   const fields = handlerFieldRows(entry.handler);
 
   return (
@@ -113,13 +129,13 @@ function HookDetailBody({
               <span className="text-caption text-muted-foreground">
                 {t(($) => $.hooks.configuration.label)}
               </span>
-              <ConfigurationBadge entry={entry} />
+              <ConfigurationBadge entry={detailEntry} />
               <Separator orientation="vertical" className="h-4" />
               <span className="text-caption text-muted-foreground">
                 {t(($) => $.hooks.effectiveness.label)}
               </span>
-              <EffectivenessBadge entry={entry} />
-              <TrustBadge entry={entry} />
+              <EffectivenessBadge entry={detailEntry} />
+              <TrustBadge entry={detailEntry} />
             </div>
             <p className="text-caption text-muted-foreground">
               {t(($) => $.hooks.effectiveness.independent_note)}
@@ -158,18 +174,18 @@ function HookDetailBody({
             <Row label={t(($) => $.hooks.matcher.label)}>
               <div className="space-y-1">
                 <span className="font-mono">
-                  {entry.matcher || t(($) => $.hooks.table.matcher_all)}
+                  {detailEntry.matcher || t(($) => $.hooks.table.matcher_all)}
                 </span>
                 <div>
-                  <MatcherKindNote entry={entry} />
+                  <MatcherKindNote entry={detailEntry} />
                 </div>
                 {matcher.hint ? (
                   <p className="text-caption text-muted-foreground">{matcher.hint}</p>
                 ) : null}
-                {entry.matcher_error ? (
+                {detailEntry.matcher_error ? (
                   <p className="font-mono text-caption text-muted-foreground">
                     {t(($) => $.hooks.matcher.compiler_message, {
-                      message: entry.matcher_error,
+                      message: detailEntry.matcher_error,
                     })}
                   </p>
                 ) : null}
@@ -183,9 +199,14 @@ function HookDetailBody({
             </Row>
             <Row label={t(($) => $.hooks.detail.hook_id)}>
               <span className="font-mono text-caption text-muted-foreground">
-                {entry.hook_id}
+                {detailEntry.hook_id}
               </span>
             </Row>
+            {member ? (
+              <Row label={t(($) => $.hooks.detail.occurrence)}>
+                <span className="font-mono">{member.occurrence}</span>
+              </Row>
+            ) : null}
           </dl>
 
           <div className="space-y-2">
@@ -212,14 +233,14 @@ function HookDetailBody({
               {t(($) => $.hooks.detail.sources_title)}
             </h3>
             <p className="text-caption text-muted-foreground">
-              {entry.sources.length > 1
+              {detailEntry.sources.length > 1
                 ? t(($) => $.hooks.detail.source_shared_hint, {
-                    count: entry.sources.length,
+                    count: detailEntry.sources.length,
                   })
                 : t(($) => $.hooks.detail.source_single_hint)}
             </p>
             <ul className="space-y-2">
-              {entry.sources.map((source) => {
+              {detailEntry.sources.map((source) => {
                 const path = hookSourcePath(provider, source.scope, source.format);
                 return (
                   <li

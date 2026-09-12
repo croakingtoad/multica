@@ -240,10 +240,9 @@ func AnswerEvent(provider Provider, expected []SourceRef, observed []ObservedSou
 }
 
 // answerEntries projects hooks through their own RunState, so both axes come
-// from the resolution layer and none is re-derived here. A hook merged across
-// sources keeps its merged source list; every other identity field is equal
-// across the merged members by construction, and MergeMatched only ever
-// merges live Claude settings entries, whose trust is not applicable.
+// from the resolution layer and none is re-derived here. A merged row keeps
+// every member's original identity; MergeMatched only combines live Claude
+// settings entries, whose configuration, effectiveness and trust agree.
 func answerEntries(provider Provider, byHookID map[string]RunState, hooks []ResolvedHook) []ProjectedEntry {
 	entries := make([]ProjectedEntry, 0, len(hooks))
 	for _, hook := range hooks {
@@ -252,7 +251,21 @@ func answerEntries(provider Provider, byHookID map[string]RunState, hooks []Reso
 			continue
 		}
 		state.Hook = hook
-		entries = append(entries, projectEntry(provider, state))
+		entry := projectEntry(provider, state)
+		entry.Members = entry.Members[:0]
+		complete := true
+		for _, member := range hook.Members {
+			memberState, ok := byHookID[member.HookID]
+			if !ok {
+				complete = false
+				break
+			}
+			projected := projectEntry(provider, memberState)
+			entry.Members = append(entry.Members, projected.Members...)
+		}
+		if complete {
+			entries = append(entries, entry)
+		}
 	}
 	return entries
 }

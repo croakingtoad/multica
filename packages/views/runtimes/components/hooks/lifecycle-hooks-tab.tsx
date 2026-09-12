@@ -3,7 +3,11 @@
 import { useMemo, useState } from "react";
 import { RefreshCw, Search, TriangleAlert, Webhook } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentRuntime, RuntimeHookEntry } from "@multica/core/types";
+import type {
+  AgentRuntime,
+  RuntimeHookEntry,
+  RuntimeHookMember,
+} from "@multica/core/types";
 import {
   runtimeHookAnswerKeys,
   runtimeHookAnswerOptions,
@@ -80,7 +84,10 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   const supported = providerSupportsHooks(runtime.provider);
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [selected, setSelected] = useState<RuntimeHookEntry | null>(null);
+  const [selected, setSelected] = useState<{
+    entry: RuntimeHookEntry;
+    member?: RuntimeHookMember;
+  } | null>(null);
   // Phase plus the bound the server reported for it. Held together because
   // the card renders them together and neither is derivable from the other.
   const [progress, setProgress] = useState<RuntimeHookDiscoveryProgress>({
@@ -263,7 +270,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
                     timeAgo={timeAgo}
                     tabObservedAt={view.observedAt}
                     notCheckedSources={totals.notCheckedSources}
-                    onSelectEntry={setSelected}
+                    onSelectEntry={(entry, member) => setSelected({ entry, member })}
                   />
                 ) : null}
                 <ScopeSourcesCard scopes={scopes} />
@@ -386,7 +393,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
                                 [group.event]: !previous[group.event],
                               }))
                             }
-                            onSelect={setSelected}
+                            onSelect={(entry) => setSelected({ entry })}
                           />
                         ))}
                       </div>
@@ -419,7 +426,8 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
       </div>
 
       <HookDetailDialog
-        entry={selected}
+        entry={selected?.entry ?? null}
+        member={selected?.member}
         provider={runtime.provider}
         onOpenChange={(open) => {
           if (!open) setSelected(null);

@@ -262,6 +262,9 @@ func (r Resolution) claudeParkedHooks() (map[string]parkedRunState, error) {
 				Hook: ResolvedHook{
 					HookID: hookID, Event: value.Event, Matcher: value.Matcher,
 					Handler: canonical, Sources: []SourceRef{source.Source},
+					Members: []ResolvedHookMember{{
+						HookID: hookID, Matcher: value.Matcher, Source: source.Source,
+					}},
 				},
 				ParkedAt: value.ParkedAt,
 			}

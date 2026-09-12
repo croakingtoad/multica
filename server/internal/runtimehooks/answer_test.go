@@ -259,6 +259,81 @@ func TestAnswerEventCollapsesIdenticalClaudeSettingsHandlerOnce(t *testing.T) {
 	}
 }
 
+// The answer endpoint, rather than MergeMatched alone, preserves one member
+// triple for every configured entry that reached a row. Differing matchers
+// still collapse across settings; plugin and skill copies remain separate.
+func TestAnswerEventCarriesEveryCollapsedMemberIdentity(t *testing.T) {
+	handler := `{"type":"command","command":"format.sh"}`
+	settings := func(scope, matcher string) (SourceRef, ObservedSource) {
+		ref := SourceRef{Scope: scope, Format: "json"}
+		hooks := `{"PreToolUse":[{"matcher":"` + matcher + `","hooks":[` + handler + `]}]}`
+		return ref, foundSource(ref, hooks)
+	}
+	extension := func(kind SourceKind, name string) (SourceRef, ObservedSource) {
+		ref := SourceRef{Kind: kind, Name: name, Format: "json"}
+		hooks := `{"PreToolUse":[{"matcher":"Bash","hooks":[` + handler + `]}]}`
+		return ref, foundSource(ref, hooks)
+	}
+
+	userBashRef, userBash := settings("user", "Bash")
+	projectBashRef, projectBash := settings("project", "Bash")
+	projectWideRef, projectWide := settings("project", "Bash|Read")
+	pluginRef, plugin := extension(SourcePlugin, "formatter")
+	skillRef, skill := extension(SourceSkill, "review")
+
+	tests := []struct {
+		name      string
+		expected  []SourceRef
+		observed  []ObservedSource
+		wantRows  int
+		wantInput int
+	}{
+		{
+			name: "settings with differing matchers", expected: []SourceRef{userBashRef, projectWideRef},
+			observed: []ObservedSource{userBash, projectWide}, wantRows: 1, wantInput: 2,
+		},
+		{
+			name: "settings with identical matchers", expected: []SourceRef{userBashRef, projectBashRef},
+			observed: []ObservedSource{userBash, projectBash}, wantRows: 1, wantInput: 2,
+		},
+		{
+			name: "plugin copy", expected: []SourceRef{userBashRef, pluginRef},
+			observed: []ObservedSource{userBash, plugin}, wantRows: 2, wantInput: 2,
+		},
+		{
+			name: "skill copy", expected: []SourceRef{userBashRef, skillRef},
+			observed: []ObservedSource{userBash, skill}, wantRows: 2, wantInput: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			answer := AnswerEvent(ProviderClaude, tt.expected, tt.observed, "PreToolUse", "Bash")
+			if len(answer.Matched) != tt.wantRows {
+				t.Fatalf("matched rows = %d, want %d: %+v", len(answer.Matched), tt.wantRows, answer.Matched)
+			}
+			triples := map[string]struct{}{}
+			memberCount := 0
+			for _, row := range answer.Matched {
+				if len(row.Members) == 0 {
+					t.Fatalf("row has no members: %+v", row)
+				}
+				for _, member := range row.Members {
+					key := member.Source.Scope + "\x00" + member.Source.Format + "\x00" +
+						member.Source.Kind + "\x00" + member.Source.Name + "\x00" +
+						member.Matcher + "\x00" + member.HookID
+					triples[key] = struct{}{}
+					memberCount++
+				}
+			}
+			if memberCount != tt.wantInput || len(triples) != tt.wantInput {
+				t.Fatalf("member triples = %d distinct / %d total, want %d input entries: %+v",
+					len(triples), memberCount, tt.wantInput, answer.Matched)
+			}
+		})
+	}
+}
+
 // "Higher-precedence config layers don't replace lower-precedence hooks"
 // (https://developers.openai.com/codex/hooks, "Where Codex looks for hooks").
 // Codex keeps every source copy, so the same handler in two layers answers as
@@ -376,7 +451,8 @@ func TestEventAnswerJSONCarriesAnswerabilityAndEverySet(t *testing.T) {
 	}
 	for _, field := range []string{
 		`"answerable":true`, `"value":"Bash"`, `"value_role":"tool_name"`,
-		`"matched":[`, `"not_matched":[`, `"never_runs":[`, `"configuration_excluded":[`,
+		`"matched":[`, `"members":[`, `"occurrence":0`, `"not_matched":[`,
+		`"never_runs":[`, `"configuration_excluded":[`,
 	} {
 		if !strings.Contains(string(encoded), field) {
 			t.Fatalf("answer JSON missing %s: %s", field, encoded)

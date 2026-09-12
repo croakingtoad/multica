@@ -3483,6 +3483,15 @@ export const RuntimeHookSourceRefSchema = z.object({
   name: z.string().optional(),
 }).loose();
 
+export const RuntimeHookMemberSchema = z.object({
+  hook_id: z.string(),
+  occurrence: z.number().int().nonnegative(),
+  matcher: z.string().default(""),
+  matcher_kind: z.string().default("all"),
+  matcher_error: z.string().optional(),
+  source: RuntimeHookSourceRefSchema,
+}).loose();
+
 export const RuntimeHookEntrySchema = z.object({
   hook_id: z.string(),
   event: z.string().default(""),
@@ -3492,6 +3501,7 @@ export const RuntimeHookEntrySchema = z.object({
   handler: z.record(z.string(), z.unknown()).default({}),
   handler_type: z.string().default(""),
   sources: z.array(RuntimeHookSourceRefSchema).default([]),
+  members: z.array(RuntimeHookMemberSchema).default([]),
   configuration: z.string().default("live"),
   parked_at: z.string().optional(),
   effectiveness: z.string().default("will_run"),

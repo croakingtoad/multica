@@ -92,6 +92,7 @@ export type {
   RuntimeHookTrust,
   RuntimeHookMatcherKind,
   RuntimeHookSourceRef,
+  RuntimeHookMember,
   RuntimeHookEntry,
   RuntimeHookUnrecognizedKey,
   RuntimeHookResolution,

@@ -1363,6 +1363,15 @@ export interface RuntimeHookSourceRef {
   name?: string;
 }
 
+export interface RuntimeHookMember {
+  hook_id: string;
+  occurrence: number;
+  matcher: string;
+  matcher_kind: RuntimeHookMatcherKind;
+  matcher_error?: string;
+  source: RuntimeHookSourceRef;
+}
+
 export interface RuntimeHookEntry {
   hook_id: string;
   event: string;
@@ -1374,6 +1383,10 @@ export interface RuntimeHookEntry {
   // More than one source means the providers' own cross-file deduplication
   // matched the handler. It is provenance, never an execution order.
   sources: RuntimeHookSourceRef[];
+  // One identity per configured entry that reached this row. A newer backend
+  // always sends it; optionality keeps installed clients compatible with
+  // observations cached by a backend that predates member projection.
+  members?: RuntimeHookMember[];
   configuration: RuntimeHookConfiguration;
   parked_at?: string;
   effectiveness: RuntimeHookEffectiveness;
