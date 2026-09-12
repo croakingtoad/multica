@@ -69,6 +69,9 @@ func validateHookFire(fire protocol.HookFire, now time.Time) (validatedHookFire,
 	if err != nil {
 		return validatedHookFire{}, fmt.Errorf("fired_at must be an RFC3339 timestamp")
 	}
+	if firedAt.Before(time.Unix(0, 0)) {
+		return validatedHookFire{}, fmt.Errorf("fired_at must not predate the Unix epoch")
+	}
 	if firedAt.After(now.Add(maxHookObservationFutureSkew)) {
 		return validatedHookFire{}, fmt.Errorf("fired_at must not be more than 5 minutes in the future")
 	}

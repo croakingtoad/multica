@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,34 +113,26 @@ func claudeResponseDebugOutput(response agent.ClaudeHookResponse) string {
 }
 
 func claudeFireSignature(hookName, event, outcome, output string) string {
+	// Claude's structured hook_response retains the command's trailing newline,
+	// while its debug logger removes it. Preserve every other byte so the join
+	// remains exact rather than becoming a fuzzy output match.
+	output = strings.TrimRight(output, "\n")
 	return hookName + "\x00" + event + "\x00" + outcome + "\x00" + output
 }
 
-func claudeHookNeverRan(response agent.ClaudeHookResponse, firstLine string) bool {
-	lower := strings.ToLower(strings.TrimSpace(firstLine))
-	if strings.HasPrefix(lower, "failed to run:") ||
-		strings.HasPrefix(lower, "error occurred while executing hook command:") ||
-		strings.Contains(lower, "executable not found in $path:") {
-		return true
-	}
-	if response.ExitCode == nil || (*response.ExitCode != 126 && *response.ExitCode != 127) {
-		return false
-	}
-	return strings.Contains(lower, ": not found") ||
-		strings.Contains(lower, "command not found") ||
-		strings.Contains(lower, ": permission denied") ||
-		strings.Contains(lower, ": cannot execute")
-}
-
-func hookFireOutcome(response agent.ClaudeHookResponse, firstLine string) string {
+func hookFireOutcome(response agent.ClaudeHookResponse) string {
 	switch response.Outcome {
 	case "success":
 		return "success"
 	case "error":
-		if claudeHookNeverRan(response, firstLine) {
-			return "skipped"
-		}
 		if response.ExitCode == nil {
+			return "unknown"
+		}
+		// Claude 2.1.269's hook_response has no distinct spawn-failure field.
+		// Exit 126/127 can mean either that the shell could not start the hook or
+		// that a hook which did run returned the same conventional status. Without
+		// structured execution evidence, neither "skipped" nor "failure" is true.
+		if *response.ExitCode == 126 || *response.ExitCode == 127 {
 			return "unknown"
 		}
 		return "failure"
@@ -213,9 +206,23 @@ func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookF
 		key := claudeFireSignature(record.hookName, record.event, record.debugOutcome, record.output)
 		bySignature[key] = append(bySignature[key], record)
 	}
+	for key := range bySignature {
+		slices.SortFunc(bySignature[key], func(a, b claudeDebugFire) int {
+			return a.firedAt.Compare(b.firedAt)
+		})
+	}
 
 	fires := make([]protocol.HookFire, 0)
-	for _, response := range c.responseSnapshot() {
+	responses := c.responseSnapshot()
+	// Concurrent hook responses need not arrive in debug-log order. Sort by the
+	// provider's per-execution ID so identical-output fires always receive the
+	// same timestamp assignment regardless of callback scheduling.
+	slices.SortFunc(responses, func(a, b agent.ClaudeHookResponse) int {
+		aKey := claudeFireSignature(a.HookName, a.HookEvent, a.Outcome, claudeResponseDebugOutput(a)) + "\x00" + a.HookID
+		bKey := claudeFireSignature(b.HookName, b.HookEvent, b.Outcome, claudeResponseDebugOutput(b)) + "\x00" + b.HookID
+		return strings.Compare(aKey, bKey)
+	})
+	for _, response := range responses {
 		if response.HookID == "" || response.HookName == "" || response.HookEvent == "" {
 			continue
 		}
@@ -238,7 +245,7 @@ func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookF
 		if err != nil {
 			return nil, fmt.Errorf("encode Claude hook fire spec: %w", err)
 		}
-		outcome := hookFireOutcome(response, record.firstLine)
+		outcome := hookFireOutcome(response)
 		detailValue := map[string]any{
 			"debug_outcome": response.Outcome,
 			"message":       truncateHookFireDetail(record.firstLine),
@@ -274,6 +281,11 @@ func (d *Daemon) finishClaudeHookFireCapture(capture *claudeHookFireCapture, run
 	if capture == nil {
 		return
 	}
+	defer func() {
+		if err := os.Remove(capture.debugPath); err != nil && !os.IsNotExist(err) {
+			d.logger.Warn("Claude hook fire debug log cleanup failed", "runtime_id", runtimeID, "task_id", taskID, "error", err)
+		}
+	}()
 	fires, err := capture.read(runtimeID, taskID)
 	if err != nil {
 		d.logger.Warn("Claude hook fire debug log unreadable", "runtime_id", runtimeID, "task_id", taskID, "error", err)

@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,26 +26,40 @@ func writeClaudeHookDebugLog(t *testing.T, capture *claudeHookFireCapture, conte
 	}
 }
 
+func capturedClaudeHookResponse(t *testing.T, raw string) agent.ClaudeHookResponse {
+	t.Helper()
+	var response struct {
+		HookID    string `json:"hook_id"`
+		HookName  string `json:"hook_name"`
+		HookEvent string `json:"hook_event"`
+		Output    string `json:"output"`
+		Stdout    string `json:"stdout"`
+		Stderr    string `json:"stderr"`
+		ExitCode  *int   `json:"exit_code"`
+		Outcome   string `json:"outcome"`
+	}
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		t.Fatal(err)
+	}
+	return agent.ClaudeHookResponse{
+		HookID: response.HookID, HookName: response.HookName, HookEvent: response.HookEvent,
+		Output: response.Output, Stdout: response.Stdout, Stderr: response.Stderr,
+		ExitCode: response.ExitCode, Outcome: response.Outcome,
+	}
+}
+
 func TestClaudeHookFireCaptureJoinsStructuredResponsesToRealDebugRecords(t *testing.T) {
 	capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
-	writeClaudeHookDebugLog(t, capture, `2026-09-12T12:00:00.123Z [DEBUG] "Hook PostToolUse:Write (PostToolUse) success:\nhook-ran"
-2026-09-12T12:00:01.123Z [DEBUG] "Hook Stop (Stop) error:\nqc-boom"
-2026-09-12T12:00:02.123Z [DEBUG] "Hook Stop (Stop) error:\n/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found"
+	// These are byte-for-byte debug records and hook_response events captured
+	// from Claude Code 2.1.269. In particular, the stream fields retain the
+	// trailing newline that the debug logger removes.
+	writeClaudeHookDebugLog(t, capture, `2026-09-12T12:23:27.192Z [DEBUG] "Hook Stop (Stop) error:\n/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found"
+2026-09-12T12:23:27.193Z [DEBUG] "Hook Stop (Stop) error:\nqc-boom ran and failed"
+2026-09-12T12:23:27.193Z [DEBUG] "Hook Stop (Stop) success:\nqc-probe-ok output line"
 `)
-	capture.observe(agent.ClaudeHookResponse{
-		HookID: "stream-success", HookName: "PostToolUse:Write", HookEvent: "PostToolUse",
-		Stdout: "hook-ran", Output: "hook-ran", ExitCode: intPointer(0), Outcome: "success",
-	})
-	capture.observe(agent.ClaudeHookResponse{
-		HookID: "stream-failure", HookName: "Stop", HookEvent: "Stop",
-		Stderr: "qc-boom", Output: "qc-boom", ExitCode: intPointer(1), Outcome: "error",
-	})
-	capture.observe(agent.ClaudeHookResponse{
-		HookID: "stream-never-ran", HookName: "Stop", HookEvent: "Stop",
-		Stderr:   "/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found",
-		Output:   "/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found",
-		ExitCode: intPointer(127), Outcome: "error",
-	})
+	capture.observe(capturedClaudeHookResponse(t, `{"type":"system","subtype":"hook_response","hook_id":"2d39d186-6234-4653-9706-87ed9c5419e8","hook_name":"Stop","hook_event":"Stop","output":"/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found\n","stdout":"","stderr":"/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found\n","exit_code":127,"outcome":"error","uuid":"a9f9199c-0c7c-4016-9a08-8e644d198793","session_id":"4b2f06b7-5408-4c3b-b3d5-7c491ab1558d"}`))
+	capture.observe(capturedClaudeHookResponse(t, `{"type":"system","subtype":"hook_response","hook_id":"2d0822cf-e5b2-49ca-a537-eaf1758c0cc6","hook_name":"Stop","hook_event":"Stop","output":"qc-boom ran and failed\n","stdout":"","stderr":"qc-boom ran and failed\n","exit_code":1,"outcome":"error","uuid":"c52fc2c2-fc11-43f4-9cfd-9a58b60a6ab3","session_id":"4b2f06b7-5408-4c3b-b3d5-7c491ab1558d"}`))
+	capture.observe(capturedClaudeHookResponse(t, `{"type":"system","subtype":"hook_response","hook_id":"52ed1f27-9596-4028-8180-ed6c4096e4e5","hook_name":"Stop","hook_event":"Stop","output":"qc-probe-ok output line\n","stdout":"qc-probe-ok output line\n","stderr":"","exit_code":0,"outcome":"success","uuid":"a34f3aaa-1c6c-462b-9bf5-447b363ff592","session_id":"4b2f06b7-5408-4c3b-b3d5-7c491ab1558d"}`))
 
 	fires, err := capture.read("runtime-1", "task-1")
 	if err != nil {
@@ -52,17 +68,20 @@ func TestClaudeHookFireCaptureJoinsStructuredResponsesToRealDebugRecords(t *test
 	if len(fires) != 3 {
 		t.Fatalf("fires = %#v, want three joined observations", fires)
 	}
-	wantOutcomes := []string{"success", "failure", "skipped"}
-	wantIDs := []string{"stream-success", "stream-failure", "stream-never-ran"}
+	wantOutcomes := map[string]string{
+		"2d39d186-6234-4653-9706-87ed9c5419e8": "unknown",
+		"2d0822cf-e5b2-49ca-a537-eaf1758c0cc6": "failure",
+		"52ed1f27-9596-4028-8180-ed6c4096e4e5": "success",
+	}
 	for i, fire := range fires {
-		if fire.Outcome != wantOutcomes[i] || fire.HookID != wantIDs[i] {
-			t.Errorf("fire %d = %#v, want outcome %q and hook id %q", i, fire, wantOutcomes[i], wantIDs[i])
+		if fire.Outcome != wantOutcomes[fire.HookID] {
+			t.Errorf("fire %d = %#v, want outcome %q", i, fire, wantOutcomes[fire.HookID])
 		}
 		if len(fire.HookSpec) == 0 || fire.FiredAt == "" || fire.ID == "" {
 			t.Errorf("fire %d omitted observed identity or debug timestamp: %#v", i, fire)
 		}
 	}
-	if got := string(fires[0].HookSpec); got != `{"hook_name":"PostToolUse:Write","type":"claude_hook_response"}` {
+	if got := string(fires[0].HookSpec); got != `{"hook_name":"Stop","type":"claude_hook_response"}` {
 		t.Fatalf("hook spec = %s", got)
 	}
 }
@@ -85,6 +104,35 @@ func TestClaudeHookFireCapturePersistsMatcherInsensitiveMultipleHandlers(t *test
 	}
 	if len(fires) != 3 {
 		t.Fatalf("matcher-insensitive fires = %#v, want all three", fires)
+	}
+}
+
+func TestClaudeHookFireCaptureBreaksIdenticalOutputTiesDeterministically(t *testing.T) {
+	read := func(order []string) map[string]string {
+		capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
+		writeClaudeHookDebugLog(t, capture, `2026-09-12T12:00:02Z [DEBUG] "Hook Stop (Stop) success:\nsame-output"
+2026-09-12T12:00:01Z [DEBUG] "Hook Stop (Stop) success:\nsame-output"
+`)
+		for _, id := range order {
+			capture.observe(agent.ClaudeHookResponse{
+				HookID: id, HookName: "Stop", HookEvent: "Stop",
+				Stdout: "same-output\n", Output: "same-output\n", ExitCode: intPointer(0), Outcome: "success",
+			})
+		}
+		fires, err := capture.read("runtime-1", "task-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make(map[string]string, len(fires))
+		for _, fire := range fires {
+			got[fire.HookID] = fire.FiredAt
+		}
+		return got
+	}
+	forward := read([]string{"stream-b", "stream-a"})
+	reverse := read([]string{"stream-a", "stream-b"})
+	if forward["stream-a"] != reverse["stream-a"] || forward["stream-b"] != reverse["stream-b"] {
+		t.Fatalf("tie-break changed with response arrival order: forward=%v reverse=%v", forward, reverse)
 	}
 }
 
@@ -128,24 +176,65 @@ func TestClaudeHookFireCaptureDoesNotAttributeAbsentHandlerToSnapshot(t *testing
 
 func TestHookFireOutcomeDoesNotCallUnknownErrorFailure(t *testing.T) {
 	tests := []struct {
-		name      string
-		response  agent.ClaudeHookResponse
-		firstLine string
-		want      string
+		name     string
+		response agent.ClaudeHookResponse
+		want     string
 	}{
 		{
-			name: "real shell command not found", response: agent.ClaudeHookResponse{Outcome: "error", ExitCode: intPointer(127)},
-			firstLine: "/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found", want: "skipped",
+			name: "ambiguous shell command not found", response: agent.ClaudeHookResponse{Outcome: "error", ExitCode: intPointer(127)},
+			want: "unknown",
 		},
-		{name: "missing exit status", response: agent.ClaudeHookResponse{Outcome: "error"}, firstLine: "unclassified", want: "unknown"},
-		{name: "executed failure", response: agent.ClaudeHookResponse{Outcome: "error", ExitCode: intPointer(1)}, firstLine: "qc-boom", want: "failure"},
+		{name: "ambiguous cannot execute", response: agent.ClaudeHookResponse{Outcome: "error", ExitCode: intPointer(126)}, want: "unknown"},
+		{name: "missing exit status", response: agent.ClaudeHookResponse{Outcome: "error"}, want: "unknown"},
+		{name: "executed failure", response: agent.ClaudeHookResponse{Outcome: "error", ExitCode: intPointer(1)}, want: "failure"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := hookFireOutcome(test.response, test.firstLine); got != test.want {
+			if got := hookFireOutcome(test.response); got != test.want {
 				t.Fatalf("outcome = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestHookFireOutcomeIgnoresShellMessageText(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "B1 executed hook saying failed to run",
+			raw:  `{"type":"system","subtype":"hook_response","hook_id":"0d96f337-c43d-4b38-bdb0-980ef7a38a48","hook_name":"Stop","hook_event":"Stop","output":"Failed to run: migration step 3 rejected the input\n","stdout":"","stderr":"Failed to run: migration step 3 rejected the input\n","exit_code":1,"outcome":"error","uuid":"377c015b-c0fd-453f-a426-933832c8c7e4","session_id":"d5dda65b-6957-4851-a79e-8b1a9cef1e8f"}`,
+			want: "failure",
+		},
+		{
+			name: "B2 executed hook returning 127",
+			raw:  `{"type":"system","subtype":"hook_response","hook_id":"52618e50-c9bd-4f7a-9279-ec493ef11cb6","hook_name":"Stop","hook_event":"Stop","output":"qc-config-lookup: not found\n","stdout":"","stderr":"qc-config-lookup: not found\n","exit_code":127,"outcome":"error","uuid":"57629a6b-75ad-4e25-bb11-7971c6264a9b","session_id":"d5dda65b-6957-4851-a79e-8b1a9cef1e8f"}`,
+			want: "unknown",
+		},
+		{
+			name: "B3 shell could not start hook",
+			raw:  `{"type":"system","subtype":"hook_response","hook_id":"f690eb91-631b-4784-962f-c07453d89fc3","hook_name":"Stop","hook_event":"Stop","output":"/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found\n","stdout":"","stderr":"/bin/sh: 1: /nonexistent/qc-binary-does-not-exist: not found\n","exit_code":127,"outcome":"error","uuid":"35c00342-7416-4465-9874-ffbb6b94dde5","session_id":"d5dda65b-6957-4851-a79e-8b1a9cef1e8f"}`,
+			want: "unknown",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := hookFireOutcome(capturedClaudeHookResponse(t, test.raw)); got != test.want {
+				t.Fatalf("outcome = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFinishClaudeHookFireCaptureRemovesDebugFile(t *testing.T) {
+	capture := &claudeHookFireCapture{debugPath: filepath.Join(t.TempDir(), "debug.log")}
+	writeClaudeHookDebugLog(t, capture, "")
+	d := &Daemon{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d.finishClaudeHookFireCapture(capture, "runtime-1", "task-1")
+	if _, err := os.Stat(capture.debugPath); !os.IsNotExist(err) {
+		t.Fatalf("debug file still exists or stat failed unexpectedly: %v", err)
 	}
 }
 

@@ -484,6 +484,17 @@ func TestReportHookFiresRejectsImplausibleHostTimestamp(t *testing.T) {
 	}
 }
 
+func TestValidateHookFireRejectsZeroTimestamp(t *testing.T) {
+	fire := protocol.HookFire{
+		ID: "019946d0-e800-7000-8000-000000000005", Event: "Stop", HookID: "execution-1",
+		HookSpec: json.RawMessage(`{}`), FiredAt: time.Time{}.Format(time.RFC3339Nano),
+		Outcome: "unknown", Detail: json.RawMessage(`{}`),
+	}
+	if _, err := validateHookFire(fire, time.Now()); err == nil || err.Error() != "fired_at must not predate the Unix epoch" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestReportHookFiresRequiresHooksCapability(t *testing.T) {
 	req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/runtime/hook-fires", nil, testWorkspaceID, "daemon"),
 		"runtimeId", "runtime")
