@@ -95,6 +95,10 @@ export type {
   RuntimeHookEntry,
   RuntimeHookUnrecognizedKey,
   RuntimeHookResolution,
+  RuntimeHookValueRole,
+  RuntimeHookUnevaluableMatcher,
+  RuntimeHookEventAnswer,
+  RuntimeHookEventAnswerResult,
   IssueUsageSummary,
   MikaBootstrapResponse,
 } from "./agent";

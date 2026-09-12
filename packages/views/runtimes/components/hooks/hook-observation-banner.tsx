@@ -67,6 +67,10 @@ export function ObservationBanner({
     return (
       <Empty className="border border-dashed border-destructive/40">
         <EmptyHeader>
+          {/* Icon only, no text: destructive on destructive/10 measures
+              3.97:1, which clears the 3:1 WCAG floor for non-text but not the
+              4.5:1 one. The badge tones in hook-state-badges.tsx carry label
+              text on the same tint and were moved off it for that reason. */}
           <EmptyMedia
             variant="icon"
             className="bg-destructive/10 text-destructive"

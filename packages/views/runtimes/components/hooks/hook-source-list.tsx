@@ -3,7 +3,7 @@
 import { CircleHelp, FileQuestion, FileX2, Layers, Lock } from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { useT } from "../../../i18n";
-import { ScopeBadge } from "./hook-state-badges";
+import { ScopeBadge, hookToneClass } from "./hook-state-badges";
 import type { HookScopeRow } from "./hooks-model";
 
 /**
@@ -92,7 +92,7 @@ function SourceStateBadge({ state }: { state: string }) {
   const { t } = useT("runtimes");
   if (state === "found") {
     return (
-      <Badge variant="ghost" className="gap-1 bg-success/10 text-success">
+      <Badge variant="ghost" className={`gap-1 ${hookToneClass("ok")}`}>
         {t(($) => $.hooks.scopes.state_found)}
       </Badge>
     );
@@ -123,7 +123,7 @@ function SourceStateBadge({ state }: { state: string }) {
   return (
     <Badge
       variant="ghost"
-      className="h-auto gap-1 rounded-md bg-muted py-0.5 text-foreground ring-1 ring-inset ring-warning whitespace-normal"
+      className={`h-auto gap-1 rounded-md py-0.5 whitespace-normal ${hookToneClass("unknown")}`}
     >
       <CircleHelp aria-hidden="true" />
       {t(($) => $.hooks.scopes.state_unknown, { value: state })}

@@ -2198,6 +2198,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/local-skills/import", h.InitiateImportLocalSkill)
 					r.Get("/local-skills/import/{requestId}", h.GetLocalSkillImportRequest)
 					r.Post("/hooks", h.InitiateHookRead)
+					// Static before the param sibling below: chi resolves a
+					// static segment ahead of a wildcard at the same level, so
+					// "answer" reaches the answer handler and never reads as a
+					// request id. runtime_hooks_answer_test.go holds that.
+					r.Get("/hooks/answer", h.AnswerHookEvent)
 					r.Get("/hooks/{requestId}", h.GetHookReadRequest)
 					r.Delete("/", h.DeleteAgentRuntime)
 					// Confirmed variant of DELETE: unbind every agent bound to

@@ -1393,6 +1393,11 @@ export interface RuntimeHookUnrecognizedKey {
 export interface RuntimeHookResolution {
   provider: string;
   entries: RuntimeHookEntry[];
+  // What each configured event's matcher is evaluated against, keyed by
+  // event. It is here as well as on an answer because the role belongs to the
+  // event, not to an answer: a value field has to be captioned before any
+  // value exists.
+  event_value_roles?: Record<string, RuntimeHookValueRole>;
   unrecognized_keys?: RuntimeHookUnrecognizedKey[];
   error?: string;
 }
@@ -1408,4 +1413,60 @@ export interface RuntimeHookReadRequest {
   error?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+// What the provider evaluates an event's matcher against, so a reader knows
+// what kind of value to supply. `unspecified` is every event whose role the
+// provider's own docs do not state — the server withholds the caption rather
+// than inferring one from the event's name, and a consumer must not fill it in.
+export type RuntimeHookValueRole =
+  | "ignored"
+  | "tool_name"
+  | "compaction_trigger"
+  | "session_start_source"
+  | "session_end_reason"
+  | "subagent_type"
+  | "changed_file_basename"
+  | "unspecified";
+
+// One live matcher on an event that the server's regex engine refuses, with
+// the compiler's own message. Multica's limit, never a provider verdict.
+export interface RuntimeHookUnevaluableMatcher {
+  hook_id: string;
+  matcher: string;
+  error: string;
+}
+
+// The server's answer for one event and one candidate value.
+//
+// `answerable: false` means Multica has no answer — it never means nothing
+// runs, and every set below is empty in that case. Rendering an empty
+// `matched` as "nothing fires" states something the server never established.
+// The four sets are unordered: neither provider publishes an execution order,
+// so numbering them or reading array position as sequence invents one.
+export interface RuntimeHookEventAnswer {
+  provider: string;
+  event: string;
+  value: string;
+  value_role: RuntimeHookValueRole;
+  answerable: boolean;
+  error?: string;
+  unevaluable?: RuntimeHookUnevaluableMatcher[];
+  matched: RuntimeHookEntry[];
+  not_matched: RuntimeHookEntry[];
+  never_runs: RuntimeHookEntry[];
+  configuration_excluded: RuntimeHookEntry[];
+}
+
+// An absent `answer` with `error` set is the honest shape for every case where
+// the server has no answer, including a runtime nothing has been read from.
+// `observed_at` dates the answer, because an answer from an undated snapshot
+// would be a claim about a host nobody looked at.
+export interface RuntimeHookEventAnswerResult {
+  runtime_id: string;
+  provider: string;
+  cached: boolean;
+  observed_at?: string;
+  answer?: RuntimeHookEventAnswer;
+  error?: string;
 }

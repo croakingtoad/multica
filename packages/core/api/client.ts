@@ -80,6 +80,7 @@ import type {
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
+  RuntimeHookEventAnswerResult,
   RuntimeHookReadRequest,
   TimelineEntry,
   AssigneeFrequencyEntry,
@@ -323,7 +324,9 @@ import {
   SourceContextPreviewSchema,
   CommentSubIssueTaskResponseSchema,
   ListWebhookDeliveriesResponseSchema,
+  RuntimeHookEventAnswerResultSchema,
   RuntimeHookReadRequestSchema,
+  failedRuntimeHookEventAnswer,
   failedRuntimeHookRead,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
@@ -2415,6 +2418,27 @@ export class ApiClient {
       RuntimeHookReadRequestSchema,
       failedRuntimeHookRead(runtimeId),
       { endpoint: "GET /api/runtimes/{id}/hooks/{requestId}" },
+    );
+  }
+
+  // Read-only per-event answer. Both parameters are required by the server:
+  // a matcher is evaluated against a value, so it gives no answer without
+  // one, and a 400 here is the boundary refusing to be read as "nothing
+  // fires".
+  async answerHookEvent(
+    runtimeId: string,
+    event: string,
+    value: string,
+  ): Promise<RuntimeHookEventAnswerResult> {
+    const query = new URLSearchParams({ event, value });
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/hooks/answer?${query.toString()}`,
+    );
+    return parseWithFallback(
+      raw,
+      RuntimeHookEventAnswerResultSchema,
+      failedRuntimeHookEventAnswer(runtimeId),
+      { endpoint: "GET /api/runtimes/{id}/hooks/answer" },
     );
   }
 

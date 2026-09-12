@@ -4,7 +4,12 @@ import { useMemo, useState } from "react";
 import { RefreshCw, Search, TriangleAlert, Webhook } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentRuntime, RuntimeHookEntry } from "@multica/core/types";
-import { runtimeHooksKeys, runtimeHooksOptions } from "@multica/core/runtimes";
+import {
+  runtimeHookAnswerKeys,
+  runtimeHookAnswerOptions,
+  runtimeHooksKeys,
+  runtimeHooksOptions,
+} from "@multica/core/runtimes";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Empty,
@@ -16,12 +21,15 @@ import {
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { useT, useTimeAgo } from "../../../i18n";
+import { type HookAnswerRequest, HookAnswerPanel } from "./hook-answer-panel";
 import { HookDetailDialog } from "./hook-detail-dialog";
 import { HookEventSection, matchesHookQuery } from "./hook-event-section";
 import { BehaviourStrip, ObservationBanner } from "./hook-observation-banner";
 import { ScopeSourcesCard } from "./hook-source-list";
 import { HookSummaryCard } from "./hook-summary-card";
 import {
+  hookAnsweredEvents,
+  hookAnswerView,
   hookEventGroups,
   hookObservationShowsEntries,
   hookObservationView,
@@ -33,12 +41,12 @@ import {
 // Lifecycle Hooks tab. Read-only: this pass adds no write path, no park or
 // disable control, and no code or JSON editor.
 //
-// Structure LOCO-127 (what-actually-runs) and LOCO-128 (empty / offline /
-// discovery states) extend:
+// Structure LOCO-128 (empty / offline / discovery states) extends:
 //
 //   LifecycleHooksTab      owns the query, the observation gate and the layout
 //   ├─ ObservationBanner   every not-showing-entries state lands here
 //   ├─ BehaviourStrip      the provider's merge rule, stated per provider
+//   ├─ HookAnswerPanel     what actually runs, for one event and one value
 //   ├─ ScopeSourcesCard    one row per expected source, three distinct states
 //   ├─ HookEventSection    one collapsible group per event, with its counts
 //   │  └─ HookRow          one entry: matcher, handler, source, both axes
@@ -61,6 +69,12 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<RuntimeHookEntry | null>(null);
+  // The answer panel's draft is separate from what was asked. A matcher is
+  // evaluated against a value, so an answer must belong to the value that
+  // produced it — not to whatever is currently in the field.
+  const [draftEvent, setDraftEvent] = useState("");
+  const [draftValue, setDraftValue] = useState("");
+  const [asked, setAsked] = useState<HookAnswerRequest | null>(null);
 
   // staleTime and gcTime come from runtimeHooksOptions and are deliberately
   // not overridden here — read the comment above them before touching either.
@@ -89,6 +103,40 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
   const groups = useMemo(() => hookEventGroups(entries), [entries]);
   const totals = useMemo(() => hookTotals(entries, scopes), [entries, scopes]);
   const unrecognized = data?.resolved?.unrecognized_keys ?? [];
+  const answerableEvents = useMemo(() => hookAnsweredEvents(entries), [entries]);
+  // The event the picker is on. Falls back to the first configured event
+  // rather than an empty selection, so the panel is usable without a click;
+  // empty means the observation configured no events at all.
+  const answerEvent = draftEvent || answerableEvents[0] || "";
+  // The role travels with the projection, so the value field is captioned
+  // correctly from first paint rather than only after an answer arrives.
+  const answerValueRole =
+    data?.resolved?.event_value_roles?.[answerEvent] ?? "unspecified";
+
+  // staleTime and gcTime are 0 here too — see packages/core/runtimes/
+  // hook-answer.ts. Nothing in this file overrides either.
+  const {
+    data: answerData,
+    error: answerError,
+    isFetching: answerFetching,
+  } = useQuery(
+    runtimeHookAnswerOptions(
+      supported ? runtime.id : null,
+      asked?.event ?? null,
+      asked?.value ?? "",
+    ),
+  );
+  const answerView = useMemo(
+    () =>
+      hookAnswerView(
+        answerData,
+        answerFetching,
+        answerError,
+        asked?.value ?? "",
+        view.observedAt,
+      ),
+    [answerData, answerFetching, answerError, asked?.value, view.observedAt],
+  );
 
   const needle = query.trim().toLowerCase();
   const filtered = needle
@@ -118,9 +166,21 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
     );
   }
 
-  const reread = () =>
+  const reread = () => {
+    // Both, together. An answer is computed from the snapshot, so leaving the
+    // previous answer on screen beside a fresh read would show two
+    // observations as one.
     queryClient.invalidateQueries({
       queryKey: runtimeHooksKeys.forRuntime(runtime.id),
+    });
+    queryClient.invalidateQueries({
+      queryKey: runtimeHookAnswerKeys.forRuntime(runtime.id),
+    });
+  };
+
+  const reask = () =>
+    queryClient.invalidateQueries({
+      queryKey: runtimeHookAnswerKeys.forRuntime(runtime.id),
     });
 
   return (
@@ -136,6 +196,29 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
         {showsEntries ? (
           <>
             <BehaviourStrip provider={runtime.provider} />
+            {/* Read after the merge rule and before the configured list: the
+                answer is a selection from that list, under that rule. */}
+            {answerEvent ? (
+              <HookAnswerPanel
+                provider={runtime.provider}
+                events={answerableEvents}
+                draftEvent={answerEvent}
+                valueRole={answerValueRole}
+                draftValue={draftValue}
+                onDraftEventChange={setDraftEvent}
+                onDraftValueChange={setDraftValue}
+                onAsk={() =>
+                  setAsked({ event: answerEvent, value: draftValue.trim() })
+                }
+                onReask={reask}
+                asked={asked}
+                view={answerView}
+                timeAgo={timeAgo}
+                tabObservedAt={view.observedAt}
+                notCheckedSources={totals.notCheckedSources}
+                onSelectEntry={setSelected}
+              />
+            ) : null}
             <ScopeSourcesCard scopes={scopes} />
             {unrecognized.length > 0 ? (
               <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">

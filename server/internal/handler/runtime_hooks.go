@@ -226,21 +226,31 @@ func nullableString(value pgtype.Text) *string {
 	return &value.String
 }
 
+// latestHookObservedAt dates a snapshot by its newest per-source observation.
+// A nil result means no source in the snapshot carries a date, which is the
+// server's "nothing has been read from this host" answer — never an empty
+// observation that could be rendered as current (snapshot invariant 3).
+func latestHookObservedAt(rows []db.HookStateSnapshot) *time.Time {
+	var latest *time.Time
+	for _, row := range rows {
+		if row.ObservedAt.Valid && (latest == nil || row.ObservedAt.Time.After(*latest)) {
+			observedAt := row.ObservedAt.Time
+			latest = &observedAt
+		}
+	}
+	return latest
+}
+
 func hookSourceResponses(provider string, rows []db.HookStateSnapshot) ([]hookSourceResponse, *time.Time, error) {
 	expected, err := expectedHookSources(provider)
 	if err != nil {
 		return nil, nil, err
 	}
 	byKey := make(map[hookSourceKey]db.HookStateSnapshot, len(rows))
-	var latest *time.Time
 	for _, row := range rows {
-		key := hookSourceKey{Scope: row.Scope, Format: row.Format}
-		byKey[key] = row
-		if row.ObservedAt.Valid && (latest == nil || row.ObservedAt.Time.After(*latest)) {
-			observedAt := row.ObservedAt.Time
-			latest = &observedAt
-		}
+		byKey[hookSourceKey{Scope: row.Scope, Format: row.Format}] = row
 	}
+	latest := latestHookObservedAt(rows)
 	sources := make([]hookSourceResponse, 0, len(expected))
 	for _, key := range expected {
 		response := hookSourceResponse{

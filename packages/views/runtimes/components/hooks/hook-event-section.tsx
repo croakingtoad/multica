@@ -20,6 +20,7 @@ import {
   MatcherKindNote,
   ScopeBadge,
   TrustBadge,
+  hookToneClass,
   useNeverRunsReason,
 } from "./hook-state-badges";
 import { type HookEventGroup, entryWillRun } from "./hooks-model";
@@ -80,11 +81,7 @@ export function HookEventSection({
         </Badge>
         <Badge
           variant="ghost"
-          className={cn(
-            group.willRun > 0
-              ? "bg-success/10 text-success"
-              : "bg-muted text-muted-foreground",
-          )}
+          className={hookToneClass(group.willRun > 0 ? "ok" : "muted")}
         >
           {t(($) => $.hooks.events.group_will_run, { count: group.willRun })}
         </Badge>
@@ -94,22 +91,19 @@ export function HookEventSection({
           </Badge>
         ) : null}
         {group.neverRuns > 0 ? (
-          <Badge variant="ghost" className="bg-destructive/10 text-destructive">
+          <Badge variant="ghost" className={hookToneClass("bad")}>
             {t(($) => $.hooks.events.group_never_runs, { count: group.neverRuns })}
           </Badge>
         ) : null}
         {group.trustUnknown > 0 ? (
-          <Badge variant="ghost" className="bg-warning text-warning-foreground">
+          <Badge variant="ghost" className={hookToneClass("warn")}>
             {t(($) => $.hooks.events.group_trust_unknown, {
               count: group.trustUnknown,
             })}
           </Badge>
         ) : null}
         {group.unevaluableMatchers > 0 ? (
-          <Badge
-            variant="ghost"
-            className="bg-muted text-foreground ring-1 ring-inset ring-warning"
-          >
+          <Badge variant="ghost" className={hookToneClass("unknown")}>
             {t(($) => $.hooks.events.group_unevaluable, {
               count: group.unevaluableMatchers,
             })}
