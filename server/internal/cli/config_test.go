@@ -14,8 +14,7 @@ import (
 // important guarantee of issue #3875's PR: existing on-disk configs MUST
 // continue to work byte-for-byte.
 func TestCLIConfig_BackwardCompat_OldFileLoadsWithNilBackends(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	tmp := IsolateConfigRoot(t)
 
 	// Write a 4-field config exactly as the historical daemon would have.
 	cfgDir := filepath.Join(tmp, ".multica")
@@ -54,8 +53,7 @@ func TestCLIConfig_BackwardCompat_OldFileLoadsWithNilBackends(t *testing.T) {
 // their config files must stay byte-identical, so a future downgrade to
 // an older daemon doesn't trip on an empty `backends: null` line.
 func TestCLIConfig_BackwardCompat_NilBackendsOmittedFromJSON(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	tmp := IsolateConfigRoot(t)
 
 	cfg := CLIConfig{
 		ServerURL: "https://api.multica.ai",
@@ -86,8 +84,7 @@ func TestCLIConfig_BackwardCompat_NilBackendsOmittedFromJSON(t *testing.T) {
 // TestCLIConfig_OpenClawOverride_RoundTrip verifies that setting BinaryPath
 // and StateDir survives a save/load cycle.
 func TestCLIConfig_OpenClawOverride_RoundTrip(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	IsolateConfigRoot(t)
 
 	original := CLIConfig{
 		ServerURL: "https://api.multica.ai",
@@ -127,8 +124,7 @@ func TestCLIConfig_OpenClawOverride_RoundTrip(t *testing.T) {
 // (or only StateDir) and have the other follow the historical default,
 // without an empty string overriding env-var precedence.
 func TestCLIConfig_OpenClawOverride_PartialFieldsOmitted(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	tmp := IsolateConfigRoot(t)
 
 	cfg := CLIConfig{
 		ServerURL: "https://api.multica.ai",
@@ -172,8 +168,7 @@ func TestCLIConfig_OpenClawOverride_PartialFieldsOmitted(t *testing.T) {
 // round-trip — the set-path / unset-path CLI commands rely on a
 // load->modify->save cycle never dropping config the user already had.
 func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	IsolateConfigRoot(t)
 
 	original := CLIConfig{
 		ServerURL:   "https://api.multica.ai",
@@ -231,8 +226,7 @@ func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
 // omitempty tag keeps the key out of the on-disk JSON when no overrides are
 // set, so configs for users who never pin a path stay byte-stable.
 func TestCLIConfig_ProfileCommandOverrides_OmittedWhenEmpty(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	tmp := IsolateConfigRoot(t)
 
 	cfg := CLIConfig{ServerURL: "https://api.multica.ai", Token: "mul_xyz"}
 	if err := SaveCLIConfig(cfg); err != nil {
@@ -264,8 +258,7 @@ func TestCLIConfig_ProfileCommandOverrides_OmittedWhenEmpty(t *testing.T) {
 func TestCLIConfig_UnknownFieldsArePreserved(t *testing.T) {
 	t.Skip("documenting known limitation: encoding/json drops unknown fields on round-trip; future PR can switch to a preserving encoder")
 
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	tmp := IsolateConfigRoot(t)
 
 	cfgDir := filepath.Join(tmp, ".multica")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
@@ -305,8 +298,7 @@ func TestCLIConfig_UnknownFieldsArePreserved(t *testing.T) {
 // drops one of these fields from the schema, this test fails at write
 // time instead of silently losing the operator's config on restart.
 func TestCLIConfig_DaemonKnobs_RoundTrip(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	IsolateConfigRoot(t)
 
 	zero := "0s"
 	original := CLIConfig{
@@ -400,9 +392,7 @@ func TestCLIConfig_TaskRootOverridesOwnerHome(t *testing.T) {
 }
 
 func TestCLIConfig_NoTaskRootKeepsInteractiveHomeResolution(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("MULTICA_TASK_CONFIG_ROOT", "")
+	home := IsolateConfigRoot(t)
 
 	path, err := CLIConfigPathForProfile("dev")
 	if err != nil {
@@ -440,8 +430,7 @@ func TestCLIConfig_TaskRootMustBeAbsolute(t *testing.T) {
 // record that in the config file, not just in a shell export the GUI-launched
 // daemon never sees.
 func TestCLIConfig_OpenClawCLITimeout_RoundTrip(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	IsolateConfigRoot(t)
 
 	original := CLIConfig{
 		ServerURL: "https://api.multica.ai",
@@ -468,5 +457,56 @@ func TestCLIConfig_OpenClawCLITimeout_RoundTrip(t *testing.T) {
 	// discovery instead of being pinned to an empty string.
 	if got := loaded.Backends.OpenClaw.BinaryPath; got != "" {
 		t.Errorf("BinaryPath should stay empty, got %q", got)
+	}
+}
+
+// TestIsolateConfigRoot_ResolvesWithinTempDir pins the hermeticity contract
+// that IsolateConfigRoot enforces on behalf of every caller: after isolating,
+// the Multica config root and every path derived from it must resolve strictly
+// inside the returned temp dir — never the ambient agent config directory.
+//
+// This is the guard that turns the PL-023 failure mode from silent into loud.
+// If multicaConfigRoot ever gains a new variable that outranks HOME and the
+// helper forgets to pin it, this test fails at setup instead of some test
+// quietly overwriting a live config.json and dropping its auth token.
+func TestIsolateConfigRoot_ResolvesWithinTempDir(t *testing.T) {
+	root := IsolateConfigRoot(t)
+
+	resolved, taskLocal, err := multicaConfigRoot()
+	if err != nil {
+		t.Fatalf("multicaConfigRoot: %v", err)
+	}
+	if taskLocal {
+		t.Fatalf("config root resolved as task-local %q; want HOME-based isolation", resolved)
+	}
+	if !isWithin(root, resolved) {
+		t.Fatalf("config root %q escapes the isolated temp dir %q", resolved, root)
+	}
+
+	checks := map[string]string{}
+	if p, err := CLIConfigPath(); err != nil {
+		t.Fatalf("CLIConfigPath: %v", err)
+	} else {
+		checks["CLIConfigPath()"] = p
+	}
+	if p, err := CLIConfigPathForProfile("dev"); err != nil {
+		t.Fatalf("CLIConfigPathForProfile(dev): %v", err)
+	} else {
+		checks["CLIConfigPathForProfile(dev)"] = p
+	}
+	if p, err := ProfileDir(""); err != nil {
+		t.Fatalf("ProfileDir(): %v", err)
+	} else {
+		checks["ProfileDir()"] = p
+	}
+	if p, err := ProfileDir("dev"); err != nil {
+		t.Fatalf("ProfileDir(dev): %v", err)
+	} else {
+		checks["ProfileDir(dev)"] = p
+	}
+	for name, p := range checks {
+		if !isWithin(root, p) {
+			t.Errorf("%s = %q escapes the isolated temp dir %q", name, p, root)
+		}
 	}
 }

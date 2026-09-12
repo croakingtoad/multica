@@ -8,15 +8,15 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // TestHermesSessionStorePathLayout pins the on-disk layout an operator (and
 // the GC below) depends on:
 // <profile dir>/hermes-sessions/<agent>/<hermes profile>/<conversation>.
 func TestHermesSessionStorePathLayout(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	agent := "11111111-2222-3333-4444-555555555555"
 	issue := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -31,9 +31,7 @@ func TestHermesSessionStorePathLayout(t *testing.T) {
 // TestHermesSessionStorePathScoping covers which tasks get a shard at all, and
 // that two conversations of one agent never share one.
 func TestHermesSessionStorePathScoping(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	cli.IsolateConfigRoot(t)
 
 	const agent = "agent-1"
 	issueA := HermesSessionStorePath("", agent, "", TaskContextForEnv{IssueID: "issue-a"})
@@ -258,9 +256,7 @@ func TestPrepareHermesHomeSessionMountIsIdempotent(t *testing.T) {
 }
 
 func TestPruneHermesSessionStores(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	root := filepath.Join(home, ".multica", hermesSessionStoreRoot)
 	idle := filepath.Join(root, "agent-1", "default", "issue-idle")
@@ -307,9 +303,7 @@ func TestPruneHermesSessionStores(t *testing.T) {
 }
 
 func TestPruneHermesSessionStoresDisabled(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	store := filepath.Join(home, ".multica", hermesSessionStoreRoot, "agent-1", "default", "issue-1")
 	mustWrite(t, filepath.Join(store, "state.db"), "transcript")
