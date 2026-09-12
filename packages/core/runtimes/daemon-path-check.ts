@@ -15,20 +15,17 @@ import type { DaemonPathCheckResponse } from "../types";
  */
 
 const POLL_INTERVAL_MS = 500;
-// Generous enough to cover a daemon that only pops work on its next heartbeat,
-// short enough that the confirm button does not spin past a user's patience.
-// The server also enforces its own deadline and answers `timeout`; whichever
-// fires first lands on the same `check_timed_out` reason.
-const POLL_TIMEOUT_MS = 20_000;
+// The server permits 90s pending plus 30s running. Leave enough client-side
+// headroom to receive that terminal timeout instead of racing it at 120s.
+const POLL_TIMEOUT_MS = 125_000;
 
 /**
  * Why a path cannot be used, ready to map straight onto copy.
  *
  * The first five are the daemon's own vocabulary, shared verbatim with the
  * desktop bridge (`ValidateLocalDirectoryResult`) so one message table serves
- * both paths. The last three are transport-level facts only this module can
- * observe: the machine went away, nobody answered in time, or the caller does
- * not own that daemon.
+ * both paths. The remaining values are transport-level facts only this module
+ * can observe.
  */
 export type DaemonPathCheckFailure =
   | "not_absolute"
@@ -38,6 +35,7 @@ export type DaemonPathCheckFailure =
   | "not_writable"
   | "machine_offline"
   | "not_permitted"
+  | "rate_limited"
   | "check_timed_out"
   | "error";
 
@@ -47,9 +45,8 @@ export interface DaemonPathCheckResult {
   /** Server-supplied detail, shown only when no reason maps to real copy. */
   error?: string;
   /**
-   * Whether the path sits in a git working tree. Only meaningful when ok=true.
-   * `undefined` means the daemon did not say, which callers must treat as
-   * "unknown" rather than "not a repo" — the same rule as the desktop bridge.
+   * Whether the path sits in a git working tree. The server always supplies
+   * this boolean for a successful remote check.
    */
   isGitRepo?: boolean;
 }
@@ -108,20 +105,20 @@ export async function checkDaemonPath({
       daemonId,
       trimmed,
     );
-    requestId = created.request_id;
+    requestId = created.id;
   } catch (err) {
     return failureFromError(err);
   }
-  // The api client answers a drifted 202 body with an empty request id rather
-  // than throwing. Polling `.../path-checks/` would 404 and read as "you do
-  // not own this daemon", so name it as a failed check instead.
+  // The api client answers a malformed create body with an empty id rather than
+  // throwing. Polling `.../path-checks/` would 404 and read as "you do not own
+  // this daemon", so name it as a failed check instead.
   if (!requestId) return { ok: false, reason: "error" };
 
   const start = Date.now();
   let current: DaemonPathCheckResponse;
   try {
     current = await api.getDaemonPathCheck(workspaceId, daemonId, requestId);
-    while (current.status === "pending") {
+    while (current.status === "pending" || current.status === "running") {
       if (Date.now() - start > POLL_TIMEOUT_MS) {
         return { ok: false, reason: "check_timed_out" };
       }
@@ -138,18 +135,14 @@ export async function checkDaemonPath({
   if (current.status === "failed") {
     return failureFromOutcome(current, "error");
   }
-
-  const result = current.result;
-  if (!result) {
-    // A completed check with no payload is a contract violation, not a verdict
-    // about the path. Refuse rather than let an undefined bundle read as "fine".
+  if (current.status !== "completed") {
     return { ok: false, reason: "error", error: current.error ?? undefined };
   }
 
-  const objection = derivePathObjection(result);
+  const objection = derivePathObjection(current);
   if (objection) return { ok: false, reason: objection };
 
-  return { ok: true, isGitRepo: result.is_git_repo };
+  return { ok: true, isGitRepo: current.is_git_repo };
 }
 
 /**
@@ -180,7 +173,7 @@ function failureFromOutcome(
   response: DaemonPathCheckResponse,
   fallback: DaemonPathCheckFailure,
 ): DaemonPathCheckResult {
-  const reason = response.result?.reason;
+  const reason = response.reason;
   if (reason && DAEMON_REASONS.has(reason)) {
     return { ok: false, reason: reason as DaemonPathCheckFailure };
   }
@@ -193,11 +186,17 @@ function failureFromError(err: unknown): DaemonPathCheckResult {
     // not a verdict about the path, and the copy has to say so — otherwise a
     // machine that went to sleep reads as a bad path.
     if (err.status === 503) return { ok: false, reason: "machine_offline" };
-    // Ownership. 404 rather than 403 for a daemon the caller does not own is
-    // the server refusing to confirm the daemon exists; either way the user's
-    // answer is the same, so both land here.
-    if (err.status === 403 || err.status === 404) {
+    // Ownership. The server uses 404 so it does not confirm whether another
+    // user's daemon or path-check request exists.
+    if (err.status === 404) {
       return { ok: false, reason: "not_permitted" };
+    }
+    if (err.status === 429) {
+      return {
+        ok: false,
+        reason: "rate_limited",
+        error: err.retryAfter,
+      };
     }
     const bodyReason = readBodyReason(err.body);
     if (bodyReason) return { ok: false, reason: bodyReason };

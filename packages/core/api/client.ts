@@ -527,13 +527,21 @@ export class ApiError extends Error {
   // error fields like `code` so callers can branch on machine-readable
   // identifiers instead of pattern-matching the human-readable message.
   readonly body?: unknown;
+  readonly retryAfter?: string;
 
-  constructor(message: string, status: number, statusText: string, body?: unknown) {
+  constructor(
+    message: string,
+    status: number,
+    statusText: string,
+    body?: unknown,
+    retryAfter?: string,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.statusText = statusText;
     this.body = body;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -640,7 +648,13 @@ function remapSkillImportError(err: unknown): unknown {
   const error = typeof body.error === "string" && body.error ? body.error : "";
   const message = reason || error;
   if (!message || message === err.message) return err;
-  return new ApiError(message, err.status, err.statusText, err.body);
+  return new ApiError(
+    message,
+    err.status,
+    err.statusText,
+    err.body,
+    err.retryAfter,
+  );
 }
 
 function skillFromImportResult(raw: unknown, endpoint: string): Skill {
@@ -826,7 +840,13 @@ export class ApiClient {
       const { message, body } = await this.parseErrorBody(res, `API error: ${res.status} ${res.statusText}`);
       const logLevel = res.status === 404 ? "warn" : "error";
       this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
-      throw new ApiError(message, res.status, res.statusText, body);
+      throw new ApiError(
+        message,
+        res.status,
+        res.statusText,
+        body,
+        res.headers.get("Retry-After") ?? undefined,
+      );
     }
 
     this.logger.info(`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms` });

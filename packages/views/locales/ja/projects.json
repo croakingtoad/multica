@@ -137,6 +137,7 @@
     "local_validate_machine_offline": "そのマシンは応答前にオフラインになりました。起動してから再試行してください。",
     "local_validate_check_timed_out": "そのマシンから時間内に応答がありません。オンラインか確認して再試行してください。",
     "local_validate_not_permitted": "そのマシンのパスを確認する権限がありません。",
+    "local_validate_rate_limited": "パスの確認が速すぎます。{{retryAfter}} 秒後に再試行してください。",
     "mode_dialog_title": "実行はこのフォルダをどう使いますか？",
     "mode_dialog_description": "エージェントの成果物を受け取る方法と、このフォルダの実行を同時に進められるかが決まります。",
     "mode_in_place_title": "このフォルダを直接編集する",

@@ -348,6 +348,24 @@ describe("LocalDirectoryPickerDialog", () => {
     expect(onSelected).not.toHaveBeenCalled();
   });
 
+  it("shows the rate-limit retry delay inline", async () => {
+    checkDaemonPath.mockResolvedValue({
+      ok: false,
+      reason: "rate_limited",
+      error: "60",
+    });
+    const { onSelected } = renderPicker();
+
+    fireEvent.change(pathInput(), { target: { value: "/srv/app" } });
+    fireEvent.click(confirm());
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /try again in 60 seconds/i,
+    );
+    expect(onSelected).not.toHaveBeenCalled();
+  });
+
   // `worktree` needs somewhere to put the branch. The mode dialog disables the
   // option on `not_git`; this is where that fact enters the flow.
   it("hands back is_git_repo: false so worktree mode can be blocked", async () => {

@@ -18,6 +18,9 @@ const runtimes = vi.hoisted(() => ({ list: [] as unknown[] }));
 const resources = vi.hoisted(() => ({ list: [] as unknown[] }));
 const createMock = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 const checkDaemonPath = vi.hoisted(() => vi.fn());
+const runtimeListOptions = vi.hoisted(() =>
+  vi.fn(() => ({ queryKey: ["runtimes"], queryFn: vi.fn() })),
+);
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: { queryKey?: unknown[] }) => {
@@ -55,7 +58,7 @@ vi.mock("@multica/core/config", () => ({
 // options and the daemon capability probe are stubbed.
 vi.mock("@multica/core/runtimes", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/runtimes")>()),
-  runtimeListOptions: () => ({ queryKey: ["runtimes"], queryFn: vi.fn() }),
+  runtimeListOptions,
   runtimeAdvertisesLocalWorktree: () => true,
 }));
 
@@ -140,6 +143,7 @@ function addLocalDirectoryButton(): HTMLElement {
 }
 
 beforeEach(() => {
+  runtimeListOptions.mockClear();
   runtimes.list = TWO_ONLINE_MACHINES;
   resources.list = [];
   createMock.mockReset().mockResolvedValue({});
@@ -147,6 +151,11 @@ beforeEach(() => {
 });
 
 describe("ProjectResourcesSection — attaching a directory on another machine", () => {
+  it("asks the server only for the viewing user's runtimes", () => {
+    renderWithI18n(<ProjectResourcesSection projectId="p1" />);
+    expect(runtimeListOptions).toHaveBeenCalledWith("ws-1", "me");
+  });
+
   // The reported dead end: two online daemons the user owns, neither beside the
   // browser, and the old UI answered "start the local daemon to attach a
   // directory on this machine".

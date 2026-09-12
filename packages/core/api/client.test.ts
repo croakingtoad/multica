@@ -2984,14 +2984,28 @@ describe("ApiClient daemon path-check response schema", () => {
     );
   }
 
-  it("sends the path and returns the request id", async () => {
-    stubJSON({ request_id: "req-1" }, 202);
+  const pendingRecord = {
+    id: "req-1",
+    runtime_id: "runtime-1",
+    path: "/srv/app",
+    status: "pending",
+    exists: false,
+    is_directory: false,
+    readable: false,
+    writable: false,
+    is_git_repo: false,
+    created_at: "2026-09-12T08:38:19.7231482Z",
+    updated_at: "2026-09-12T08:38:19.7231482Z",
+  };
+
+  it("sends the path and parses the real server initiate record", async () => {
+    stubJSON(pendingRecord);
 
     const result = await new ApiClient(
       "https://api.example.test",
     ).initiateDaemonPathCheck("ws-1", "daemon-a", "/srv/app");
 
-    expect(result.request_id).toBe("req-1");
+    expect(result).toEqual({ ...pendingRecord, reason: "" });
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
       "https://api.example.test/api/workspaces/ws-1/daemons/daemon-a/path-checks",
     );
@@ -3003,15 +3017,13 @@ describe("ApiClient daemon path-check response schema", () => {
 
   it("parses a completed check, keeping every flag the picker branches on", async () => {
     stubJSON({
+      ...pendingRecord,
       status: "completed",
-      result: {
-        exists: true,
-        is_directory: true,
-        readable: true,
-        writable: true,
-        is_git_repo: true,
-        reason: "",
-      },
+      exists: true,
+      is_directory: true,
+      readable: true,
+      writable: true,
+      is_git_repo: true,
     });
 
     const result = await new ApiClient(
@@ -3019,7 +3031,7 @@ describe("ApiClient daemon path-check response schema", () => {
     ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
 
     expect(result.status).toBe("completed");
-    expect(result.result).toMatchObject({
+    expect(result).toMatchObject({
       exists: true,
       is_directory: true,
       readable: true,
@@ -3028,16 +3040,16 @@ describe("ApiClient daemon path-check response schema", () => {
     });
   });
 
-  // An empty request id is safe to hand back because the client module refuses
+  // An empty id is safe to hand back because the client module refuses
   // to poll on one; a fabricated id would 404 and read as "not your daemon".
-  it("degrades a malformed initiate response to an empty request id", async () => {
-    stubJSON({ request_id: 7 }, 202);
+  it("degrades a malformed initiate response to an empty id", async () => {
+    stubJSON({ ...pendingRecord, id: 7 });
 
     const result = await new ApiClient(
       "https://api.example.test",
     ).initiateDaemonPathCheck("ws-1", "daemon-a", "/srv/app");
 
-    expect(result.request_id).toBe("");
+    expect(result.id).toBe("");
   });
 
   it("degrades a malformed poll response to an explicit failure", async () => {
@@ -3054,13 +3066,20 @@ describe("ApiClient daemon path-check response schema", () => {
   // A daemon that omits a flag has not vouched for it. Reading a missing
   // `readable` as readable would let the create succeed and the first task fail.
   it("defaults every omitted flag to the pessimistic value", async () => {
-    stubJSON({ status: "completed", result: {} });
+    stubJSON({
+      id: "req-1",
+      runtime_id: "runtime-1",
+      path: "/srv/app",
+      status: "completed",
+      created_at: pendingRecord.created_at,
+      updated_at: pendingRecord.updated_at,
+    });
 
     const result = await new ApiClient(
       "https://api.example.test",
     ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
 
-    expect(result.result).toEqual({
+    expect(result).toMatchObject({
       exists: false,
       is_directory: false,
       readable: false,
@@ -3071,12 +3090,36 @@ describe("ApiClient daemon path-check response schema", () => {
   });
 
   it("keeps an unknown status verbatim so the caller's default branch sees it", async () => {
-    stubJSON({ status: "queued_on_daemon" });
+    stubJSON({ ...pendingRecord, status: "queued_on_daemon" });
 
     const result = await new ApiClient(
       "https://api.example.test",
     ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
 
     expect(result.status).toBe("queued_on_daemon");
+  });
+
+  it("carries Retry-After on a rate-limit error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "too many path checks" }), {
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "60",
+          },
+        }),
+      ),
+    );
+
+    await expect(
+      new ApiClient("https://api.example.test").initiateDaemonPathCheck(
+        "ws-1",
+        "daemon-a",
+        "/srv/app",
+      ),
+    ).rejects.toMatchObject({ status: 429, retryAfter: "60" });
   });
 });

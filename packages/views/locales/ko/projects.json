@@ -137,6 +137,7 @@
     "local_validate_machine_offline": "해당 기기가 상태를 답하기 전에 오플라인이 됐어요. 기기를 시작한 뒤 다시 시도하세요.",
     "local_validate_check_timed_out": "해당 기기가 제시간에 답하지 않았어요. 온라인 상태를 확인한 뒤 다시 시도하세요.",
     "local_validate_not_permitted": "해당 기기의 경로를 확인할 권한이 없어요.",
+    "local_validate_rate_limited": "경로를 너무 빠르게 확인하고 있어요. {{retryAfter}}초 후 다시 시도하세요.",
     "mode_dialog_title": "실행이 이 폴더를 어떻게 사용할까요?",
     "mode_dialog_description": "에이전트의 결과물을 받는 방식과, 이 폴더의 실행을 동시에 진행할 수 있는지가 정해집니다.",
     "mode_in_place_title": "이 폴더를 직접 수정",

@@ -21,25 +21,30 @@ import { checkDaemonPath, isAbsoluteDaemonPath } from "./daemon-path-check";
 
 const ARGS = { workspaceId: "ws-1", daemonId: "daemon-a", path: "/srv/app" };
 
-function completed(overrides: Record<string, unknown> = {}) {
+function pathCheck(
+  status: "pending" | "running" | "completed" | "failed" | "timeout",
+  overrides: Record<string, unknown> = {},
+) {
   return {
-    status: "completed",
-    result: {
-      exists: true,
-      is_directory: true,
-      readable: true,
-      writable: true,
-      is_git_repo: true,
-      reason: "",
-      ...overrides,
-    },
+    id: "req-1",
+    runtime_id: "runtime-1",
+    path: "/srv/app",
+    status,
+    exists: status === "completed",
+    is_directory: status === "completed",
+    readable: status === "completed",
+    writable: status === "completed",
+    is_git_repo: status === "completed",
+    created_at: "2026-09-12T08:38:19.7231482Z",
+    updated_at: "2026-09-12T08:38:20.7231482Z",
+    ...overrides,
   };
 }
 
 beforeEach(() => {
   initiate.mockReset();
   poll.mockReset();
-  initiate.mockResolvedValue({ request_id: "req-1" });
+  initiate.mockResolvedValue(pathCheck("pending"));
 });
 
 describe("isAbsoluteDaemonPath", () => {
@@ -61,7 +66,7 @@ describe("isAbsoluteDaemonPath", () => {
 
 describe("checkDaemonPath", () => {
   it("reports a usable directory and whether it is a repo", async () => {
-    poll.mockResolvedValue(completed());
+    poll.mockResolvedValue(pathCheck("completed"));
     await expect(checkDaemonPath(ARGS)).resolves.toEqual({
       ok: true,
       isGitRepo: true,
@@ -69,7 +74,7 @@ describe("checkDaemonPath", () => {
   });
 
   it("passes is_git_repo: false through so worktree mode can be blocked", async () => {
-    poll.mockResolvedValue(completed({ is_git_repo: false }));
+    poll.mockResolvedValue(pathCheck("completed", { is_git_repo: false }));
     await expect(checkDaemonPath(ARGS)).resolves.toEqual({
       ok: true,
       isGitRepo: false,
@@ -86,21 +91,40 @@ describe("checkDaemonPath", () => {
   });
 
   it("trims the path before sending it", async () => {
-    poll.mockResolvedValue(completed());
+    poll.mockResolvedValue(pathCheck("completed"));
     await checkDaemonPath({ ...ARGS, path: "  /srv/app  " });
     expect(initiate).toHaveBeenCalledWith("ws-1", "daemon-a", "/srv/app");
   });
 
-  it("polls until the check leaves pending", async () => {
+  it("polls through both server non-terminal states", async () => {
     poll
-      .mockResolvedValueOnce({ status: "pending" })
-      .mockResolvedValueOnce({ status: "pending" })
-      .mockResolvedValueOnce(completed());
+      .mockResolvedValueOnce(pathCheck("pending"))
+      .mockResolvedValueOnce(pathCheck("running"))
+      .mockResolvedValueOnce(pathCheck("completed"));
     await expect(checkDaemonPath(ARGS)).resolves.toEqual({
       ok: true,
       isGitRepo: true,
     });
     expect(poll).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps polling beyond the server's full 120-second window", async () => {
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValue(121_000);
+    poll
+      .mockResolvedValueOnce(pathCheck("running"))
+      .mockResolvedValueOnce(pathCheck("completed"));
+
+    try {
+      await expect(checkDaemonPath(ARGS)).resolves.toEqual({
+        ok: true,
+        isGitRepo: true,
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it.each([
@@ -109,7 +133,7 @@ describe("checkDaemonPath", () => {
     ["not_readable", { readable: false }],
     ["not_writable", { writable: false }],
   ])("names %s from the daemon's booleans alone", async (reason, flags) => {
-    poll.mockResolvedValue(completed(flags));
+    poll.mockResolvedValue(pathCheck("completed", flags));
     await expect(checkDaemonPath(ARGS)).resolves.toEqual({
       ok: false,
       reason,
@@ -121,7 +145,11 @@ describe("checkDaemonPath", () => {
   // the flags at their pessimistic defaults.
   it("prefers the daemon's stated reason over the flags", async () => {
     poll.mockResolvedValue(
-      completed({ exists: false, is_directory: false, reason: "not_readable" }),
+      pathCheck("completed", {
+        exists: false,
+        is_directory: false,
+        reason: "not_readable",
+      }),
     );
     await expect(checkDaemonPath(ARGS)).resolves.toEqual({
       ok: false,
@@ -139,16 +167,30 @@ describe("checkDaemonPath", () => {
     });
   });
 
-  it.each([403, 404])(
-    "reports a daemon the caller does not own (%i) as not permitted",
-    async (status) => {
-      initiate.mockRejectedValue(new ApiError("nope", status, "Forbidden"));
-      await expect(checkDaemonPath(ARGS)).resolves.toEqual({
-        ok: false,
-        reason: "not_permitted",
-      });
-    },
-  );
+  it("reports a daemon the caller does not own as not permitted", async () => {
+    initiate.mockRejectedValue(new ApiError("nope", 404, "Not Found"));
+    await expect(checkDaemonPath(ARGS)).resolves.toEqual({
+      ok: false,
+      reason: "not_permitted",
+    });
+  });
+
+  it("surfaces the server's rate-limit retry delay", async () => {
+    initiate.mockRejectedValue(
+      new ApiError(
+        "too many path checks",
+        429,
+        "Too Many Requests",
+        undefined,
+        "60",
+      ),
+    );
+    await expect(checkDaemonPath(ARGS)).resolves.toEqual({
+      ok: false,
+      reason: "rate_limited",
+      error: "60",
+    });
+  });
 
   it("uses a 4xx body reason when the API rejects at its own boundary", async () => {
     initiate.mockRejectedValue(
@@ -163,7 +205,7 @@ describe("checkDaemonPath", () => {
   });
 
   it("surfaces a server-side timeout as its own reason", async () => {
-    poll.mockResolvedValue({ status: "timeout" });
+    poll.mockResolvedValue(pathCheck("timeout"));
     await expect(checkDaemonPath(ARGS)).resolves.toEqual({
       ok: false,
       reason: "check_timed_out",
@@ -185,17 +227,10 @@ describe("checkDaemonPath", () => {
     });
   });
 
-  it("fails the check when a completed response carries no result", async () => {
-    poll.mockResolvedValue({ status: "completed" });
-    const result = await checkDaemonPath(ARGS);
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("error");
-  });
-
-  // An empty request id is what the malformed-202 fallback produces. Polling
+  // An empty id is what the malformed-create fallback produces. Polling
   // `.../path-checks/` would 404 and be reported as "not your daemon".
-  it("fails the check when the create response has no request id", async () => {
-    initiate.mockResolvedValue({ request_id: "" });
+  it("fails the check when the create response has no id", async () => {
+    initiate.mockResolvedValue(pathCheck("failed", { id: "" }));
     await expect(checkDaemonPath(ARGS)).resolves.toEqual({
       ok: false,
       reason: "error",

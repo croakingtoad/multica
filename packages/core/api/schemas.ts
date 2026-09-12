@@ -3120,14 +3120,6 @@ export const MALFORMED_RUNTIME_MODEL_LIST_REQUEST: RuntimeModelListRequest = {
 // than cast: the picker turns these booleans into "you may attach this folder"
 // and into whether `worktree` mode is offered, so a drifted response must
 // degrade to a named failure, never to a fabricated success.
-export const CreateDaemonPathCheckResponseSchema = z.object({
-  request_id: z.string(),
-}).loose();
-
-export const MALFORMED_CREATE_DAEMON_PATH_CHECK_RESPONSE: CreateDaemonPathCheckResponse = {
-  request_id: "",
-};
-
 export const DaemonPathCheckOutcomeSchema = z.object({
   // Every flag defaults to the pessimistic value. A daemon that omits one has
   // not vouched for it, and the picker must not read a missing `readable` as
@@ -3141,19 +3133,43 @@ export const DaemonPathCheckOutcomeSchema = z.object({
 }).loose();
 
 export const DaemonPathCheckResponseSchema = z.object({
+  id: z.string(),
+  runtime_id: z.string(),
+  path: z.string(),
   status: z.string(),
-  result: DaemonPathCheckOutcomeSchema.nullish(),
+  ...DaemonPathCheckOutcomeSchema.shape,
   error: z.string().nullish(),
+  created_at: z.string(),
+  updated_at: z.string(),
 }).loose();
+
+export const CreateDaemonPathCheckResponseSchema = DaemonPathCheckResponseSchema;
+
+const MALFORMED_PATH_CHECK_RESPONSE: DaemonPathCheckResponse = {
+  id: "",
+  runtime_id: "",
+  path: "",
+  status: "failed",
+  exists: false,
+  is_directory: false,
+  readable: false,
+  writable: false,
+  is_git_repo: false,
+  reason: "",
+  error: "invalid path check response",
+  created_at: "",
+  updated_at: "",
+};
+
+export const MALFORMED_CREATE_DAEMON_PATH_CHECK_RESPONSE: CreateDaemonPathCheckResponse =
+  MALFORMED_PATH_CHECK_RESPONSE;
 
 // `failed` rather than `pending`: an unparseable poll response would otherwise
 // spin the confirm button until the client timeout and then report the wrong
 // reason. `failed` surfaces the problem on the next tick with the message
 // attached.
-export const MALFORMED_DAEMON_PATH_CHECK_RESPONSE: DaemonPathCheckResponse = {
-  status: "failed",
-  error: "invalid path check response",
-};
+export const MALFORMED_DAEMON_PATH_CHECK_RESPONSE: DaemonPathCheckResponse =
+  MALFORMED_PATH_CHECK_RESPONSE;
 
 export const DingTalkInstallationSchema = z.object({
   id: z.string(),

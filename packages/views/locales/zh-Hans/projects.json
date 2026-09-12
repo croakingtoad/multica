@@ -137,6 +137,7 @@
     "local_validate_machine_offline": "该设备在给出答复前已离线。请先启动它，然后重试。",
     "local_validate_check_timed_out": "该设备未在规定时间内答复。请确认它仍在线，然后重试。",
     "local_validate_not_permitted": "你无权检查该设备上的路径。",
+    "local_validate_rate_limited": "路径检查过于频繁。请在 {{retryAfter}} 秒后重试。",
     "mode_dialog_title": "每次运行如何使用这个文件夹？",
     "mode_dialog_description": "这决定了你如何拿到智能体的工作成果，以及这个文件夹上的运行能否并行。",
     "mode_in_place_title": "直接修改这个文件夹",

@@ -138,6 +138,7 @@
     "local_validate_machine_offline": "That machine went offline before it could answer. Start it, then try again.",
     "local_validate_check_timed_out": "That machine didn't answer in time. Check that it's still online, then try again.",
     "local_validate_not_permitted": "You can't check paths on that machine.",
+    "local_validate_rate_limited": "You're checking paths too quickly. Try again in {{retryAfter}} seconds.",
     "mode_dialog_title": "How should runs use this folder?",
     "mode_dialog_description": "This decides how you get an agent's work back, and whether runs on this folder can execute at the same time.",
     "mode_in_place_title": "Edit this folder directly",

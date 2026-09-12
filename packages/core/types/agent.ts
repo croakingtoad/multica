@@ -1316,9 +1316,11 @@ export interface RuntimeLocalSkillImportResult {
 
 export type DaemonPathCheckStatus =
   | "pending"
+  | "running"
   | "completed"
   | "failed"
-  | "timeout";
+  | "timeout"
+  | (string & {});
 
 /**
  * Why a path is unusable, in the vocabulary the desktop bridge already uses
@@ -1347,12 +1349,14 @@ export interface CreateDaemonPathCheckRequest {
   path: string;
 }
 
-export interface CreateDaemonPathCheckResponse {
-  request_id: string;
+export interface DaemonPathCheckResponse extends DaemonPathCheckOutcome {
+  id: string;
+  runtime_id: string;
+  path: string;
+  status: DaemonPathCheckStatus;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface DaemonPathCheckResponse {
-  status: DaemonPathCheckStatus;
-  result?: DaemonPathCheckOutcome | null;
-  error?: string | null;
-}
+export type CreateDaemonPathCheckResponse = DaemonPathCheckResponse;

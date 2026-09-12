@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -250,7 +251,22 @@ func TestDaemonPathCheck_SecondUserCannotPathCheck(t *testing.T) {
 
 	// A different daemon in the same workspace (the admin's own machine).
 	const adminDaemon = "path-check-admin-daemon"
-	createPathCheckTestRuntime(t, adminID, adminDaemon, "online")
+	adminRuntimeID := createPathCheckTestRuntime(t, adminID, adminDaemon, "online")
+
+	// The picker uses this owner-scoped list. An admin's governance visibility
+	// must not leak a second user's machine into this filesystem-sensitive flow.
+	listRequest := newRequestAs(
+		adminID,
+		http.MethodGet,
+		"/api/runtimes?workspace_id="+testWorkspaceID+"&owner=me",
+		nil,
+	)
+	listResponse := testutil.Call(t, testHandler.ListAgentRuntimes, listRequest).Want(http.StatusOK)
+	var runtimes []AgentRuntimeResponse
+	listResponse.JSON(&runtimes)
+	if len(runtimes) != 1 || runtimes[0].ID != adminRuntimeID {
+		t.Fatalf("admin-owned runtime list = %#v; want only %s", runtimes, adminRuntimeID)
+	}
 
 	// The admin cannot initiate a check on the owner's daemon...
 	w, _ := initiatePathCheck(t, testHandler, adminID, testWorkspaceID, ownerDaemon, "/tmp/owner-project")

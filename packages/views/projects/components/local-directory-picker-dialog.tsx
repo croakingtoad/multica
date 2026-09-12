@@ -469,6 +469,10 @@ function useLocalDirectoryFailureMessage(): (
         return t(($) => $.resources.local_validate_check_timed_out);
       case "not_permitted":
         return t(($) => $.resources.local_validate_not_permitted);
+      case "rate_limited":
+        return t(($) => $.resources.local_validate_rate_limited, {
+          retryAfter: detail ?? "?",
+        });
       case "unsupported":
         return t(($) => $.resources.local_validate_unsupported);
       default:
