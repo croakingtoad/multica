@@ -278,6 +278,134 @@ describe("HookFiresSection — the unknown outcome is explained", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The stored `outcome` column decides, and `detail` only annotates.
+//
+// This is the outcome mirror of the provenance trap above, and it was the gap
+// the Tier 1 audit found: every outcome fixture in this file had its `detail`
+// AGREEING with its stored `outcome`, so a render layer that re-derived the
+// outcome from `detail` passed the whole suite. Only the server side pinned
+// this (TestListHookFires_RendersStoredOutcomeVerbatim).
+//
+// The fixtures below make the two disagree on purpose. A row whose detail
+// reads exactly like the capture path's `unknown` input — provider said
+// `error`, exit 127 — but whose stored outcome says `failure` must render
+// Failure, because the capture path already weighed that evidence once and
+// wrote its verdict down. Re-deciding it here would put a second, divergent
+// classifier in a layer nobody is watching, which is the same defect class as
+// render-time provenance.
+// ---------------------------------------------------------------------------
+describe("HookFiresSection — the stored outcome is rendered verbatim", () => {
+  it("renders a stored failure whose detail looks like the unknown case", () => {
+    renderFeed([
+      fire({
+        outcome: "failure",
+        detail: { debug_outcome: "error", exit_code: 127 },
+      }),
+    ]);
+
+    const row = screen.getByTestId("hook-fire-row");
+    const badge = row.querySelector("[data-outcome]");
+    expect(badge?.getAttribute("data-outcome")).toBe("failure");
+    expect(badge?.textContent).toContain("Failure");
+    expect(badge?.textContent).not.toContain("Unknown");
+
+    // The unknown-cause note is gated on the STORED outcome, so a failure row
+    // must not acquire the 126/127 spawn-ambiguity explanation — that copy
+    // says the result "cannot be told apart" from a hook that never started,
+    // which contradicts a row that states it failed.
+    expect(screen.queryByText(/cannot be told apart/i)).toBeNull();
+    expect(screen.queryByText(/Exit 127:/)).toBeNull();
+    // The bare exit code still shows; it is data, not a classification.
+    expect(screen.getByText("Exit 127")).toBeTruthy();
+  });
+
+  it.each(["success", "blocked", "skipped"])(
+    "renders a stored %s whose detail carries an error and exit 126",
+    (stored) => {
+      renderFeed([
+        fire({
+          outcome: stored,
+          detail: { debug_outcome: "error", exit_code: 126 },
+        }),
+      ]);
+
+      const badge = screen
+        .getByTestId("hook-fire-row")
+        .querySelector("[data-outcome]");
+      expect(badge?.getAttribute("data-outcome")).toBe(stored);
+      expect(badge?.textContent).not.toContain("Unknown");
+      expect(screen.queryByText(/cannot be told apart/i)).toBeNull();
+    },
+  );
+
+  it("does not claim spawn ambiguity for a stored unknown with an ordinary exit code", () => {
+    // The inverse fixture. Stored `unknown` does get a cause note, but the
+    // note must come from this row's own detail: exit 3 is an ordinary
+    // non-zero exit, not one of the two codes Claude cannot disambiguate. The
+    // spawn-ambiguity sentence here would be an invented claim.
+    renderFeed([
+      fire({
+        outcome: "unknown",
+        detail: { debug_outcome: "error", exit_code: 3 },
+      }),
+    ]);
+
+    const badge = screen
+      .getByTestId("hook-fire-row")
+      .querySelector("[data-outcome]");
+    expect(badge?.getAttribute("data-outcome")).toBe("unknown");
+    expect(badge?.textContent).toContain("Unknown");
+
+    expect(
+      screen.getByText(/did not carry enough to classify this result/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/cannot be told apart/i)).toBeNull();
+  });
+
+  it("keeps each row on its own stored outcome in a mixed feed", () => {
+    // Per row, like provenance. All three carry the same `unknown`-shaped
+    // detail; only the stored column differs, so a feed-level or
+    // detail-driven decision would flatten them to one label.
+    renderFeed([
+      fire({
+        id: "a",
+        outcome: "failure",
+        detail: { debug_outcome: "error", exit_code: 127 },
+      }),
+      fire({
+        id: "b",
+        outcome: "unknown",
+        detail: { debug_outcome: "error", exit_code: 127 },
+      }),
+      fire({
+        id: "c",
+        outcome: "success",
+        detail: { debug_outcome: "error", exit_code: 127 },
+      }),
+    ]);
+
+    const rendered = [...document.querySelectorAll("[data-outcome]")].map(
+      (node) => node.getAttribute("data-outcome"),
+    );
+    expect(rendered).toEqual(["failure", "unknown", "success"]);
+
+    // And exactly one row — the stored `unknown` — carries a cause note.
+    expect(screen.getAllByText(/cannot be told apart/i)).toHaveLength(1);
+  });
+
+  it("makes no outcome claim about an unrecognised stored value", () => {
+    renderFeed([fire({ outcome: "errored" })]);
+
+    const badge = screen
+      .getByTestId("hook-fire-row")
+      .querySelector("[data-outcome]");
+    expect(badge?.getAttribute("data-outcome")).toBe("errored");
+    expect(badge?.textContent).toContain("Unrecognized");
+    expect(badge?.textContent).not.toContain("Failure");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // `skipped` is unreachable on Claude. Nothing may offer the reader a
 // "never ran" state the data cannot supply.
 // ---------------------------------------------------------------------------
@@ -349,7 +477,22 @@ describe("HookFiresSection — feed completeness and states", () => {
   it("says an empty feed means nothing was reported, not that nothing ran", () => {
     renderFeed([]);
 
-    expect(screen.getByText(/nothing was reported — not that no hook ran/i)).toBeTruthy();
+    // The load-bearing clause: an empty feed is never evidence that no hook
+    // ran. It survives the retention widening below unchanged.
+    expect(screen.getByText(/not that no hook ran/i)).toBeTruthy();
+  });
+
+  it("allows retention as a reason an empty feed is empty", () => {
+    // Stage 7's tip prunes fires older than 30 days (PruneHookFireHistory,
+    // 3ab82108d). Without this clause the empty state asserts that an empty
+    // feed means nothing was reported, which is false for a runtime whose
+    // fires have simply aged out — a screen that exists to avoid overclaiming
+    // would be making the wrong claim itself.
+    renderFeed([]);
+
+    expect(
+      screen.getByText(/passed the 30-day retention window/i),
+    ).toBeTruthy();
   });
 
   it("renders an error state without inventing rows", () => {

@@ -472,7 +472,7 @@
     "loading": "Loading hook fires…",
     "error": "Could not load hook fires.",
     "empty": "No hook fires recorded for this runtime yet.",
-    "empty_hint": "Multica records a fire when a provider reports one in a task's structured output stream. An empty feed means nothing was reported — not that no hook ran.",
+    "empty_hint": "Multica records a fire when a provider reports one in a task's structured output stream. An empty feed means nothing was reported, or that every reported fire has passed the 30-day retention window — not that no hook ran.",
     "truncated": "Showing the {{count}} most recent fires. Older fires are not on this page.",
     "how_we_know_title": "How Multica knows these ran",
     "how_we_know_intro": "Provenance is stated per row, never per provider. This runtime's feed can mix both of the following, and the time shown means something different in each.",
@@ -480,7 +480,6 @@
     "counts_debug_log": "{{count}} host-timed",
     "counts_inferred": "{{count}} receipt-timed",
     "counts_unrecognized": "{{count}} unrecognized",
-    "stored_value_label": "Stored provenance value",
     "execution_ref_note": "A per-execution reference, fresh on every fire. Not an identity for a configured hook, and not a way to group fires.",
     "provenance": {
       "debug_log": {

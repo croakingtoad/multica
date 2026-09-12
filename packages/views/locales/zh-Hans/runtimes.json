@@ -456,7 +456,7 @@
     "loading": "正在加载钩子触发记录…",
     "error": "无法加载钩子触发记录。",
     "empty": "这个运行时还没有钩子触发记录。",
-    "empty_hint": "当供应商在任务的结构化输出流中报告一次触发时，Multica 才会记录。记录为空说明没有任何报告，而不是说明没有钩子运行过。",
+    "empty_hint": "当供应商在任务的结构化输出流中报告一次触发时，Multica 才会记录。记录为空说明没有任何报告，或者已报告的触发都已超过 30 天的保留期限，而不是说明没有钩子运行过。",
     "truncated": "显示最近 {{count}} 条触发记录，更早的不在本页。",
     "how_we_know_title": "Multica 如何得知这些钩子运行过",
     "how_we_know_intro": "来源按行标注，而不是按供应商标注。这个运行时的记录可能同时包含以下两种，两者所显示的时间含义并不相同。",
@@ -464,7 +464,6 @@
     "counts_debug_log": "主机记录时间 {{count}} 条",
     "counts_inferred": "接收时间 {{count}} 条",
     "counts_unrecognized": "无法识别 {{count}} 条",
-    "stored_value_label": "存储的来源值",
     "execution_ref_note": "这是按次执行的引用，每次触发都会变化。它不是已配置钩子的身份标识，也不能用来把多次触发归为一组。",
     "provenance": {
       "debug_log": {

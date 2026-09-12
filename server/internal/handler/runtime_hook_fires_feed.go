@@ -79,6 +79,12 @@ type RuntimeHookFireResponse struct {
 // RuntimeHookFireFeedResponse carries the page plus the two facts the screen
 // needs to describe its own completeness: the limit that was applied, and
 // whether more rows exist behind it.
+//
+// Truncated means "rows exist behind this page", nothing weaker. It is not
+// len(rows) == limit: a page that happens to be the entire history satisfies
+// that equality while hiding nothing, and the screen would then render
+// "Older fires are not on this page" about a complete feed. See the probe
+// in ListHookFires for how the two cases are told apart.
 type RuntimeHookFireFeedResponse struct {
 	Fires     []RuntimeHookFireResponse `json:"fires"`
 	Limit     int                       `json:"limit"`
@@ -116,14 +122,29 @@ func (h *Handler) ListHookFires(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit := parseHookFireFeedLimit(r)
+	// Ask for one row more than the page, then report truncation from whether
+	// that probe row came back and drop it before serialising. `len(rows) ==
+	// limit` cannot distinguish a full page from a truncated one, and the
+	// copy keyed off it ("Older fires are not on this page") is a claim about
+	// rows the reader cannot see — so it has to be measured, not inferred
+	// from a boundary. The probe stays inside the same statement and changes
+	// nothing about the projection: ordering, predicate and the verbatim copy
+	// of `provenance` and `outcome` are untouched.
 	rows, err := h.Queries.ListRuntimeHookFires(r.Context(), db.ListRuntimeHookFiresParams{
 		RuntimeID: rt.ID,
-		RowLimit:  int32(limit),
+		RowLimit:  int32(limit) + 1,
 	})
 	if err != nil {
 		slog.Error("hook fire feed read failed", "runtime_id", runtimeID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list hook fires")
 		return
+	}
+
+	// The probe row is evidence, never payload. Trim before projecting so the
+	// returned count is at most `limit` on every path.
+	truncated := len(rows) > limit
+	if truncated {
+		rows = rows[:limit]
 	}
 
 	fires := make([]RuntimeHookFireResponse, len(rows))
@@ -145,6 +166,6 @@ func (h *Handler) ListHookFires(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, RuntimeHookFireFeedResponse{
 		Fires:     fires,
 		Limit:     limit,
-		Truncated: len(rows) == limit,
+		Truncated: truncated,
 	})
 }

@@ -271,6 +271,49 @@ func TestListHookFires_ReportsLimitAndTruncation(t *testing.T) {
 	}
 }
 
+// The boundary the case above never reaches: rows == limit exactly.
+//
+// `Truncated: len(rows) == limit` was true here, so a page that WAS the whole
+// history reported itself truncated and the screen rendered "Showing the 3
+// most recent fires. Older fires are not on this page." about a feed that
+// hid nothing. A false sentence on screen is exactly what this feed exists to
+// prevent, so the boundary gets its own test rather than a third assertion
+// inside the case that missed it.
+func TestListHookFires_DoesNotClaimTruncationOnAFullPage(t *testing.T) {
+	runtimeID := seedFeedRuntime(t, "Hook Fire Feed Boundary Runtime")
+	for _, ref := range []string{"exec-exact-1", "exec-exact-2", "exec-exact-3"} {
+		seedHookFire(t, runtimeID, "claude", "Stop", ref, "inferred", "success", `{}`)
+	}
+
+	// Three rows stored, three requested: every row is on the page.
+	exact := listHookFires(t, runtimeID, "?limit=3")
+	if len(exact.Fires) != 3 || exact.Limit != 3 {
+		t.Fatalf("limit=3 → rows %d limit %d, want 3/3",
+			len(exact.Fires), exact.Limit)
+	}
+	if exact.Truncated {
+		t.Fatalf("limit=3 over exactly 3 rows reported truncated=true — " +
+			"the whole history claimed to be hiding older fires")
+	}
+
+	// One fewer than stored: now something really is behind the page, and the
+	// page must still be at most `limit` rows — the truncation probe row is
+	// evidence, not payload.
+	short := listHookFires(t, runtimeID, "?limit=2")
+	if len(short.Fires) != 2 || !short.Truncated {
+		t.Fatalf("limit=2 over 3 rows → rows %d truncated %v, want 2/true",
+			len(short.Fires), short.Truncated)
+	}
+
+	// And the single-row boundary, where limit+1 is the smallest probe.
+	one := seedFeedRuntime(t, "Hook Fire Feed Boundary Single Runtime")
+	seedHookFire(t, one, "claude", "Stop", "exec-single", "debug_log", "success", `{}`)
+	if only := listHookFires(t, one, "?limit=1"); len(only.Fires) != 1 || only.Truncated {
+		t.Fatalf("limit=1 over exactly 1 row → rows %d truncated %v, want 1/false",
+			len(only.Fires), only.Truncated)
+	}
+}
+
 // A malformed limit takes the default rather than denying a diagnostic view,
 // and an over-large one is clamped.
 func TestListHookFires_ClampsLimit(t *testing.T) {
