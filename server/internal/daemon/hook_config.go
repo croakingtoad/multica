@@ -32,13 +32,11 @@ func (d *Daemon) handleHookRead(ctx context.Context, rt Runtime, requestID strin
 		d.reportHookReadResult(ctx, rt, requestID, protocol.HookConfigReadReport{Status: "failed", Error: fmt.Sprintf("resolve user home: %v", err)})
 		return
 	}
-	projectRoot, err := os.Getwd()
-	if err != nil {
-		d.reportHookReadResult(ctx, rt, requestID, protocol.HookConfigReadReport{Status: "failed", Error: fmt.Sprintf("resolve project root: %v", err)})
-		return
-	}
 
-	sources, err := readRuntimeHookConfig(rt.Provider, home, projectRoot)
+	// A runtime heartbeat is not tied to a task and therefore has no project
+	// workdir. Omitting projectRoot keeps project and local sources "not
+	// checked" instead of fabricating observations from the daemon's cwd.
+	sources, err := readRuntimeHookConfig(rt.Provider, home, "")
 	if err != nil {
 		d.reportHookReadResult(ctx, rt, requestID, protocol.HookConfigReadReport{Status: "failed", Error: err.Error()})
 		return
@@ -69,22 +67,34 @@ func readRuntimeHookConfig(provider, home, projectRoot string) ([]protocol.HookC
 func hookConfigPaths(provider, home, projectRoot string) ([]hookConfigPath, error) {
 	switch provider {
 	case "claude":
-		return []hookConfigPath{
+		paths := []hookConfigPath{
 			{provider: provider, scope: "user", format: "json", path: filepath.Join(home, ".claude", "settings.json")},
-			{provider: provider, scope: "project", format: "json", path: filepath.Join(projectRoot, ".claude", "settings.json")},
-			{provider: provider, scope: "local", format: "json", path: filepath.Join(projectRoot, ".claude", "settings.local.json")},
-		}, nil
+		}
+		if projectRoot != "" {
+			paths = append(paths,
+				hookConfigPath{provider: provider, scope: "project", format: "json", path: filepath.Join(projectRoot, ".claude", "settings.json")},
+				hookConfigPath{provider: provider, scope: "local", format: "json", path: filepath.Join(projectRoot, ".claude", "settings.local.json")},
+			)
+		}
+		return paths, nil
 	case "codex":
 		codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
 		if codexHome == "" {
 			codexHome = filepath.Join(home, ".codex")
+		} else if !filepath.IsAbs(codexHome) {
+			return nil, fmt.Errorf("CODEX_HOME must be an absolute path")
 		}
-		return []hookConfigPath{
+		paths := []hookConfigPath{
 			{provider: provider, scope: "user", format: "json", path: filepath.Join(codexHome, "hooks.json")},
 			{provider: provider, scope: "user", format: "toml", path: filepath.Join(codexHome, "config.toml")},
-			{provider: provider, scope: "project", format: "json", path: filepath.Join(projectRoot, ".codex", "hooks.json")},
-			{provider: provider, scope: "project", format: "toml", path: filepath.Join(projectRoot, ".codex", "config.toml")},
-		}, nil
+		}
+		if projectRoot != "" {
+			paths = append(paths,
+				hookConfigPath{provider: provider, scope: "project", format: "json", path: filepath.Join(projectRoot, ".codex", "hooks.json")},
+				hookConfigPath{provider: provider, scope: "project", format: "toml", path: filepath.Join(projectRoot, ".codex", "config.toml")},
+			)
+		}
+		return paths, nil
 	default:
 		return nil, fmt.Errorf("provider %q does not expose lifecycle hooks", provider)
 	}
@@ -141,19 +151,27 @@ func extractHookConfig(raw []byte, format string) (json.RawMessage, json.RawMess
 	default:
 		return nil, nil, fmt.Errorf("unsupported format %q", format)
 	}
-	return marshalHookField(document, "hooks"), marshalHookField(document, "_disabledHooks"), nil
+	hooks, err := marshalHookField(document, "hooks")
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode hooks: %w", err)
+	}
+	disabledHooks, err := marshalHookField(document, "_disabledHooks")
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode disabled hooks: %w", err)
+	}
+	return hooks, disabledHooks, nil
 }
 
-func marshalHookField(document map[string]any, key string) json.RawMessage {
+func marshalHookField(document map[string]any, key string) (json.RawMessage, error) {
 	value, ok := document[key]
 	if !ok {
-		return json.RawMessage(`{}`)
+		return json.RawMessage(`{}`), nil
 	}
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return json.RawMessage(`{}`)
+		return nil, err
 	}
-	return raw
+	return raw, nil
 }
 
 func (d *Daemon) reportHookReadResult(ctx context.Context, rt Runtime, requestID string, payload protocol.HookConfigReadReport) {

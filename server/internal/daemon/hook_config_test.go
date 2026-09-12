@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,6 +53,38 @@ func TestReadRuntimeHookConfigClaudeChecksAllScopes(t *testing.T) {
 	}
 }
 
+func TestHandleHookReadCWDAtHomeDoesNotDuplicateUserSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(home)
+	writeHookTestFile(t, filepath.Join(home, ".claude", "settings.json"), `{"hooks":{"Stop":[]}}`)
+
+	reports := make(chan protocol.HookConfigReadReport, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report protocol.HookConfigReadReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode hook report: %v", err)
+		}
+		reports <- report
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	d.handleHookRead(context.Background(), Runtime{ID: "runtime-1", Provider: "claude"}, "request-1")
+	report := <-reports
+	if len(report.Sources) != 1 {
+		t.Fatalf("sources = %d, want only the user source when project root is unknown", len(report.Sources))
+	}
+	if report.Sources[0].Scope != "user" {
+		t.Fatalf("source scope = %q, want user", report.Sources[0].Scope)
+	}
+}
+
 func TestReadRuntimeHookConfigCodexChecksJSONAndInlineTOMLAtBothLayers(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
@@ -94,10 +128,27 @@ func TestHookConfigPathsAreProviderOwnedAndCarryNoRequestedTarget(t *testing.T) 
 		filepath.Join(project, ".claude", "settings.json"),
 		filepath.Join(project, ".claude", "settings.local.json"),
 	}
+	if len(paths) != len(wants) {
+		t.Fatalf("paths = %d, want %d", len(paths), len(wants))
+	}
 	for i := range wants {
 		if paths[i].path != wants[i] {
 			t.Errorf("path %d = %q, want %q", i, paths[i].path, wants[i])
 		}
+	}
+}
+
+func TestHookConfigPathsRejectsRelativeCodexHome(t *testing.T) {
+	t.Setenv("CODEX_HOME", filepath.Join("relative", "codex-home"))
+
+	if _, err := hookConfigPaths("codex", t.TempDir(), ""); err == nil {
+		t.Fatal("expected relative CODEX_HOME to be rejected")
+	}
+}
+
+func TestExtractHookConfigRejectsTOMLValuesThatCannotEncodeAsJSON(t *testing.T) {
+	if _, _, err := extractHookConfig([]byte("[hooks]\nStop = nan\n"), "toml"); err == nil {
+		t.Fatal("expected TOML nan hook value to fail JSON encoding")
 	}
 }
 
