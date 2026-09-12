@@ -349,6 +349,22 @@ func TestBuildClaudeArgsUsesStrictMCPForManagedConfig(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeArgsPinsManagedDebugFile(t *testing.T) {
+	t.Parallel()
+
+	args := buildClaudeArgs(ExecOptions{
+		ClaudeDebugFile: "/daemon/task/hook-debug.log",
+		CustomArgs:      []string{"--debug-file", "/attacker/override.log"},
+	}, slog.Default())
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--debug-file /daemon/task/hook-debug.log") {
+		t.Fatalf("managed debug file missing from args: %v", args)
+	}
+	if strings.Contains(joined, "/attacker/override.log") {
+		t.Fatalf("custom debug file overrode managed path: %v", args)
+	}
+}
+
 // Claude Code reads the per-task CLAUDE.md the daemon writes into the workdir,
 // so the daemon never populates SystemPrompt for it (see
 // providerNeedsInlineSystemPrompt). Forwarding it as --append-system-prompt

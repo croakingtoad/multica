@@ -702,6 +702,7 @@ var claudeBlockedArgs = map[string]blockedArgMode{
 	"--input-format":    blockedWithValue,  // stream-json protocol
 	"--permission-mode": blockedWithValue,  // bypassPermissions for autonomous operation
 	"--mcp-config":      blockedWithValue,  // set by daemon from agent.mcp_config
+	"--debug-file":      blockedWithValue,  // task-scoped hook fire source owned by daemon
 	// `--effort` is owned by the per-agent thinking_level picker so a
 	// user-supplied custom_arg cannot silently outvote it. The daemon
 	// injects --effort only when opts.ThinkingLevel is set; if a user
@@ -751,6 +752,9 @@ func buildClaudeArgs(opts ExecOptions, logger *slog.Logger) []string {
 	// turn. Verified against Claude Code 2.1.220 (MUL-5392).
 	if opts.ResumeSessionID != "" {
 		args = append(args, "--resume", opts.ResumeSessionID)
+	}
+	if opts.ClaudeDebugFile != "" {
+		args = append(args, "--debug-file", opts.ClaudeDebugFile)
 	}
 	blockedArgs := claudeBlockedArgs
 	if opts.ClaudeSettingsPath != "" {

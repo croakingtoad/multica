@@ -668,6 +668,12 @@ func (c *Client) ReportHookReadResult(ctx context.Context, runtimeID, requestID 
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/hooks/%s/result", runtimeID, requestID), result, nil)
 }
 
+// ReportHookFires ships task-scoped Claude debug-log observations to the
+// server-authoritative fire history.
+func (c *Client) ReportHookFires(ctx context.Context, runtimeID string, report protocol.HookFireReport) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/hook-fires", runtimeID), report, nil)
+}
+
 // WorkspaceInfo holds minimal workspace metadata returned by the API.
 type WorkspaceInfo struct {
 	ID   string `json:"id"`

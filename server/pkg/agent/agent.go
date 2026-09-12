@@ -130,6 +130,10 @@ type ExecOptions struct {
 	// through Claude Code's --settings flag. It currently carries restrictive
 	// runtime-skill overrides only; other providers ignore it.
 	ClaudeSettingsPath string
+	// ClaudeDebugFile is a daemon-owned, task-scoped destination for Claude's
+	// host debug log. The daemon reads hook results from it after the process
+	// exits; other providers ignore it.
+	ClaudeDebugFile string
 }
 
 // runContext derives the execution context for an agent subprocess from the

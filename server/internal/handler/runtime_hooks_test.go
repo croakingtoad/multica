@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -416,5 +417,79 @@ func TestReportHookReadResultPersistsCodexSourcesAndOmissionState(t *testing.T) 
 	}
 	if siblingHash != tomlHash {
 		t.Fatalf("JSON upsert changed TOML sibling hash to %q", siblingHash)
+	}
+}
+
+func TestReportHookFiresPersistsObservedIdentityAndOutcomes(t *testing.T) {
+	runtimeID := createProviderRuntime(t, "claude")
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM hook_fire_history WHERE runtime_id = $1`, runtimeID)
+	})
+	firedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	report := protocol.HookFireReport{Fires: []protocol.HookFire{
+		{ID: "019946d0-e800-7000-8000-000000000001", Event: "PostToolUse", HookID: "sha256:success", HookSpec: json.RawMessage(`{"type":"command","command":"ok"}`), FiredAt: firedAt.Format(time.RFC3339Nano), Outcome: "success", Detail: json.RawMessage(`{"debug_outcome":"success"}`)},
+		{ID: "019946d0-e800-7000-8000-000000000002", Event: "Stop", HookID: "sha256:failure", HookSpec: json.RawMessage(`{"type":"command","command":"bad"}`), FiredAt: firedAt.Add(time.Second).Format(time.RFC3339Nano), Outcome: "failure", Detail: json.RawMessage(`{"debug_outcome":"error"}`)},
+		{ID: "019946d0-e800-7000-8000-000000000003", Event: "SessionStart", HookID: "sha256:skipped", HookSpec: json.RawMessage(`{"type":"command","command":"missing"}`), FiredAt: firedAt.Add(2 * time.Second).Format(time.RFC3339Nano), Outcome: "skipped", Detail: json.RawMessage(`{"debug_outcome":"error"}`)},
+	}}
+	req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/hook-fires", report, testWorkspaceID, "daemon"), "runtimeId", runtimeID)
+	req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityHooksV1)
+	testutil.Call(t, testHandler.ReportHookFires, req).Want(http.StatusOK)
+
+	// A retry is idempotent because daemon-generated fire IDs are the primary key.
+	retry := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/hook-fires", report, testWorkspaceID, "daemon"), "runtimeId", runtimeID)
+	retry.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityHooksV1)
+	testutil.Call(t, testHandler.ReportHookFires, retry).Want(http.StatusOK)
+
+	rows, err := testPool.Query(context.Background(), `
+		SELECT provider, event, hook_id, hook_spec, fired_at, provenance, outcome
+		FROM hook_fire_history WHERE runtime_id = $1 ORDER BY fired_at`, runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var outcomes []string
+	for rows.Next() {
+		var provider, event, hookID, provenance, outcome string
+		var hookSpec []byte
+		var storedAt time.Time
+		if err := rows.Scan(&provider, &event, &hookID, &hookSpec, &storedAt, &provenance, &outcome); err != nil {
+			t.Fatal(err)
+		}
+		if provider != "claude" || provenance != "debug_log" || hookID == "" || len(hookSpec) == 0 {
+			t.Fatalf("row lost denormalized identity/provenance: provider=%q event=%q id=%q spec=%s provenance=%q", provider, event, hookID, hookSpec, provenance)
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := outcomes, []string{"success", "failure", "skipped"}; !slices.Equal(got, want) {
+		t.Fatalf("outcomes = %v, want %v", got, want)
+	}
+}
+
+func TestReportHookFiresRejectsImplausibleHostTimestamp(t *testing.T) {
+	runtimeID := createProviderRuntime(t, "claude")
+	report := protocol.HookFireReport{Fires: []protocol.HookFire{{
+		ID: "019946d0-e800-7000-8000-000000000004", Event: "Stop", HookID: "sha256:future",
+		HookSpec: json.RawMessage(`{"type":"command","command":"ok"}`),
+		FiredAt:  time.Now().UTC().Add(100 * 365 * 24 * time.Hour).Format(time.RFC3339Nano),
+		Outcome:  "success", Detail: json.RawMessage(`{}`),
+	}}}
+	req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/hook-fires", report, testWorkspaceID, "daemon"), "runtimeId", runtimeID)
+	req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityHooksV1)
+	response := testutil.Call(t, testHandler.ReportHookFires, req).Want(http.StatusBadRequest)
+	if got := response.Map()["error"]; got != "fires[0]: fired_at must not be more than 5 minutes in the future" {
+		t.Fatalf("error = %q", got)
+	}
+}
+
+func TestReportHookFiresRequiresHooksCapability(t *testing.T) {
+	req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/runtime/hook-fires", nil, testWorkspaceID, "daemon"),
+		"runtimeId", "runtime")
+	w := httptest.NewRecorder()
+	(&Handler{}).ReportHookFires(w, req)
+	if w.Code != http.StatusUpgradeRequired {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusUpgradeRequired, w.Body.String())
 	}
 }

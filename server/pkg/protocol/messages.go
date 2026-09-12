@@ -459,6 +459,27 @@ type HookConfigReadReport struct {
 	Error      string             `json:"error,omitempty"`
 }
 
+// HookFire is one Claude hook result observed in a task-scoped host debug
+// log. ID is deterministic for the source record so a transport retry remains
+// idempotent. Provider and provenance are deliberately absent: the server
+// derives both from the authenticated runtime and this transport.
+type HookFire struct {
+	ID       string          `json:"id"`
+	Event    string          `json:"event"`
+	HookID   string          `json:"hook_id"`
+	HookSpec json.RawMessage `json:"hook_spec"`
+	FiredAt  string          `json:"fired_at"`
+	Outcome  string          `json:"outcome"`
+	Detail   json.RawMessage `json:"detail,omitempty"`
+}
+
+// HookFireReport batches debug-log records from one completed Claude process.
+// The field stays optional/additive so an older daemon never has to send it
+// and an older server continues to ignore unrelated newer request fields.
+type HookFireReport struct {
+	Fires []HookFire `json:"fires,omitempty"`
+}
+
 // DaemonHeartbeatPendingLocalSkillImport describes a request to import a
 // specific runtime local skill.
 type DaemonHeartbeatPendingLocalSkillImport struct {
