@@ -576,9 +576,17 @@ const CODEX_EVENTS = [
 ];
 const CODEX_ONLY = ['Interrupt'];
 
-/* Handler types. `effective:false` = the provider parses the entry and then
-   silently skips it — the exact silent-failure class LOCO-79 says dominates
-   the complaints, so the editor has to refuse it rather than accept it. */
+/* Handler types. `effective:false` = the entry cannot run on that provider.
+   Two distinct cases, and the per-type note says which: the type is not in the
+   provider's handler set at all, or it is a real variant that the dispatcher
+   never reaches. Either way the hook is configured and never executes — the
+   failure class LOCO-79 says dominates the complaints, so the editor has to
+   refuse it rather than accept it.
+   Codex side sourced from openai/codex @ 53c542d944c7: handler enum at
+   codex-rs/config/src/hook_config.rs:161 (command, mcp_tool, prompt, agent —
+   no http), dispatch at codex-rs/hooks/src/engine/dispatcher.rs:190 (command
+   and mcp_tool only). Whether Codex emits anything when it skips a parsed
+   handler is undocumented and unmeasured — do not claim either way. */
 const HANDLER_TYPES = {
   claude: [
     { v: 'command',  label: 'command',  effective: true,  note: 'Runs a shell command or an exec-form binary.' },
@@ -591,8 +599,8 @@ const HANDLER_TYPES = {
     { v: 'command',  label: 'command',  effective: true,  note: 'Runs a shell command. Supports commandWindows.' },
     { v: 'mcp_tool', label: 'mcp_tool', effective: true,  note: 'Invokes an MCP tool.' },
     { v: 'http',     label: 'http',     effective: false, note: 'Not part of the Codex handler set.' },
-    { v: 'prompt',   label: 'prompt',   effective: false, note: 'Parsed, then silently skipped by Codex.' },
-    { v: 'agent',    label: 'agent',    effective: false, note: 'Parsed, then silently skipped by Codex.' },
+    { v: 'prompt',   label: 'prompt',   effective: false, note: 'A real Codex handler type, but the dispatcher never runs it.' },
+    { v: 'agent',    label: 'agent',    effective: false, note: 'A real Codex handler type, but the dispatcher never runs it.' },
   ],
 };
 
@@ -765,7 +773,7 @@ const HOOKS = {
     { id: 'x6', event: 'UserPromptSubmit', matcher: 'Bash', scope: 'user-json', type: 'prompt',
       prompt: 'Rewrite the user prompt to include the current sprint goal.', timeout: 30,
       trust: 'trusted', owner: 'user', parked: false, ineffective: true, matcherIgnored: true,
-      desc: 'Two silent failures in one entry: type: prompt is parsed and skipped, and a matcher on UserPromptSubmit is parsed and discarded.' },
+      desc: 'Two failures in one entry: type: prompt is parsed as a valid handler type and never dispatched, and a matcher on UserPromptSubmit is parsed and discarded.' },
 
     { id: 'x7', event: 'Stop', matcher: '', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/turn-gate.py', timeout: 20, async: false, trust: 'trusted',
@@ -926,6 +934,11 @@ const PARK_COPY = {
     verb: 'Park',
     what: 'Moves the entry out of <code class="cmd">hooks</code> and into a <code class="cmd">_disabledHooks</code> key in the same settings file.',
     why: 'Claude ignores unknown top-level keys, so the hook stops being registered and nothing is spawned per event. The entry is preserved verbatim and unparking moves it back.',
+    /* Provenance, because this is the one load-bearing provider fact under
+       parking and it is measured rather than documented. Rendered in the
+       dialog: a reader deciding whether to trust parking has to see how the
+       claim is known, not just that it is made. */
+    measured: 'Measured, not documented — on Claude Code <code class="cmd">2.1.269</code>, commit <code class="cmd">d0733697ad64</code>. Both <code class="cmd">_disabledHooks</code> and an unrelated probe key were tolerated with no warning in stdout or under <code class="cmd">--debug hooks</code>, <code class="cmd">claude doctor</code> reported <em>“No installation issues found.”</em>, an active <code class="cmd">SessionStart</code> hook in the same file still fired while the parked handler never did, and the key survived a Claude-owned settings write (<code class="cmd">/config tips=false</code>, which added <code class="cmd">spinnerTipsEnabled: false</code> beside it). Anthropic documents unknown-key preservation nowhere, so a later release could strip it — parking must therefore fail <strong class="semibold">visibly</strong> when the key goes missing, never quietly stop working.',
     caveat: 'There is no native per-hook disable in Claude Code — <code class="cmd">/hooks</code> is read-only and only a global <code class="cmd">disableAllHooks</code> exists. Parking is Multica\'s own mechanism, not a Claude feature.',
   },
   codex: {
@@ -1055,7 +1068,9 @@ function runState(h, runtime) {
   if (h.parked)      return { runs: false, label: 'Parked',       cls: '',       icon: 'archive',
     why: 'Configured but not registered. Multica moved the entry into a _disabledHooks sidecar, because Claude has no per-hook disable of its own.' };
   if (h.ineffective) return { runs: false, label: 'Never runs',   cls: 'b-bad',  icon: 'ban',
-    why: 'Codex parses type: ' + h.type + ' and then skips it. It has never executed.' };
+    why: h.type === 'http'
+      ? 'Codex has no http handler type at all, so this entry can never execute.'
+      : 'Codex parses type: ' + h.type + ' as a valid handler type and then never dispatches it. It has never executed.' };
   if (h.trust === 'stale') return { runs: false, label: 'Not trusted', cls: 'b-bad', icon: 'key',
     why: 'Edited since it was trusted. Codex skips it until the new hash is trusted on the host.' };
   if (h.trust === 'review') return { runs: false, label: 'Needs review', cls: 'b-bad', icon: 'key',
@@ -1361,7 +1376,7 @@ function hookRow(h, r) {
     <td>
       <span class="badge ${types && !types.effective ? 'b-bad' : ''}">${esc(h.type)}</span>
       ${h.async ? `<div class="t-micro faint" style="margin-top:2px">async</div>` : ''}
-      ${types && !types.effective ? `<div class="t-micro" style="color:var(--destructive);margin-top:2px">skipped by Codex</div>` : ''}
+      ${types && !types.effective ? `<div class="t-micro" style="color:var(--destructive);margin-top:2px">never runs on Codex</div>` : ''}
     </td>
     <td>
       <div class="cmd">${esc(target)}</div>
@@ -2231,7 +2246,10 @@ function editorProblems() {
   const t = types.find((x) => x.v === ed.type);
   if (!ed.event) out.push({ level: 'error', field: 'event', text: 'Pick an event.' });
   if (t && !t.effective) out.push({ level: 'error', field: 'type',
-    text: 'Codex parses type: ' + ed.type + ' and then skips it. Saving this would store a hook that can never run — the silent failure this screen exists to prevent.' });
+    text: (ed.type === 'http'
+      ? 'Codex has no http handler type at all.'
+      : 'Codex parses type: ' + ed.type + ' as a valid handler type and then never dispatches it.')
+      + ' Saving this would store a hook that can never run — the exact failure this screen exists to prevent.' });
   if (ed.type === 'command') {
     const c = validateCommand(ed.command);
     if (c) out.push({ level: c.level, field: 'command', text: c.text });
@@ -2390,13 +2408,15 @@ function editorDialog() {
         <div class="select-wrap">
           <select class="select" id="edType" data-f="type">
             ${types.map((t) => `<option value="${t.v}" ${t.v === ed.type ? 'selected' : ''} ${t.effective ? '' : 'disabled'}>
-              ${esc(t.label)}${t.effective ? '' : ' — skipped by Codex'}</option>`).join('')}
+              ${esc(t.label)}${t.effective ? '' : ' — never runs on Codex'}</option>`).join('')}
           </select>
           ${ic('chevronDown', 14)}
         </div>
         <div class="hint">${esc((types.find((t) => t.v === ed.type) || {}).note || '')}</div>
         ${ed.provider === 'codex' ? `<div class="hint">Codex implements <code class="cmd">command</code> and <code class="cmd">mcp_tool</code>.
-          <code class="cmd">http</code>, <code class="cmd">prompt</code> and <code class="cmd">agent</code> are disabled above because Codex parses them and then drops them without a word.</div>` : ''}
+          <code class="cmd">prompt</code> and <code class="cmd">agent</code> are disabled above because they are real handler types that the dispatcher never runs;
+          <code class="cmd">http</code> is disabled because Codex has no such handler type at all. Whether Codex prints anything when it skips a parsed
+          handler is undocumented, so assume nothing reaches you and treat the editor as the only warning.</div>` : ''}
         ${perField('type').map((p) => `<div class="err">${ic('circleAlert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
       </div>
 
@@ -2434,7 +2454,6 @@ function editorDialog() {
       <div class="field">
         <label for="edUrl">URL</label>
         <input class="input mono" id="edUrl" data-f="url" value="${esc(ed.url)}" placeholder="https://example.com/hook" />
-        <div class="hint">Headers support <code class="cmd">$VAR</code> interpolation limited to <code class="cmd">allowedEnvVars</code>.</div>
         ${perField('url').map((p) => `<div class="err">${ic('circleAlert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
       </div>` : ''}
 
@@ -2776,6 +2795,8 @@ function parkDialog() {
         ${ic('archive', 13, 'ico')}
         <div><strong class="semibold">What the switch does.</strong> ${c.what} ${c.why}</div>
       </div>
+      ${c.measured ? `
+      <div class="t-caption muted" style="margin:-2px 0 2px">${ic('info', 11)} ${c.measured}</div>` : ''}
       <div class="notice warn t-caption">
         ${ic('alert', 13, 'ico')}
         <div><strong class="semibold">What it is not.</strong> ${c.caveat}</div>
