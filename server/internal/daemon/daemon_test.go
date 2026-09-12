@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -186,9 +187,7 @@ func TestIsBlockedEnvKey(t *testing.T) {
 }
 
 func TestPrepareReasonixTaskStateHome(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	got, err := prepareReasonixTaskStateHome("work", "runtime-1", "agent_2")
 	if err != nil {
@@ -208,9 +207,7 @@ func TestPrepareReasonixTaskStateHome(t *testing.T) {
 }
 
 func TestPrepareDshTaskSessionRoot(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	got, err := prepareDshTaskSessionRoot("work", "runtime-1", "agent_2")
 	if err != nil {

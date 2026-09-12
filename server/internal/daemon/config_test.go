@@ -111,7 +111,6 @@ func TestPatternsFromEnv_DefaultsWhenUnset(t *testing.T) {
 // an operator opts in, and a daemon upgrade never starts deleting on its own.
 func TestLoadConfig_CompletedTaskTTLDefaultsDisabledOnSelfHostAndReadsEnv(t *testing.T) {
 	stageFakeAgent(t)
-	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", filepath.Join(t.TempDir(), "missing-shell"))
 	t.Setenv("MULTICA_GC_COMPLETED_TASK_TTL", "")
 
@@ -144,7 +143,6 @@ func TestLoadConfig_CompletedTaskTTLDefaultsDisabledOnSelfHostAndReadsEnv(t *tes
 
 func TestLoadConfig_WSClaimPollIntervalPrecedence(t *testing.T) {
 	stageFakeAgent(t)
-	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", filepath.Join(t.TempDir(), "missing-shell"))
 	t.Setenv("MULTICA_DAEMON_WS_CLAIM_POLL_INTERVAL", "")
 	base := Overrides{ServerURL: "http://localhost:0", WorkspacesRoot: t.TempDir()}
@@ -184,7 +182,6 @@ func TestLoadConfig_WSClaimPollIntervalPrecedence(t *testing.T) {
 
 func TestLoadConfig_CompletedTaskTTLDefaultsBoundedOnOfficialCloud(t *testing.T) {
 	stageFakeAgent(t)
-	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", filepath.Join(t.TempDir(), "missing-shell"))
 	t.Setenv("MULTICA_GC_COMPLETED_TASK_TTL", "")
 
@@ -461,6 +458,7 @@ func stageFakeAgent(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell not available on Windows")
 	}
+	cli.IsolateConfigRoot(t)
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "claude")
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -517,8 +515,7 @@ func TestLoadConfig_SkipsMulticaHooksShadowingAgentBinaries(t *testing.T) {
 		t.Skip("POSIX shell not available on Windows")
 	}
 
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	hooksDir := filepath.Join(home, ".multica", "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
@@ -577,8 +574,7 @@ func TestLoadConfig_SkipsMulticaHooksFromLoginShellFallback(t *testing.T) {
 		t.Skipf("no /bin/sh available: %v", err)
 	}
 
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	hooksDir := filepath.Join(home, ".multica", "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
@@ -1300,6 +1296,7 @@ func TestLoadConfig_SkipsLoginShellWhenLookPathSucceeds(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell not available on Windows")
 	}
+	cli.IsolateConfigRoot(t)
 
 	// Stage 1: a fake `claude` binary the daemon's bare exec.LookPath
 	// definitely sees, so the probe loop never has reason to consult
@@ -1350,6 +1347,7 @@ func TestLoadConfig_SkipsLoginShellWhenLookPathSucceeds(t *testing.T) {
 }
 
 func TestLoadConfig_UsesCodexDesktopAppBundleFallback(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	pathDir := t.TempDir()
 	fakeCodex := filepath.Join(pathDir, "Codex.app", "Contents", "Resources", "codex")
 	if err := os.MkdirAll(filepath.Dir(fakeCodex), 0o755); err != nil {
@@ -1392,6 +1390,7 @@ func TestLoadConfig_UsesCodexDesktopAppBundleFallback(t *testing.T) {
 // Multica must resolve the bundled CLI under ChatGPT.app (and prefer it over
 // the legacy Codex.app path when both exist).
 func TestLoadConfig_UsesChatGPTAppBundleCodexPath(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	pathDir := t.TempDir()
 	fakeChatGPT := filepath.Join(pathDir, "ChatGPT.app", "Contents", "Resources", "codex")
 	fakeLegacy := filepath.Join(pathDir, "Codex.app", "Contents", "Resources", "codex")
@@ -1463,6 +1462,7 @@ func TestCodexDesktopAppBundlePaths_IncludesChatGPTAndLegacy(t *testing.T) {
 }
 
 func TestLoadConfig_CodexDesktopFallbackDoesNotOverrideExplicitPath(t *testing.T) {
+	cli.IsolateConfigRoot(t)
 	pathDir := t.TempDir()
 	fakeCodex := filepath.Join(pathDir, "Codex.app", "Contents", "Resources", "codex")
 	if err := os.MkdirAll(filepath.Dir(fakeCodex), 0o755); err != nil {
@@ -1523,18 +1523,6 @@ func pinNonCodexAgentsToMissingPaths(t *testing.T) {
 // =============================================================================
 // CLI config Backends.OpenClaw overrides (issue #3875)
 // =============================================================================
-
-// writeCLIConfigForProfile is a minimal helper for the override tests:
-// stages a HOME, writes a config.json under the given profile (empty profile
-// = default), and returns the resolved path so tests can assert against it.
-func writeCLIConfigForProfile(t *testing.T, profile string, cfg cli.CLIConfig) {
-	t.Helper()
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
-		t.Fatalf("write cli config: %v", err)
-	}
-}
 
 // TestApplyOpenclawOverride_DoesNothingWhenNil verifies the early-return
 // path. A daemon started with no override should not Setenv anything; the
@@ -1672,10 +1660,8 @@ func TestLoadConfig_AppliesBackendOverridesFromConfigFile(t *testing.T) {
 		os.Unsetenv("OPENCLAW_STATE_DIR")
 	})
 
-	// Drop a CLI config under the user's HOME (already pointed at TempDir
-	// by stageFakeAgent's t.Setenv chain — but reassert here for clarity).
-	homeForCLIConfig := t.TempDir()
-	t.Setenv("HOME", homeForCLIConfig)
+	// Drop a CLI config under an isolated config root (a fresh temp dir, so
+	// the test never reads or writes the ambient agent config directory).
 	cfg := cli.CLIConfig{
 		ServerURL: "http://localhost:8080",
 		Backends: &cli.BackendOverrides{
@@ -1716,8 +1702,7 @@ func TestLoadConfig_AppliesBackendOverridesFromConfigFile(t *testing.T) {
 func TestLoadConfig_BackendOverrides_BackwardCompat_NoConfigFile(t *testing.T) {
 	stageFakeAgent(t)
 
-	// Point HOME at an empty dir — no config.json present.
-	t.Setenv("HOME", t.TempDir())
+	// Use a fresh isolated config root with no config.json present.
 	os.Unsetenv("MULTICA_OPENCLAW_PATH")
 	os.Unsetenv("OPENCLAW_STATE_DIR")
 	t.Cleanup(func() {
@@ -1745,8 +1730,10 @@ func TestLoadConfig_BackendOverrides_BackwardCompat_NoConfigFile(t *testing.T) {
 // env-var-only configuration.
 func TestLoadConfig_BackendOverrides_MalformedConfigFileNonFatal(t *testing.T) {
 	stageFakeAgent(t)
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve isolated home: %v", err)
+	}
 
 	// Write malformed JSON.
 	cfgDir := filepath.Join(homeDir, ".multica")
@@ -1757,7 +1744,7 @@ func TestLoadConfig_BackendOverrides_MalformedConfigFileNonFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadConfig(Overrides{
+	_, err = LoadConfig(Overrides{
 		ServerURL:      "http://localhost:8080",
 		WorkspacesRoot: t.TempDir(),
 	})

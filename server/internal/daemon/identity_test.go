@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 func TestEnsureDaemonID_Persists(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 
 	first, err := EnsureDaemonID("")
 	if err != nil {
@@ -42,8 +42,7 @@ func TestEnsureDaemonID_Persists(t *testing.T) {
 }
 
 func TestEnsureDaemonID_SharedAcrossProfiles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 
 	defaultID, err := EnsureDaemonID("")
 	if err != nil {
@@ -66,8 +65,7 @@ func TestEnsureDaemonID_SharedAcrossProfiles(t *testing.T) {
 }
 
 func TestEnsureDaemonID_PromotesPreChangeProfileFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 
 	// Seed a per-profile daemon.id the way pre-#1220 daemons laid it out.
 	legacyID := uuid.Must(uuid.NewV7()).String()
@@ -101,8 +99,7 @@ func TestEnsureDaemonID_PromotesPreChangeProfileFile(t *testing.T) {
 }
 
 func TestEnsureDaemonID_RegeneratesCorruptFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 
 	dir := filepath.Join(home, ".multica")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -128,8 +125,7 @@ func TestEnsureDaemonID_RegeneratesCorruptFile(t *testing.T) {
 }
 
 func TestLegacyDaemonUUIDs_ScansProfileDirs(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 
 	uuidA := uuid.Must(uuid.NewV7()).String()
 	uuidB := uuid.Must(uuid.NewV7()).String()
@@ -165,8 +161,7 @@ func TestLegacyDaemonUUIDs_ScansProfileDirs(t *testing.T) {
 }
 
 func TestLegacyDaemonUUIDs_MissingProfilesDirIsNil(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	cli.IsolateConfigRoot(t)
 
 	ids, err := LegacyDaemonUUIDs()
 	if err != nil {

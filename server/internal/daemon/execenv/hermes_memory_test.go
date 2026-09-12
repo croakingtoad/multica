@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // TestHermesMemoryProfileSegment covers the store segment derived from a
@@ -52,9 +54,7 @@ func TestHermesMemoryProfileSegment(t *testing.T) {
 // TestHermesMemoryStorePathLayout pins the on-disk layout the documented
 // one-off import depends on: <profile dir>/hermes-state/<agent>/<profile>.
 func TestHermesMemoryStorePathLayout(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	agent := "11111111-2222-3333-4444-555555555555"
 	got := HermesMemoryStorePath("", agent, filepath.Join(platformDefaultHermesHome(), "profiles", "research"))
@@ -67,9 +67,7 @@ func TestHermesMemoryStorePathLayout(t *testing.T) {
 // TestHermesMemoryStorePathDisabled covers the task without an agent to key the
 // store on: memory has to stay task-local rather than land in a shared segment.
 func TestHermesMemoryStorePathDisabled(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	cli.IsolateConfigRoot(t)
 
 	if got := HermesMemoryStorePath("", "", ""); got != "" {
 		t.Fatalf("store path without an agent = %q, want empty", got)
@@ -543,9 +541,7 @@ func TestPrepareHermesHomeMigrationKeepsExistingStore(t *testing.T) {
 // are reclaimed, recently-used ones are kept, and a store a live task holds is
 // never removed.
 func TestPruneHermesMemoryStores(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	root := filepath.Join(home, ".multica", hermesMemoryStoreRoot)
 	idle := filepath.Join(root, "agent-idle", "default")
@@ -594,9 +590,7 @@ func TestPruneHermesMemoryStores(t *testing.T) {
 // TestPruneHermesMemoryStoresDisabled documents that retention <= 0 turns the
 // pruner off entirely, matching the Codex store knob.
 func TestPruneHermesMemoryStoresDisabled(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := cli.IsolateConfigRoot(t)
 
 	store := filepath.Join(home, ".multica", hermesMemoryStoreRoot, "agent-1", "default")
 	mustWrite(t, filepath.Join(store, "MEMORY.md"), "remembered")

@@ -599,6 +599,7 @@
     "pipeline": {
       "stat_percent": "完了",
       "stat_tasks": "タスク",
+      "part_tasks_other": "タスク",
       "stat_gaps": "部分が未分解",
       "gate_covered": "ゲート: {{total}} 部分中 {{covered}} 部分がカバー済み",
       "blocked_on_phase": "{{title}} でブロック中",

@@ -599,6 +599,7 @@
     "pipeline": {
       "stat_percent": "완료",
       "stat_tasks": "작업",
+      "part_tasks_other": "작업",
       "stat_gaps": "부분이 분해되지 않음",
       "gate_covered": "게이트: 전체 {{total}}개 부분 중 {{covered}}개 커버됨",
       "blocked_on_phase": "{{title}}에 의해 차단됨",

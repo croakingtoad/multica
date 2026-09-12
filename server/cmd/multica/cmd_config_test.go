@@ -19,7 +19,7 @@ func newConfigTestCmd() *cobra.Command {
 }
 
 func TestRunConfigSetPersistsSupportedKeysInProfile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	cli.IsolateConfigRoot(t)
 	workspacesRoot := filepath.Join(t.TempDir(), "multica-dev")
 
 	cmd := newConfigTestCmd()
@@ -51,7 +51,7 @@ func TestRunConfigSetPersistsSupportedKeysInProfile(t *testing.T) {
 }
 
 func TestRunConfigShowIncludesProfileAndDefaults(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	cli.IsolateConfigRoot(t)
 
 	cmd := newConfigTestCmd()
 	_ = cmd.Flags().Set("profile", "empty")
@@ -99,6 +99,7 @@ func TestRunConfigCommandsUseTaskLocalConfigWithoutTouchingOwner(t *testing.T) {
 	ownerHome := t.TempDir()
 	taskRoot := filepath.Join(t.TempDir(), "task-multica")
 	t.Setenv("HOME", ownerHome)
+	t.Setenv("USERPROFILE", ownerHome)
 	t.Setenv("MULTICA_AGENT_ID", "agent-test")
 	t.Setenv("MULTICA_TASK_ID", "task-test")
 	t.Setenv("MULTICA_TASK_CONFIG_ROOT", taskRoot)
@@ -152,6 +153,7 @@ func TestRunConfigCommandsUseTaskLocalConfigWithoutTouchingOwner(t *testing.T) {
 func TestRunConfigCommandsFailClosedWithoutTaskRoot(t *testing.T) {
 	ownerHome := t.TempDir()
 	t.Setenv("HOME", ownerHome)
+	t.Setenv("USERPROFILE", ownerHome)
 	t.Setenv("MULTICA_AGENT_ID", "agent-test")
 	t.Setenv("MULTICA_TASK_ID", "task-test")
 	t.Setenv("MULTICA_TASK_CONFIG_ROOT", "")
@@ -182,7 +184,7 @@ func TestRunConfigCommandsFailClosedWithoutTaskRoot(t *testing.T) {
 }
 
 func TestRunConfigSetRejectsUnknownKey(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	cli.IsolateConfigRoot(t)
 
 	cmd := newConfigTestCmd()
 	err := runConfigSet(cmd, []string{"token", "secret"})
