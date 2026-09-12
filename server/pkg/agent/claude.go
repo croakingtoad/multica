@@ -241,6 +241,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if msg.SessionID != "" {
 					sessionID = msg.SessionID
 				}
+				reportClaudeHookResponse(msg, opts.ClaudeHookResponse)
 				trySend(msgCh, Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
 			case "result":
 				sawResult = true
@@ -561,11 +562,35 @@ type claudeSDKMessage struct {
 	// control request fields
 	RequestID string          `json:"request_id,omitempty"`
 	Request   json.RawMessage `json:"request,omitempty"`
+
+	// hook_response fields (system subtype; emitted with
+	// --include-hook-events). ExitCode is a pointer because cancelled hooks may
+	// omit it while a successful hook reports zero.
+	HookID       string `json:"hook_id,omitempty"`
+	HookName     string `json:"hook_name,omitempty"`
+	HookEvent    string `json:"hook_event,omitempty"`
+	HookOutput   string `json:"output,omitempty"`
+	HookStdout   string `json:"stdout,omitempty"`
+	HookStderr   string `json:"stderr,omitempty"`
+	HookExitCode *int   `json:"exit_code,omitempty"`
+	HookOutcome  string `json:"outcome,omitempty"`
 }
 
 type claudeLogEntry struct {
 	Level   string `json:"level"`
 	Message string `json:"message"`
+}
+
+func reportClaudeHookResponse(msg claudeSDKMessage, report func(ClaudeHookResponse)) bool {
+	if msg.Subtype != "hook_response" || report == nil {
+		return false
+	}
+	report(ClaudeHookResponse{
+		HookID: msg.HookID, HookName: msg.HookName, HookEvent: msg.HookEvent,
+		Output: msg.HookOutput, Stdout: msg.HookStdout, Stderr: msg.HookStderr,
+		ExitCode: msg.HookExitCode, Outcome: msg.HookOutcome,
+	})
+	return true
 }
 
 type claudeMessageContent struct {
@@ -697,12 +722,13 @@ func trySend(ch chan<- Message, msg Message) {
 // overridden by user-configured custom_args. Overriding these would break
 // the daemon↔Claude communication protocol.
 var claudeBlockedArgs = map[string]blockedArgMode{
-	"-p":                blockedStandalone, // non-interactive mode
-	"--output-format":   blockedWithValue,  // stream-json protocol
-	"--input-format":    blockedWithValue,  // stream-json protocol
-	"--permission-mode": blockedWithValue,  // bypassPermissions for autonomous operation
-	"--mcp-config":      blockedWithValue,  // set by daemon from agent.mcp_config
-	"--debug-file":      blockedWithValue,  // task-scoped hook fire source owned by daemon
+	"-p":                    blockedStandalone, // non-interactive mode
+	"--output-format":       blockedWithValue,  // stream-json protocol
+	"--input-format":        blockedWithValue,  // stream-json protocol
+	"--permission-mode":     blockedWithValue,  // bypassPermissions for autonomous operation
+	"--mcp-config":          blockedWithValue,  // set by daemon from agent.mcp_config
+	"--debug-file":          blockedWithValue,  // task-scoped hook fire source owned by daemon
+	"--include-hook-events": blockedStandalone, // structured hook results owned by daemon
 	// `--effort` is owned by the per-agent thinking_level picker so a
 	// user-supplied custom_arg cannot silently outvote it. The daemon
 	// injects --effort only when opts.ThinkingLevel is set; if a user
@@ -755,6 +781,9 @@ func buildClaudeArgs(opts ExecOptions, logger *slog.Logger) []string {
 	}
 	if opts.ClaudeDebugFile != "" {
 		args = append(args, "--debug-file", opts.ClaudeDebugFile)
+	}
+	if opts.ClaudeHookResponse != nil {
+		args = append(args, "--include-hook-events")
 	}
 	blockedArgs := claudeBlockedArgs
 	if opts.ClaudeSettingsPath != "" {

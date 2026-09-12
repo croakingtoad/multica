@@ -8352,13 +8352,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var msgSeq atomic.Int32
 	var hookCapture *claudeHookFireCapture
 	if provider == "claude" {
-		if home, homeErr := os.UserHomeDir(); homeErr != nil {
-			taskLog.Warn("Claude hook fire capture cannot resolve user home", "error", homeErr)
-		} else {
-			hookCapture = d.startClaudeHookFireCapture(task.RuntimeID, task.ID, home, env.WorkDir, env.RootDir)
-			if hookCapture != nil {
-				execOpts.ClaudeDebugFile = hookCapture.debugPath
-			}
+		hookCapture = d.startClaudeHookFireCapture(task.RuntimeID, task.ID, env.RootDir)
+		if hookCapture != nil {
+			execOpts.ClaudeDebugFile = hookCapture.debugPath
+			execOpts.ClaudeHookResponse = hookCapture.observe
 		}
 	}
 	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
@@ -8418,16 +8415,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		freshPrompt := BuildPrompt(task, provider, promptOptions...)
 		if provider == "claude" {
-			if home, homeErr := os.UserHomeDir(); homeErr != nil {
-				taskLog.Warn("Claude hook fire retry capture cannot resolve user home", "error", homeErr)
-				execOpts.ClaudeDebugFile = ""
-				hookCapture = nil
-			} else {
-				hookCapture = d.startClaudeHookFireCapture(task.RuntimeID, task.ID, home, env.WorkDir, env.RootDir)
-				execOpts.ClaudeDebugFile = ""
-				if hookCapture != nil {
-					execOpts.ClaudeDebugFile = hookCapture.debugPath
-				}
+			hookCapture = d.startClaudeHookFireCapture(task.RuntimeID, task.ID, env.RootDir)
+			execOpts.ClaudeDebugFile = ""
+			execOpts.ClaudeHookResponse = nil
+			if hookCapture != nil {
+				execOpts.ClaudeDebugFile = hookCapture.debugPath
+				execOpts.ClaudeHookResponse = hookCapture.observe
 			}
 		}
 

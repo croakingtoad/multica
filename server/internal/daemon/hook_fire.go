@@ -12,9 +12,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/multica-ai/multica/server/internal/runtimehooks"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -28,61 +29,32 @@ var (
 	claudeHookFirePattern  = regexp.MustCompile(`(?s)^Hook (.+) \(([A-Za-z][A-Za-z0-9]*)\) (success|error|cancelled):(?:\n(.*))?$`)
 )
 
+// claudeHookFireCapture joins two host-observed records of the same
+// invocation. Claude's structured hook_response supplies per-execution
+// identity and exit status; its debug log supplies the durable provenance and
+// host timestamp required by hook_fire_history. Neither source alone is
+// sufficient, so unmatched records are never persisted.
 type claudeHookFireCapture struct {
-	debugPath       string
-	home            string
-	projectRoot     string
-	resolved        runtimehooks.Resolution
-	runnable        map[string]bool
-	sourceSnapshots map[runtimehooks.SourceRef]string
-	sourceUnchanged map[runtimehooks.SourceRef]bool
+	debugPath string
+
+	mu        sync.Mutex
+	responses []agent.ClaudeHookResponse
 }
 
-func hookConfigSourceSnapshot(source protocol.HookConfigSource) string {
-	if source.SourcePath == nil || source.ContentHash == nil {
-		return "absent"
+func (c *claudeHookFireCapture) observe(response agent.ClaudeHookResponse) {
+	if response.ExitCode != nil {
+		exitCode := *response.ExitCode
+		response.ExitCode = &exitCode
 	}
-	info, err := os.Stat(*source.SourcePath)
-	if err != nil {
-		return "unreadable"
-	}
-	return *source.ContentHash + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10) + ":" + strconv.FormatInt(info.Size(), 10)
+	c.mu.Lock()
+	c.responses = append(c.responses, response)
+	c.mu.Unlock()
 }
 
-func prepareClaudeHookFireCapture(home, projectRoot, debugPath string) (*claudeHookFireCapture, error) {
-	sources, err := readRuntimeHookConfig("claude", home, projectRoot)
-	if err != nil {
-		return nil, fmt.Errorf("read Claude hook identity snapshot: %w", err)
-	}
-	expected := make([]runtimehooks.SourceRef, 0, len(sources))
-	observed := make([]runtimehooks.ObservedSource, 0, len(sources))
-	sourceSnapshots := make(map[runtimehooks.SourceRef]string, len(sources))
-	for _, source := range sources {
-		ref := runtimehooks.SourceRef{Scope: source.Scope, Format: source.Format, Kind: runtimehooks.SourceSettings}
-		expected = append(expected, ref)
-		sourceSnapshots[ref] = hookConfigSourceSnapshot(source)
-		observed = append(observed, runtimehooks.ObservedSource{
-			Source: ref, SourcePath: source.SourcePath, ContentHash: source.ContentHash,
-			Hooks: source.Hooks, DisabledHooks: source.DisabledHooks,
-		})
-	}
-	resolved, err := runtimehooks.Resolve(runtimehooks.ProviderClaude, expected, observed)
-	if err != nil {
-		return nil, fmt.Errorf("resolve Claude hook identity snapshot: %w", err)
-	}
-	states, err := resolved.RunStates()
-	if err != nil {
-		return nil, fmt.Errorf("classify Claude hook identity snapshot: %w", err)
-	}
-	runnable := make(map[string]bool, len(states))
-	for _, state := range states {
-		runnable[state.Hook.HookID] = state.Configuration == runtimehooks.ConfigurationLive &&
-			state.Effectiveness == runtimehooks.EffectivenessWillRun
-	}
-	return &claudeHookFireCapture{
-		debugPath: debugPath, home: home, projectRoot: projectRoot, resolved: resolved,
-		runnable: runnable, sourceSnapshots: sourceSnapshots,
-	}, nil
+func (c *claudeHookFireCapture) responseSnapshot() []agent.ClaudeHookResponse {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]agent.ClaudeHookResponse(nil), c.responses...)
 }
 
 type claudeDebugFire struct {
@@ -90,6 +62,7 @@ type claudeDebugFire struct {
 	hookName     string
 	event        string
 	debugOutcome string
+	output       string
 	firstLine    string
 }
 
@@ -121,54 +94,53 @@ func parseClaudeDebugFire(line, followingLine string) (claudeDebugFire, bool) {
 	firstLine, _, _ := strings.Cut(output, "\n")
 	return claudeDebugFire{
 		firedAt: firedAt, hookName: parts[1], event: parts[2],
-		debugOutcome: parts[3], firstLine: strings.TrimSpace(firstLine),
+		debugOutcome: parts[3], output: output, firstLine: strings.TrimSpace(firstLine),
 	}, true
 }
 
-func (c *claudeHookFireCapture) observedHook(record claudeDebugFire) (runtimehooks.ResolvedHook, bool) {
-	value := ""
-	if record.hookName != record.event {
-		prefix := record.event + ":"
-		if !strings.HasPrefix(record.hookName, prefix) {
-			return runtimehooks.ResolvedHook{}, false
-		}
-		value = strings.TrimPrefix(record.hookName, prefix)
+func claudeResponseDebugOutput(response agent.ClaudeHookResponse) string {
+	// This is Claude 2.1.269's exact debug logger selection: stdout || stderr
+	// || output. Matching that value joins the structured response to the log
+	// entry without guessing from event or completion order.
+	if response.Stdout != "" {
+		return response.Stdout
 	}
-	partition, err := c.resolved.MatchEvent(record.event, value)
-	if err != nil {
-		return runtimehooks.ResolvedHook{}, false
+	if response.Stderr != "" {
+		return response.Stderr
 	}
-	merged := c.resolved.MergeMatched(partition.Matched)
-	candidates := merged[:0]
-	for _, candidate := range merged {
-		unchanged := true
-		for _, source := range candidate.Sources {
-			if !c.sourceUnchanged[source] {
-				unchanged = false
-				break
-			}
-		}
-		if c.runnable[candidate.HookID] && unchanged {
-			candidates = append(candidates, candidate)
-		}
-	}
-	// Claude's debug record carries no content identity. Persist only when its
-	// event/value resolves to exactly one launch-time definition; choosing among
-	// multiple candidates would fabricate which handler produced the record.
-	if len(candidates) != 1 {
-		return runtimehooks.ResolvedHook{}, false
-	}
-	return candidates[0], true
+	return response.Output
 }
 
-func hookFireOutcome(record claudeDebugFire) string {
-	switch record.debugOutcome {
+func claudeFireSignature(hookName, event, outcome, output string) string {
+	return hookName + "\x00" + event + "\x00" + outcome + "\x00" + output
+}
+
+func claudeHookNeverRan(response agent.ClaudeHookResponse, firstLine string) bool {
+	lower := strings.ToLower(strings.TrimSpace(firstLine))
+	if strings.HasPrefix(lower, "failed to run:") ||
+		strings.HasPrefix(lower, "error occurred while executing hook command:") ||
+		strings.Contains(lower, "executable not found in $path:") {
+		return true
+	}
+	if response.ExitCode == nil || (*response.ExitCode != 126 && *response.ExitCode != 127) {
+		return false
+	}
+	return strings.Contains(lower, ": not found") ||
+		strings.Contains(lower, "command not found") ||
+		strings.Contains(lower, ": permission denied") ||
+		strings.Contains(lower, ": cannot execute")
+}
+
+func hookFireOutcome(response agent.ClaudeHookResponse, firstLine string) string {
+	switch response.Outcome {
 	case "success":
 		return "success"
 	case "error":
-		if strings.HasPrefix(record.firstLine, "Failed to run:") ||
-			strings.HasPrefix(record.firstLine, "Error occurred while executing hook command:") {
+		if claudeHookNeverRan(response, firstLine) {
 			return "skipped"
+		}
+		if response.ExitCode == nil {
+			return "unknown"
 		}
 		return "failure"
 	default:
@@ -176,9 +148,9 @@ func hookFireOutcome(record claudeDebugFire) string {
 	}
 }
 
-func hookFireID(runtimeID, taskID string, firedAt time.Time, event, outcome, firstLine string, ordinal int) string {
+func hookFireID(runtimeID, taskID, streamHookID string, firedAt time.Time) string {
 	hash := sha256.New()
-	for _, value := range []string{runtimeID, taskID, firedAt.Format(time.RFC3339Nano), event, outcome, firstLine, strconv.Itoa(ordinal)} {
+	for _, value := range []string{runtimeID, taskID, streamHookID, firedAt.Format(time.RFC3339Nano)} {
 		_, _ = hash.Write([]byte(value))
 		_, _ = hash.Write([]byte{0})
 	}
@@ -198,18 +170,8 @@ func truncateHookFireDetail(value string) string {
 	return value[:maxHookFireDetailBytes]
 }
 
-func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookFire, error) {
-	currentSources, err := readRuntimeHookConfig("claude", c.home, c.projectRoot)
-	if err != nil {
-		return nil, fmt.Errorf("re-read Claude hook identity snapshot: %w", err)
-	}
-	c.sourceUnchanged = make(map[runtimehooks.SourceRef]bool, len(currentSources))
-	for _, source := range currentSources {
-		ref := runtimehooks.SourceRef{Scope: source.Scope, Format: source.Format, Kind: runtimehooks.SourceSettings}
-		c.sourceUnchanged[ref] = c.sourceSnapshots[ref] == hookConfigSourceSnapshot(source)
-	}
-
-	file, err := os.Open(c.debugPath)
+func readClaudeDebugFires(path string) ([]claudeDebugFire, error) {
+	file, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -228,54 +190,84 @@ func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookF
 		return nil, fmt.Errorf("read Claude hook debug log: %w", err)
 	}
 
-	ordinals := make(map[string]int)
-	fires := make([]protocol.HookFire, 0)
+	records := make([]claudeDebugFire, 0)
 	for i, line := range lines {
 		following := ""
 		if i+1 < len(lines) && claudeDebugLinePattern.FindStringSubmatch(lines[i+1]) == nil {
 			following = lines[i+1]
 		}
-		record, ok := parseClaudeDebugFire(line, following)
-		if !ok {
+		if record, ok := parseClaudeDebugFire(line, following); ok {
+			records = append(records, record)
+		}
+	}
+	return records, nil
+}
+
+func (c *claudeHookFireCapture) read(runtimeID, taskID string) ([]protocol.HookFire, error) {
+	debugRecords, err := readClaudeDebugFires(c.debugPath)
+	if err != nil {
+		return nil, err
+	}
+	bySignature := make(map[string][]claudeDebugFire, len(debugRecords))
+	for _, record := range debugRecords {
+		key := claudeFireSignature(record.hookName, record.event, record.debugOutcome, record.output)
+		bySignature[key] = append(bySignature[key], record)
+	}
+
+	fires := make([]protocol.HookFire, 0)
+	for _, response := range c.responseSnapshot() {
+		if response.HookID == "" || response.HookName == "" || response.HookEvent == "" {
 			continue
 		}
-		hook, ok := c.observedHook(record)
-		if !ok {
+		key := claudeFireSignature(response.HookName, response.HookEvent, response.Outcome, claudeResponseDebugOutput(response))
+		matches := bySignature[key]
+		if len(matches) == 0 {
 			continue
 		}
-		outcome := hookFireOutcome(record)
-		detail, err := json.Marshal(map[string]string{
-			"debug_outcome": record.debugOutcome,
-			"message":       truncateHookFireDetail(record.firstLine),
+		record := matches[0]
+		bySignature[key] = matches[1:]
+
+		// hook_response deliberately does not expose the configured handler.
+		// Persist the execution identity it does expose and an honest observed
+		// spec marker; binding this record to any current settings handler would
+		// fabricate identity when plugins, skills, or managed settings also ran.
+		hookSpec, err := json.Marshal(map[string]string{
+			"hook_name": response.HookName,
+			"type":      "claude_hook_response",
 		})
+		if err != nil {
+			return nil, fmt.Errorf("encode Claude hook fire spec: %w", err)
+		}
+		outcome := hookFireOutcome(response, record.firstLine)
+		detailValue := map[string]any{
+			"debug_outcome": response.Outcome,
+			"message":       truncateHookFireDetail(record.firstLine),
+		}
+		if response.ExitCode != nil {
+			detailValue["exit_code"] = *response.ExitCode
+		}
+		detail, err := json.Marshal(detailValue)
 		if err != nil {
 			return nil, fmt.Errorf("encode Claude hook fire detail: %w", err)
 		}
-		key := record.firedAt.Format(time.RFC3339Nano) + "\x00" + record.event + "\x00" + outcome + "\x00" + record.firstLine
-		ordinal := ordinals[key]
-		ordinals[key]++
 		fires = append(fires, protocol.HookFire{
-			ID:    hookFireID(runtimeID, taskID, record.firedAt, record.event, outcome, record.firstLine, ordinal),
-			Event: record.event, HookID: hook.HookID, HookSpec: append(json.RawMessage(nil), hook.Handler...),
+			ID:    hookFireID(runtimeID, taskID, response.HookID, record.firedAt),
+			Event: response.HookEvent, HookID: response.HookID, HookSpec: hookSpec,
 			FiredAt: record.firedAt.Format(time.RFC3339Nano), Outcome: outcome, Detail: detail,
 		})
 	}
 	return fires, nil
 }
 
-func (d *Daemon) startClaudeHookFireCapture(runtimeID, taskID, home, projectRoot, envRoot string) *claudeHookFireCapture {
+func (d *Daemon) startClaudeHookFireCapture(runtimeID, taskID, envRoot string) *claudeHookFireCapture {
 	debugDir := filepath.Join(envRoot, ".multica", "claude-hook-debug")
 	if err := os.MkdirAll(debugDir, 0o700); err != nil {
 		d.logger.Warn("Claude hook fire capture directory unavailable", "runtime_id", runtimeID, "task_id", taskID, "error", err)
 		return nil
 	}
-	debugPath := filepath.Join(debugDir, fmt.Sprintf("%s-%d.log", taskID, time.Now().UnixNano()))
-	capture, err := prepareClaudeHookFireCapture(home, projectRoot, debugPath)
-	if err != nil {
-		d.logger.Warn("Claude hook fire identity snapshot unavailable", "runtime_id", runtimeID, "task_id", taskID, "error", err)
-		return nil
+	return &claudeHookFireCapture{
+		debugPath: filepath.Join(debugDir, fmt.Sprintf("%s-%d.log", taskID, time.Now().UnixNano())),
 	}
-	return capture
 }
 
 func (d *Daemon) finishClaudeHookFireCapture(capture *claudeHookFireCapture, runtimeID, taskID string) {

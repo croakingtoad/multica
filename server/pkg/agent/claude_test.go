@@ -353,8 +353,9 @@ func TestBuildClaudeArgsPinsManagedDebugFile(t *testing.T) {
 	t.Parallel()
 
 	args := buildClaudeArgs(ExecOptions{
-		ClaudeDebugFile: "/daemon/task/hook-debug.log",
-		CustomArgs:      []string{"--debug-file", "/attacker/override.log"},
+		ClaudeDebugFile:    "/daemon/task/hook-debug.log",
+		ClaudeHookResponse: func(ClaudeHookResponse) {},
+		CustomArgs:         []string{"--debug-file", "/attacker/override.log", "--include-hook-events"},
 	}, slog.Default())
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--debug-file /daemon/task/hook-debug.log") {
@@ -362,6 +363,26 @@ func TestBuildClaudeArgsPinsManagedDebugFile(t *testing.T) {
 	}
 	if strings.Contains(joined, "/attacker/override.log") {
 		t.Fatalf("custom debug file overrode managed path: %v", args)
+	}
+	if strings.Count(joined, "--include-hook-events") != 1 {
+		t.Fatalf("managed hook event stream was absent or duplicated: %v", args)
+	}
+}
+
+func TestReportClaudeHookResponseReadsStructuredWireFields(t *testing.T) {
+	t.Parallel()
+
+	var msg claudeSDKMessage
+	raw := `{"type":"system","subtype":"hook_response","hook_id":"execution-1","hook_name":"Stop","hook_event":"Stop","output":"qc-boom","stdout":"","stderr":"qc-boom","exit_code":1,"outcome":"error"}`
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatal(err)
+	}
+	var got ClaudeHookResponse
+	if !reportClaudeHookResponse(msg, func(response ClaudeHookResponse) { got = response }) {
+		t.Fatal("hook_response was not reported")
+	}
+	if got.HookID != "execution-1" || got.HookEvent != "Stop" || got.ExitCode == nil || *got.ExitCode != 1 || got.Outcome != "error" {
+		t.Fatalf("response = %#v", got)
 	}
 }
 
