@@ -61,9 +61,24 @@ type ProjectedUnrecognizedKey struct {
 	Reason string             `json:"reason"`
 }
 
-// Projection carries Error rather than replacing the result: one malformed
-// source must not hide the sources that did resolve, and the honest report of
-// an unreadable snapshot is that it could not be resolved — not "no hooks".
+// Projection reports a snapshot it could not read as unresolved, never as
+// empty. Error and Entries are exclusive by construction: a source that cannot
+// be parsed at all is fatal to the whole projection, so Project sets Error and
+// leaves Entries empty rather than publishing the subset that did resolve.
+//
+// That is a deliberate trade, and this is the reason for it. A truncated list
+// presented as complete is a worse answer than a refusal: nothing in the list
+// marks which hooks are missing, so a reader who acts on it acts on a total
+// that is not one, while "could not be resolved" is at least true. Entries
+// stays a non-nil empty slice and the per-source states travel separately, so
+// a client still names the file it could not read instead of saying "no hooks".
+//
+// Tolerance stops at the source boundary, and only there. A malformed key
+// *inside* a source that did parse does not cost that source: parseEntries
+// records it in UnrecognizedKeys and resolves every key it recognized, so the
+// row is visibly skipped rather than silently dropped. An *unexpected* source
+// is a third case, neither fatal nor tolerated here — resolveObserved filters
+// it out before it can fail anything, for the reason Project's own doc gives.
 type Projection struct {
 	Provider string           `json:"provider"`
 	Entries  []ProjectedEntry `json:"entries"`

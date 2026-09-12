@@ -564,23 +564,35 @@ describe("LifecycleHooksTab", () => {
     );
   });
 
-  // R4, the partly-resolved half (LOCO-408 AC2). A blanket "counts are
-  // unavailable when any error is present" would throw away truth: the source
-  // that did resolve has a real count. What must not survive is presenting
-  // that floor as a complete total.
-  it("keeps the counts it has on a partly-resolved read and calls them a floor", () => {
-    const partial = observation({ observed_at: "2026-09-12T09:00:00Z" });
-    partial.resolved!.error =
+  // LOCO-581 / PL-033, replacing the tab-level half of LOCO-408 AC2. That
+  // test set an error on a payload carrying two entries and asserted the
+  // screen calls the counts a floor. `Project` emits no such payload — a
+  // source it cannot parse is fatal to the whole projection — and the floor
+  // string is gone with the coverage state that printed it.
+  //
+  // The shape is kept rather than dropped, because an installed client can
+  // meet a newer backend and this pins what it must do with one: state that
+  // the counts were not established, never a floor, and still render the rows
+  // it was handed instead of hiding them. It is also the regression guard on
+  // the deleted modelling — a "floor" note cannot come back without failing
+  // here.
+  it("claims no floor when a payload carries an error, whatever else it carries", () => {
+    const carried = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    carried.resolved!.error =
       "project:json: invalid character '}' looking for beginning of value";
-    hookQuery.mockReturnValue({ data: partial, error: null, isFetching: false });
+    hookQuery.mockReturnValue({ data: carried, error: null, isFetching: false });
 
     const { container } = mount();
+    const text = container.textContent ?? "";
 
-    expect(screen.getByText("Entries: 2")).toBeInTheDocument();
-    expect(screen.getByText("Configured").nextSibling).toHaveTextContent("2");
-    expect(container.textContent ?? "").toMatch(
-      /read them as a floor rather than a total/,
-    );
+    expect(text).not.toMatch(/read them as a floor rather than a total/);
+    expect(text).toMatch(/none of the counts above were established/);
+    // Not even the scope the entries came from states a number.
+    expect(screen.queryByText("Entries: 2")).not.toBeInTheDocument();
+    expect(screen.getByText("Entries: not established")).toBeInTheDocument();
+    expect(screen.getAllByText("Not established").length).toBeGreaterThan(0);
+    // And the rows it was handed are still on screen.
+    expect(screen.getByText("guard.sh")).toBeInTheDocument();
   });
 
   // AC3, at the screen. The fix is not "suppress zeros": a clean read of a
@@ -616,13 +628,15 @@ describe("LifecycleHooksTab", () => {
     ).not.toBeInTheDocument();
   });
 
-  // R3, the partly-resolved case: one malformed source must not hide the
-  // sources that did resolve. Error plus entries keeps the list.
-  it("renders the entries of a partly-resolved read", () => {
-    const partial = observation({ observed_at: "2026-09-12T09:00:00Z" });
-    partial.resolved!.error =
+  // The empty-state guard is on the entry count, not on the error. `Project`
+  // never sends entries alongside an error, so this shape only reaches a
+  // client from a backend newer than it — and what it must not do is swap the
+  // list for "Multica cannot list entries" while holding rows to show.
+  it("renders the entries of a payload that carries both entries and an error", () => {
+    const carried = observation({ observed_at: "2026-09-12T09:00:00Z" });
+    carried.resolved!.error =
       "project:json: invalid character '}' looking for beginning of value";
-    hookQuery.mockReturnValue({ data: partial, error: null, isFetching: false });
+    hookQuery.mockReturnValue({ data: carried, error: null, isFetching: false });
 
     mount();
 
