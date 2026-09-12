@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	maxHookFireBatchSize = 500
-	maxHookFireBodyBytes = 4 << 20
+	maxHookFireBatchSize     = 500
+	maxHookFireBodyBytes     = 4 << 20
+	hookFireRetentionMaxRows = 30_000
 )
 
 type validatedHookFire struct {
@@ -153,6 +154,14 @@ func (h *Handler) ReportHookFires(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		inserted += rows
+	}
+	if _, err := qtx.PruneHookFireHistory(r.Context(), db.PruneHookFireHistoryParams{
+		RuntimeID: rt.ID,
+		MaxRows:   hookFireRetentionMaxRows,
+	}); err != nil {
+		slog.Error("hook fire retention failed", "runtime_id", runtimeID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to apply hook fire retention")
+		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit hook fires")

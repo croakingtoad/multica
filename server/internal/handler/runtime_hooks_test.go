@@ -426,6 +426,14 @@ func TestReportHookFiresPersistsObservedIdentityAndOutcomes(t *testing.T) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM hook_fire_history WHERE runtime_id = $1`, runtimeID)
 	})
 	firedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	if _, err := testHandler.Queries.InsertHookFireHistory(context.Background(), db.InsertHookFireHistoryParams{
+		ID: parseUUID("019946d0-e800-7000-8000-000000000000"), RuntimeID: parseUUID(runtimeID),
+		Provider: "claude", Event: "Stop", ExecutionID: "expired-execution", HookSpec: []byte(`{}`),
+		FiredAt:    pgtype.Timestamptz{Time: firedAt.Add(-31 * 24 * time.Hour), Valid: true},
+		Provenance: "inferred", Outcome: "unknown", Detail: []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	report := protocol.HookFireReport{Fires: []protocol.HookFire{
 		{ID: "019946d0-e800-7000-8000-000000000001", Event: "PostToolUse", ExecutionID: "execution-success", HookSpec: json.RawMessage(`{"type":"command","command":"ok"}`), FiredAt: firedAt.Format(time.RFC3339Nano), Provenance: "debug_log", Outcome: "success", Detail: json.RawMessage(`{"debug_outcome":"success"}`)},
 		{ID: "019946d0-e800-7000-8000-000000000002", Event: "Stop", ExecutionID: "execution-failure", HookSpec: json.RawMessage(`{"type":"command","command":"bad"}`), FiredAt: firedAt.Add(time.Second).Format(time.RFC3339Nano), Provenance: "inferred", Outcome: "failure", Detail: json.RawMessage(`{"debug_outcome":"error"}`)},
@@ -470,6 +478,102 @@ func TestReportHookFiresPersistsObservedIdentityAndOutcomes(t *testing.T) {
 	}
 	if got, want := provenances, []string{"debug_log", "inferred", "inferred"}; !slices.Equal(got, want) {
 		t.Fatalf("provenances = %v, want %v", got, want)
+	}
+}
+
+func TestPruneHookFireHistoryAppliesAgeAndRuntimeCapWithoutTouchingSnapshot(t *testing.T) {
+	runtimeID := createProviderRuntime(t, "claude")
+	otherRuntimeID := createProviderRuntime(t, "claude")
+	runtimeUUID := parseUUID(runtimeID)
+	otherRuntimeUUID := parseUUID(otherRuntimeID)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM hook_fire_history WHERE runtime_id = $1`, runtimeID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM hook_fire_history WHERE runtime_id = $1`, otherRuntimeID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM hook_state_snapshot WHERE runtime_id = $1`, runtimeID)
+	})
+
+	observedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	if err := testHandler.Queries.UpsertHookStateSnapshot(ctx, db.UpsertHookStateSnapshotParams{
+		RuntimeID: runtimeUUID, Provider: "claude", Scope: "user", Format: "json",
+		Hooks: []byte(`{"PreToolUse":[]}`), DisabledHooks: []byte(`{}`),
+		ObservedAt: pgtype.Timestamptz{Time: observedAt, Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	fires := []struct {
+		id      string
+		firedAt time.Time
+	}{
+		{id: "019946d0-e800-7000-8000-000000000010", firedAt: now.Add(-31 * 24 * time.Hour)},
+		{id: "019946d0-e800-7000-8000-000000000011", firedAt: now.Add(-3 * time.Minute)},
+		{id: "019946d0-e800-7000-8000-000000000012", firedAt: now.Add(-2 * time.Minute)},
+		{id: "019946d0-e800-7000-8000-000000000013", firedAt: now.Add(-time.Minute)},
+	}
+	for _, fire := range fires {
+		if _, err := testHandler.Queries.InsertHookFireHistory(ctx, db.InsertHookFireHistoryParams{
+			ID: parseUUID(fire.id), RuntimeID: runtimeUUID, Provider: "claude", Event: "Stop",
+			ExecutionID: fire.id, HookSpec: []byte(`{}`),
+			FiredAt:    pgtype.Timestamptz{Time: fire.firedAt, Valid: true},
+			Provenance: "inferred", Outcome: "success", Detail: []byte(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := testHandler.Queries.InsertHookFireHistory(ctx, db.InsertHookFireHistoryParams{
+		ID: parseUUID("019946d0-e800-7000-8000-000000000014"), RuntimeID: otherRuntimeUUID,
+		Provider: "claude", Event: "Stop", ExecutionID: "other-runtime",
+		HookSpec: []byte(`{}`), FiredAt: pgtype.Timestamptz{Time: now.Add(-31 * 24 * time.Hour), Valid: true},
+		Provenance: "inferred", Outcome: "success", Detail: []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := testHandler.Queries.PruneHookFireHistory(ctx, db.PruneHookFireHistoryParams{
+		RuntimeID: runtimeUUID,
+		MaxRows:   2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := testPool.Query(ctx, `SELECT id::text FROM hook_fire_history WHERE runtime_id = $1 ORDER BY fired_at`, runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{fires[2].id, fires[3].id}; !slices.Equal(ids, want) {
+		t.Fatalf("retained ids = %v, want %v", ids, want)
+	}
+	var otherCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM hook_fire_history WHERE runtime_id = $1`, otherRuntimeID).Scan(&otherCount); err != nil {
+		t.Fatal(err)
+	}
+	if otherCount != 1 {
+		t.Fatalf("other runtime history rows = %d, want 1", otherCount)
+	}
+
+	snapshots, err := testHandler.Queries.ListHookStateSnapshot(ctx, db.ListHookStateSnapshotParams{
+		RuntimeID: runtimeUUID,
+		Provider:  "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || !snapshots[0].ObservedAt.Time.Equal(observedAt) {
+		t.Fatalf("snapshot changed during fire-history retention: %#v", snapshots)
 	}
 }
 

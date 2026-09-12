@@ -7,7 +7,7 @@
 -- Why a separate table from hook_state_snapshot (480): different truth
 -- status (that snapshot is droppable, invariant 4; this log is the only
 -- copy), different growth (small, bounded, wholesale-replaced vs
--- append-only, unbounded), disjoint index needs, and the rule below.
+-- append-only, retention-bounded), disjoint index needs, and the rule below.
 --
 -- This table must NOT reference hook_state_snapshot -- no FK, no key. A fire
 -- may refer to a hook that has since been edited or deleted, and on Codex an
@@ -22,11 +22,15 @@
 -- execution; it MUST NOT be presented as stable configured-hook identity.
 -- For Codex the available identity remains its content-stable trust hash.
 --
--- Append-only: the only write is INSERT. The only sanctioned deletion is the
--- retention policy (stage 7; intended default 30 days plus a per-runtime row
--- cap). No trigger enforces immutability: a trigger would fight retention's
--- DELETE, and there is no UPDATE path in the query set, which is what keeps
--- rows immutable.
+-- Append-only: ordinary writes only INSERT. The only sanctioned deletion is
+-- the retention policy: after every accepted fire batch, delete rows older
+-- than 30 days and rows beyond the newest 30,000 for that runtime. The cap is
+-- the pre-C3 10,000-row budget multiplied by the measured 2.94x volume and
+-- rounded up; it is the hard bound when hook-heavy hosts fill 30 days early.
+-- No trigger enforces immutability: a trigger would fight retention's DELETE,
+-- and there is no ordinary UPDATE path in the query set, which is what keeps
+-- rows immutable. Retention deletes directly by predicate in one statement;
+-- it never exposes a SELECT/read path or touches hook_state_snapshot.
 --
 -- provenance is per row and rendered on screen. A Claude fire is debug_log
 -- only when its stream response has a unique debug-record match; all other
@@ -36,11 +40,11 @@
 -- never updated. created_at is server insert time; fired_at is the
 -- host-reported event time (store as reported, do not substitute now()).
 --
--- Retention readiness: the (runtime_id, fired_at DESC) index below is both
--- the feed index and the retention scan path (per-runtime time prune and row
--- cap). A global prune loops per runtime (runtimes are bounded); if that
--- outgrows, add a (fired_at)-leading index in a later additive migration --
--- not now.
+-- Retention: the (runtime_id, fired_at DESC) index below is both the feed index
+-- and the scan path for the per-runtime time prune and row cap. Enforcement
+-- runs after each accepted batch while the runtime row lock serializes writers.
+-- A runtime that sends no later batch cannot accumulate more rows, so there is
+-- no separate global sweep or snapshot-table coupling.
 --
 -- Locks: CREATE TABLE plus one index on a new empty relation; no existing
 -- table is scanned or rewritten. Expected duration at production scale: <1
@@ -54,8 +58,8 @@
 CREATE TABLE hook_fire_history (
     id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     -- The application deletes a runtime's history explicitly inside the
-    -- transaction that deletes agent_runtime. Retention for live runtimes is
-    -- stage 7's separate responsibility.
+    -- transaction that deletes agent_runtime. The report path applies live
+    -- runtime retention after every accepted batch.
     runtime_id UUID NOT NULL,
     -- Denormalized observed identity (see block above): self-contained so a
     -- later edit/delete of the hook cannot touch these rows.

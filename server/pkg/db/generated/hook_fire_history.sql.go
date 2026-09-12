@@ -60,3 +60,34 @@ func (q *Queries) InsertHookFireHistory(ctx context.Context, arg InsertHookFireH
 	}
 	return result.RowsAffected(), nil
 }
+
+const pruneHookFireHistory = `-- name: PruneHookFireHistory :execrows
+DELETE FROM hook_fire_history AS fire
+WHERE fire.runtime_id = $1
+  AND (
+    fire.fired_at < now() - INTERVAL '30 days'
+    OR fire.id IN (
+      SELECT overflow.id
+      FROM hook_fire_history AS overflow
+      WHERE overflow.runtime_id = $1
+      ORDER BY overflow.fired_at DESC, overflow.id DESC
+      OFFSET $2::int
+    )
+  )
+`
+
+type PruneHookFireHistoryParams struct {
+	RuntimeID pgtype.UUID `json:"runtime_id"`
+	MaxRows   int32       `json:"max_rows"`
+}
+
+// Retention is one DELETE by predicate, not a select-then-delete read path.
+// The subquery only identifies overflow rows inside the same statement. The
+// runtime row lock held by ReportHookFires serializes this with other batches.
+func (q *Queries) PruneHookFireHistory(ctx context.Context, arg PruneHookFireHistoryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneHookFireHistory, arg.RuntimeID, arg.MaxRows)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
