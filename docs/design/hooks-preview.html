@@ -414,12 +414,12 @@ table.tbl tr.inert .cmd, table.tbl tr.inert .matcher { opacity: .62; }
 .runorder.off { background: var(--muted); color: var(--faint-foreground); }
 
 /* fire log */
-.log-row { display: grid; grid-template-columns: 92px 1fr 74px 130px; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); align-items: start; }
+.log-row { display: grid; grid-template-columns: 92px 1fr 130px; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); align-items: start; }
 .log-row:last-child { border-bottom: 0; }
 .log-row:hover { background: color-mix(in oklab, var(--accent) 40%, transparent); }
 .log-row.fail { background: color-mix(in oklab, var(--destructive) 7%, transparent); }
 .log-row.fail:hover { background: color-mix(in oklab, var(--destructive) 11%, transparent); }
-.log-head { display: grid; grid-template-columns: 92px 1fr 74px 130px; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+.log-head { display: grid; grid-template-columns: 92px 1fr 130px; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border); }
 .log-head > span { font-size: 11px; color: var(--faint-foreground); text-transform: uppercase; letter-spacing: .04em; }
 .stderr {
   margin-top: 5px; padding: 6px 8px; border-radius: 6px;
@@ -842,60 +842,60 @@ const HOOKS = {
    own source note rather than a shared "events" abstraction. */
 const FIRE_LOG = {
   'b9322c50-ad96-489e-8aab-9e49f11c913a': {
-    source: 'Two tiers. Every row is one of Claude\'s structured `hook_response` stream events — Multica launches `claude` with `--output-format stream-json --verbose --include-hook-events`, so the record reaches this host. The host debug log (`--debug-file`) carries no `hook_response` record; it is read only to recover a real fire time, and only where one debug line matches one response 1:1 — those rows are stamped `debug_log`, and every other row is timed from receipt and stamped `inferred`.',
+    source: 'Two tiers. Every row is one of Claude\'s structured `hook_response` stream events — Multica launches `claude` with `--output-format stream-json --verbose --include-hook-events`, so the record reaches this host. The host debug log (`--debug-file`) carries no `hook_response` record; it is read only to recover a real fire time, and only where one debug line matches one response 1:1 — those rows are stamped `debug_log`, and every other row is timestamped on receipt and stamped `inferred`.',
     sourceOk: true,
     rows: [
-      { t: '15:52:09', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: 412, verdict: 'success', task: 'LOCO-82' },
-      { t: '15:52:09', event: 'PostToolUse', matcher: 'Edit.*', hook: 'no-mock-code.py', ms: 121, verdict: 'success', task: 'LOCO-82',
+      { t: '15:52:09', event: 'PostToolUse', hook: 'format-changed.sh', verdict: 'success' },
+      { t: '15:52:09', event: 'PostToolUse', hook: 'no-mock-code.py', verdict: 'success',
         note: 'Matched NotebookEdit as well as Edit — 2 of 2 candidate tools matched.' },
-      { t: '15:51:47', event: 'PreCompact', matcher: 'manual', hook: 'snapshot.sh', ms: 8, verdict: 'failed', task: 'LOCO-82',
+      { t: '15:51:47', event: 'PreCompact', hook: 'snapshot.sh', verdict: 'failed',
         stderr: 'bash: C:UsersMarty Kellybinsnapshot.sh: No such file or directory\nhook failed with non-blocking status code 127' },
-      { t: '15:51:20', event: 'PreToolUse', matcher: 'Bash', hook: 'repo-bash-policy.sh', ms: 64, verdict: 'blocked', task: 'LOCO-82',
+      { t: '15:51:20', event: 'PreToolUse', hook: 'repo-bash-policy.sh', verdict: 'blocked',
         note: 'Exit 2 — tool call rejected. Reason: "git push --force is not allowed on this branch".' },
-      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'inject-repo-context.sh', ms: 233, verdict: 'success', task: 'LOCO-82' },
-      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'prompt-audit.py', ms: 88, verdict: 'success', task: 'LOCO-82',
+      { t: '15:50:58', event: 'UserPromptSubmit', hook: 'inject-repo-context.sh', verdict: 'success' },
+      { t: '15:50:58', event: 'UserPromptSubmit', hook: 'prompt-audit.py', verdict: 'success',
         note: 'Ran alongside the project hook above, not instead of it. Both fire on every prompt.' },
-      { t: '15:50:58', event: 'UserPromptSubmit', matcher: '—', hook: 'branch-guard.sh', ms: null, verdict: 'neverran', task: 'LOCO-82',
+      { t: '15:50:58', event: 'UserPromptSubmit', hook: 'branch-guard.sh', verdict: 'neverran',
         note: 'Has an if condition, and if is only evaluated on tool events. On UserPromptSubmit the handler is loaded and never invoked — no error, no log line of its own. This row is inferred from its absence.' },
-      { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
-        note: 'async:true — spawned and detached. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach this feed. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timed from receipt and stamped inferred rather than debug_log. The record has no duration field either, which is why the timing stays a dash. The exit status is not acted on, and completion notices are suppressed unless you run --verbose or press Ctrl+O, but its additionalContext and systemMessage still reach Claude on the next turn.' },
-      { t: '15:50:31', event: 'PostToolUse', matcher: 'Write|Edit', hook: 'format-changed.sh', ms: null, verdict: 'async', task: 'LOCO-82',
+      { t: '15:50:31', event: 'PostToolUse', hook: 'format-changed.sh', verdict: 'async',
+        note: 'async:true — spawned and detached. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach this feed. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timestamped on receipt and stamped inferred rather than debug_log. The exit status is not acted on, and completion notices are suppressed unless you run --verbose or press Ctrl+O, but its additionalContext and systemMessage still reach Claude on the next turn.' },
+      { t: '15:50:31', event: 'PostToolUse', hook: 'format-changed.sh', verdict: 'async',
         note: 'The same formatter again, from the plugin layer. A plugin copy is not deduped against the settings-file copy, so the repo formatter really did run twice on one edit.' },
-      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'rm-rf-guard.py', ms: 51, verdict: 'deduped', task: 'LOCO-81',
+      { t: '15:49:12', event: 'PreToolUse', hook: 'rm-rf-guard.py', verdict: 'deduped',
         note: 'Defined identically in User and Project. Claude collapsed the pair and spawned it once — one process, two entries.' },
-      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'repo-bash-policy.sh', ms: 39, verdict: 'success', task: 'LOCO-81',
+      { t: '15:49:12', event: 'PreToolUse', hook: 'repo-bash-policy.sh', verdict: 'success',
         note: '3 handlers fired on this one Bash call, from 3 different files.' },
-      { t: '15:49:12', event: 'PreToolUse', matcher: 'Bash', hook: 'block-force-push.py', ms: null, verdict: 'skippedif', task: 'LOCO-81',
+      { t: '15:49:12', event: 'PreToolUse', hook: 'block-force-push.py', verdict: 'skippedif',
         note: 'if: Bash(git push *) did not match "ls -la", so the process never spawned. This is the cheap kind of not-running — intended, and the reason to prefer if over a broader matcher.' },
-      { t: '15:48:03', event: 'SessionStart', matcher: 'startup|resume', hook: 'session-attest.sh', ms: 891, verdict: 'success', task: 'LOCO-81' },
-      { t: '15:47:55', event: 'SessionEnd', matcher: '—', hook: 'flush-telemetry.py', ms: 1500, verdict: 'timeout', task: 'LOCO-78',
+      { t: '15:48:03', event: 'SessionStart', hook: 'session-attest.sh', verdict: 'success' },
+      { t: '15:47:55', event: 'SessionEnd', hook: 'flush-telemetry.py', verdict: 'timeout',
         stderr: 'hook exceeded its share of the 1.5s SessionEnd budget and was killed' },
-      { t: '15:41:02', event: 'Stop', matcher: '—', hook: 'context-cost.js', ms: 77, verdict: 'feedback', task: 'LOCO-78',
+      { t: '15:41:02', event: 'Stop', hook: 'context-cost.js', verdict: 'feedback',
         note: 'Returned hookSpecificOutput.additionalContext, not decision:"block". Same continuation and the same loop protections — stop_hook_active and the 8-consecutive-continuation cap — but logged as Stop hook feedback rather than a hook error. Claude-only; Codex has no additionalContext on Stop.' },
     ],
   },
   '3327c002-1f3d-4c64-9eb7-e7cb1c77fd1f': {
-    source: 'Reconstructed from Codex exit codes and statusMessage lines. Codex writes no per-hook debug log, so durations are wall-clock around the turn and a skipped hook is inferred, not reported.',
+    source: 'Reconstructed from Codex exit codes and statusMessage lines. Codex writes no per-hook debug log, so a skipped hook is inferred, not reported.',
     sourceOk: false,
     rows: [
-      { t: '15:52:11', event: 'PreToolUse', matcher: 'shell', hook: 'shell-policy.sh', ms: 58, verdict: 'success', task: 'LOCO-82' },
-      { t: '15:52:11', event: 'PreToolUse', matcher: 'shell', hook: 'repo-shell-allowlist.py', ms: 96, verdict: 'success', task: 'LOCO-82',
+      { t: '15:52:11', event: 'PreToolUse', hook: 'shell-policy.sh', verdict: 'success' },
+      { t: '15:52:11', event: 'PreToolUse', hook: 'repo-shell-allowlist.py', verdict: 'success',
         note: 'Ran in the same fire as shell-policy.sh — Codex merges, so both handlers execute. Same as Claude in this respect.' },
-      { t: '15:52:11', event: 'PreToolUse', matcher: '*', hook: 'tool-audit.sh', ms: null, verdict: 'async', task: 'LOCO-82' },
-      { t: '15:52:11', event: 'PreToolUse', matcher: 'Bash', hook: 'pre_tool_use_policy.py (managed)', ms: 197, verdict: 'success', task: 'LOCO-82',
+      { t: '15:52:11', event: 'PreToolUse', hook: 'tool-audit.sh', verdict: 'async' },
+      { t: '15:52:11', event: 'PreToolUse', hook: 'pre_tool_use_policy.py (managed)', verdict: 'success',
         note: '4 handlers fired on this one shell call, from 4 different files. The managed one would survive both kill switches.' },
-      { t: '15:52:05', event: 'SessionStart', matcher: 'startup|resume|clear|compact', hook: 'bootstrap.js (plugin)', ms: 0, verdict: 'untrusted', task: 'LOCO-82',
+      { t: '15:52:05', event: 'SessionStart', hook: 'bootstrap.js (plugin)', verdict: 'untrusted',
         stderr: 'hook skipped: definition has never been trusted\nenabling the plugin does not trust its hooks — run `/hooks` to review' },
-      { t: '15:51:58', event: 'PostToolUse', matcher: 'apply_patch', hook: 'secret-firewall.js', ms: 0, verdict: 'untrusted', task: 'LOCO-82',
+      { t: '15:51:58', event: 'PostToolUse', hook: 'secret-firewall.js', verdict: 'untrusted',
         stderr: 'hook skipped: trusted_hash b41c9f0e… does not match current hash 1f7ad30c…\nrun `/hooks` in Codex to review and trust it' },
-      { t: '15:51:58', event: 'PostToolUse', matcher: 'apply_patch', hook: 'format-patch.sh', ms: null, verdict: 'async', task: 'LOCO-82' },
-      { t: '15:51:12', event: 'UserPromptSubmit', matcher: '—', hook: 'prompt-rewrite (type: prompt)', ms: 0, verdict: 'ineffective', task: 'LOCO-82',
+      { t: '15:51:58', event: 'PostToolUse', hook: 'format-patch.sh', verdict: 'async' },
+      { t: '15:51:12', event: 'UserPromptSubmit', hook: 'prompt-rewrite (type: prompt)', verdict: 'ineffective',
         note: 'Codex parsed the entry and skipped it. type: prompt is never executed on Codex — and its matcher ("Bash") was discarded too, since UserPromptSubmit ignores matchers.' },
-      { t: '15:50:55', event: 'PostToolUse', matcher: 'Bash', hook: 'log-shell.sh', ms: null, verdict: 'neverran', task: 'LOCO-82',
+      { t: '15:50:55', event: 'PostToolUse', hook: 'log-shell.sh', verdict: 'neverran',
         note: 'Disabled in /hooks. Codex has a real per-hook disable, so this one is off on purpose and the entry is still in the file.' },
-      { t: '15:50:40', event: 'Stop', matcher: '—', hook: 'turn-gate.py', ms: 143, verdict: 'continued', task: 'LOCO-82',
+      { t: '15:50:40', event: 'Stop', hook: 'turn-gate.py', verdict: 'continued',
         note: 'Returned decision:"block", which continued the turn — block never rejects a Stop on either provider. Codex replayed the reason as a new continuation prompt.' },
-      { t: '15:44:19', event: 'Interrupt', matcher: '—', hook: 'on-interrupt-cleanup.sh', ms: 61, verdict: 'success', task: 'LOCO-80',
+      { t: '15:44:19', event: 'Interrupt', hook: 'on-interrupt-cleanup.sh', verdict: 'success',
         note: 'Interrupt has no Claude equivalent. It also has a 1 s default timeout, extendable to 3 s — not the usual 600 s.' },
     ],
   },
@@ -908,7 +908,7 @@ const VERDICTS = {
   blocked:     { label: 'blocked',     cls: 'b-warn', icon: 'ban' },
   failed:      { label: 'failed',      cls: 'b-bad',  icon: 'circleAlert' },
   timeout:     { label: 'timed out',   cls: 'b-bad',  icon: 'clock' },
-  async:       { label: 'async · no duration', cls: '',   icon: 'zap' },
+  async:       { label: 'async', cls: '', icon: 'zap' },
   deduped:     { label: 'collapsed · ran once', cls: '', icon: 'copy' },
   neverran:    { label: 'never invoked', cls: 'b-bad', icon: 'ban' },
   skippedif:   { label: 'if did not match', cls: '', icon: 'filter' },
@@ -1116,7 +1116,7 @@ function runState(h, runtime) {
   if (h.broken === 'path') return { runs: true, label: 'Failing',  cls: 'b-bad',  icon: 'circleAlert',
     why: 'Registered and fires, but the command cannot be found. The shell exits 127 and only exit 2 blocks, so the action proceeds. Claude does not see the failure either \u2014 PreCompact shows an exit-2 stderr message to the user, discards systemMessage and takes no additionalContext, so nothing this hook returns has a path to the model. The transcript does get a hook-error notice with the first line of stderr, and the full text lands in the debug log; what nothing keeps is a record of it.' };
   if (h.async)       return { runs: true,  label: 'Active · async', cls: 'b-ok', icon: 'zap',
-    why: 'Runs detached, so its exit status is not acted on and a failure drives nothing on its own — asyncRewake is the field that wakes Claude on exit code 2. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. The record has no duration field, so no timing for the run reaches the fire log. Completion notices are suppressed unless you run --verbose or press Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' };
+    why: 'Runs detached, so its exit status is not acted on and a failure drives nothing on its own — asyncRewake is the field that wakes Claude on exit code 2. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. Completion notices are suppressed unless you run --verbose or press Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' };
   return { runs: true, label: 'Active', cls: 'b-ok', icon: 'check', why: 'Registered and running.' };
 }
 
@@ -1339,6 +1339,10 @@ function screenHooks() {
     <div class="col-main">
       ${runtimePicker()}
       ${behaviorStrip(r.provider)}
+      <div class="notice info t-caption">
+        ${ic('info', 14, 'ico')}
+        <div>The shipped <code class="cmd">protocol.HookFire</code> record has no duration on any row, so no timing for a run reaches the fire log.</div>
+      </div>
       ${r.provider === 'codex' && hooks.some((h) => h.trust === 'stale' || h.trust === 'review') ? trustBanner(hooks.filter((h) => h.trust === 'stale' || h.trust === 'review')) : ''}
       ${hooks.some((h) => h.broken === 'path') ? `
         <div class="notice bad t-label">
@@ -1349,7 +1353,7 @@ function screenHooks() {
             Status 127 is not exit 2, so it does not block — the compact proceeds. Claude does not see it either: <code class="cmd">PreCompact</code> shows an exit-2 stderr
             message to the user, discards <code class="cmd">systemMessage</code> and takes no <code class="cmd">additionalContext</code>, so nothing this hook returns has a path to
             the model. Each fire prints one <code class="cmd">hook error</code> notice in the transcript, with the full stderr in the debug log if you turn it on — but no
-            duration, no history, nothing to filter on.
+            history and nothing to filter on.
             <div style="margin-top:6px"><button class="btn sm" data-screen="log">${ic('activity', 13)}Open fire log</button>
             <button class="btn sm" data-edit="c14">${ic('pencil', 13)}Fix the path</button></div>
           </div>
@@ -1912,7 +1916,7 @@ function precedenceRail(r) {
  * sketch — routes its stderr to the user and discards systemMessage.
  * The transcript is not silent — Claude prints one
  * "<hook name> hook error" notice per fire with the first line of stderr.
- * What no one keeps is a RECORD: duration, verdict, matcher counts, history
+ * What no one keeps is a RECORD: verdict and history
  * across fires. A one-line notice scrolling past in a transcript is not
  * something you can filter, count or audit, and that is the gap this screen
  * fills. Shape borrowed from the filterable event timelines (disler /
@@ -1941,7 +1945,7 @@ function screenLog() {
         ${ic('circleAlert', 15, 'ico')}
         <div><strong class="semibold">${nFail} hook fire${nFail > 1 ? 's' : ''} failed in the last hour and nothing kept a record of them.</strong>
         A hook that exits non-zero, but not 2, does not stop the action on most events — the guard simply stops guarding. Whether Claude sees the failure is per-event and not a general rule: <code class="cmd">PostToolUse</code> and <code class="cmd">PostToolUseFailure</code> show an exit-2 stderr message to Claude even though neither can block, while <code class="cmd">SessionEnd</code> routes its stderr to the user, as does <code class="cmd">PreCompact</code> on a manual <code class="cmd">/compact</code> — where an auto-triggered compact’s stderr goes is undocumented.
-        Each fire does print one <code class="cmd">hook error</code> notice in the transcript. This feed is the only place with the duration, the verdict and the history across fires.</div>
+        Each fire does print one <code class="cmd">hook error</code> notice in the transcript. This feed is the only place with the verdict and the history across fires.</div>
       </div>` : ''}
 
       <div class="card">
@@ -1956,7 +1960,7 @@ function screenLog() {
           </div>
         </div>
         ${rows.length ? `
-        <div class="log-head"><span>Time</span><span>Event · matcher · hook</span><span>Duration</span><span>Verdict</span></div>
+        <div class="log-head"><span>Time</span><span>Event · hook</span><span>Verdict</span></div>
         ${rows.map(logRow).join('')}`
         : `<div class="empty"><div class="media">${ic('filter', 20)}</div>
             <div class="t-title-sm medium">Nothing matches this filter</div>
@@ -1965,7 +1969,7 @@ function screenLog() {
 
       <div class="notice ${feed.sourceOk ? 'info' : 'warn'} t-caption">
         ${ic(feed.sourceOk ? 'info' : 'alert', 14, 'ico')}
-        <div><strong class="semibold">Where this comes from.</strong> ${esc(feed.source)}</div>
+        <div><strong class="semibold">Where this comes from.</strong> ${esc(feed.source)} The shipped <code class="cmd">protocol.HookFire</code> carries no duration, matcher or task reference, so none of those fields appears in this log.</div>
       </div>
     </div>
     <div class="col-rail">
@@ -1977,7 +1981,7 @@ function screenLog() {
             <div><span class="badge b-warn">${ic('ban', 11)}blocked</span> <span class="muted">exit 2 on a blockable event — that event's action was rejected, such as compaction for <code class="cmd">PreCompact</code>.</span></div>
             <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero but not 2, so it did not block and the action proceeded. Whether Claude saw it is per-event: <code class="cmd">PostToolUse</code> and <code class="cmd">PostToolUseFailure</code> show an exit-2 stderr to Claude, while <code class="cmd">SessionEnd</code> shows its stderr to the user, as does <code class="cmd">PreCompact</code> on a manual <code class="cmd">/compact</code> — the auto-triggered case is undocumented. The transcript got a one-line hook-error notice; this row is the only record.</span></div>
             <div><span class="badge b-bad">${ic('clock', 11)}timed out</span> <span class="muted">killed at its timeout.</span></div>
-            <div><span class="badge">${ic('zap', 11)}async · no duration</span> <span class="muted">detached, so the timing column stays a dash. Claude only: Claude Code does emit a completion record when the process exits — <code class="cmd">hook_response</code>, with <code class="cmd">exit_code</code> and <code class="cmd">outcome</code> — and that record only reaches a host through the Agent SDK stream (<code class="cmd">includeHookEvents</code>, default off) or <code class="cmd">--output-format stream-json --verbose</code> with <code class="cmd">--include-hook-events</code>, which is how Multica launches <code class="cmd">claude</code>, so the outcome does reach the Claude feed. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timed from receipt and stamped <code class="cmd">inferred</code> rather than <code class="cmd">debug_log</code>. The record has no duration field either, which is the gap that keeps the timing column a dash. Codex writes no per-hook log at all, so its async rows are inferred. The hook's additionalContext and systemMessage still reach Claude on the next turn, and completion notices are suppressed unless you run <code class="cmd">--verbose</code> or press Ctrl+O.</span></div>
+            <div><span class="badge">${ic('zap', 11)}async</span> <span class="muted">Detached, so its exit status is not acted on. Claude only: Claude Code does emit a completion record when the process exits — <code class="cmd">hook_response</code>, with <code class="cmd">exit_code</code> and <code class="cmd">outcome</code> — and that record only reaches a host through the Agent SDK stream (<code class="cmd">includeHookEvents</code>, default off) or <code class="cmd">--output-format stream-json --verbose</code> with <code class="cmd">--include-hook-events</code>, which is how Multica launches <code class="cmd">claude</code>, so the outcome does reach the Claude feed. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timestamped on receipt and stamped <code class="cmd">inferred</code> rather than <code class="cmd">debug_log</code>. The shipped <code class="cmd">protocol.HookFire</code> has no duration on any row; that is not caused by async detachment, and this log therefore shows no duration column. Codex writes no per-hook log at all, so its async rows are inferred. The hook's additionalContext and systemMessage still reach Claude on the next turn, and completion notices are suppressed unless you run <code class="cmd">--verbose</code> or press Ctrl+O.</span></div>
             <div><span class="badge b-bad">${ic('ban', 11)}never invoked</span> <span class="muted">Loaded, but the provider never calls it. No error is raised, so this row is inferred from an absence rather than read from a log line.</span></div>
             <div><span class="badge">${ic('copy', 11)}collapsed · ran once</span> <span class="muted">Claude only. Two identical settings-file entries, one process.</span></div>
             <div><span class="badge">${ic('filter', 11)}if did not match</span> <span class="muted">Claude only. Deliberate: the pre-filter kept the process from spawning.</span></div>
@@ -1989,13 +1993,11 @@ function screenLog() {
       </div>
       <div class="card" style="border-color:color-mix(in oklab, var(--warning) 30%, var(--border))">
         <div class="card-head" style="background:color-mix(in oklab, var(--warning) 8%, transparent)">
-          <span class="t-label medium">${ic('alert', 14)} Not built yet</span>
+          <span class="t-label medium">${ic('alert', 14)} Codex fire feed not built yet</span>
         </div>
         <div class="card-body tight">
           <div class="t-caption muted stack">
-            <div>Claude writes per-hook results host-side today, so the data exists — but nothing ships it to the server.</div>
-            <div>${ic('x', 11)} No log-tailing pending action, and no store for fires.</div>
-            <div>${ic('x', 11)} Codex writes no per-hook log at all. The Codex feed above is inferred, and its durations are approximations — flagged on screen rather than dressed up.</div>
+            <div>${ic('x', 11)} Codex writes no per-hook log at all, so there is no Codex fire producer. The Codex feed's rows are therefore reconstructions, labelled as such on screen rather than served as observations.</div>
           </div>
         </div>
       </div>
@@ -2013,15 +2015,11 @@ function logRow(row) {
       <div class="inline">
         <span class="mono t-label">${esc(row.event)}</span>
         <span class="faint t-caption">·</span>
-        <span class="cmd t-caption faint">${esc(row.matcher)}</span>
-        <span class="faint t-caption">·</span>
         <span class="cmd t-caption">${esc(row.hook)}</span>
-        <span class="badge b-dim">${esc(row.task)}</span>
       </div>
       ${row.note ? `<div class="t-caption muted" style="margin-top:2px">${esc(row.note)}</div>` : ''}
       ${row.stderr ? `<div class="stderr">${esc(row.stderr)}</div>` : ''}
     </div>
-    <span class="cmd t-caption ${row.ms == null ? 'faint' : ''}">${row.ms == null ? '—' : row.ms + ' ms'}</span>
     <span><span class="badge ${v.cls}">${ic(v.icon, 11)}${esc(v.label)}</span></span>
   </div>`;
 }
@@ -2339,7 +2337,7 @@ function editorProblems() {
   if (ed.if && ed.if.trim() && ed.provider === 'codex') out.push({ level: 'error', field: 'if',
     text: 'Codex has no if field. It would be stored and ignored.' });
   if (ed.async) out.push({ level: 'warn', field: 'async',
-    text: 'async detaches the process. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timed from receipt and stamped inferred rather than debug_log. The record has no duration field, so no timing for the run reaches this editor or the fire log. Matcher counts are a separate debug-log artifact, written only at CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose. Its exit status is not acted on; asyncRewake is the field that wakes Claude on exit code 2. Claude still delivers the hook response\'s additionalContext and systemMessage on the next turn, and its completion notice is suppressed unless you run --verbose or press Ctrl+O. Claude also stops enforcing timeout once an async command hook is running, though it keeps enforcing it on an asyncRewake hook.' });
+    text: 'async detaches the process. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timestamped on receipt and stamped inferred rather than debug_log. Matcher counts are a separate debug-log artifact, written only at CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose. Its exit status is not acted on; asyncRewake is the field that wakes Claude on exit code 2. Claude still delivers the hook response\'s additionalContext and systemMessage on the next turn, and its completion notice is suppressed unless you run --verbose or press Ctrl+O. Claude also stops enforcing timeout once an async command hook is running, though it keeps enforcing it on an asyncRewake hook.' });
   if (ed.provider === 'codex') out.push({ level: 'warn', field: 'trust',
     text: 'Codex records trust against each hook\u2019s own hash, so saving a new or edited entry leaves that entry needing review in /hooks before it can run. Untouched entries in the same file keep their trust — the hash is per hook, not per file.' });
   return out;
@@ -2393,6 +2391,10 @@ function editorDialog() {
     </div>
 
     <div class="dialog-body">
+      <div class="notice info t-caption">
+        ${ic('info', 14, 'ico')}
+        <div>The shipped <code class="cmd">protocol.HookFire</code> record has no duration on any row, so no timing for a run reaches this editor or the fire log.</div>
+      </div>
       <!-- Event: searchable combobox, not a 33-item dropdown. -->
       <div class="field">
         <label for="edEvent">Event</label>

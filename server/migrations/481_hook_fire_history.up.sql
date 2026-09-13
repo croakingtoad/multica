@@ -92,8 +92,8 @@ CREATE TABLE hook_fire_history (
     -- establishes neither whether the hook ran nor a success/failure outcome.
     outcome TEXT NOT NULL
         CHECK (outcome IN ('success', 'failure', 'blocked', 'skipped', 'unknown')),
-    -- Stage 7's raw material (exit code, stderr first line, duration,
-    -- statusMessage, ...); shape settled there.
+    -- Stage 7's detail fields (debug outcome, message from a unique debug-log
+    -- match, and exit code); shape settled there.
     detail JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
