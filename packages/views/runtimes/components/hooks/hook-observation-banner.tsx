@@ -25,7 +25,10 @@ import type { HookObservationView } from "./hooks-model";
  * Dates the observation on screen, and names the two states that have nothing
  * to date: a read that never produced an observation, and one that failed.
  * The two states that do show rows still render their date, because an undated
- * observation must never appear as current (invariant 3).
+ * observation must never appear as current (invariant 3). A host that reports a
+ * stamp Multica cannot place is the one case where a shown observation has no
+ * age: the stamp is printed as sent and the relative age is omitted, which
+ * keeps invariant 3 without inventing a moment.
  *
  * Two states deliberately do not live here. A read in flight is
  * `HookDiscoveryCard` and an offline runtime is `HookOfflineCard`: both are
@@ -88,7 +91,12 @@ export function ObservationBanner({
     );
   }
 
-  const when = view.observedAt ? timeAgo(view.observedAt) : "";
+  // Two questions, asked of two fields. `observedAt` says whether there is an
+  // observation at all; `datedAt` says whether its age can be established. A
+  // host can report a stamp Multica cannot place, and that observation still
+  // has rows and a stamp to show — just no age, so the age is not stated
+  // rather than stated as `NaN`.
+  const when = view.datedAt === null ? null : timeAgo(view.datedAt);
   const lastKnown = view.kind === "last_known";
   return (
     <div
@@ -111,11 +119,18 @@ export function ObservationBanner({
         )}
         <div className="min-w-0 flex-1 space-y-1">
           <p className="text-label font-medium">
-            {lastKnown
-              ? t(($) => $.hooks.observation.last_known_title, { when })
-              : view.stale
-                ? t(($) => $.hooks.observation.live_stale, { when })
-                : t(($) => $.hooks.observation.live, { when })}
+            {when === null
+              ? lastKnown
+                ? t(($) => $.hooks.observation.last_known_title_undated)
+                : // An unplaceable stamp always reads as stale, so the undated
+                  // live caption carries the "not current" warning itself
+                  // rather than needing a second variant behind `view.stale`.
+                  t(($) => $.hooks.observation.live_undated)
+              : lastKnown
+                ? t(($) => $.hooks.observation.last_known_title, { when })
+                : view.stale
+                  ? t(($) => $.hooks.observation.live_stale, { when })
+                  : t(($) => $.hooks.observation.live, { when })}
           </p>
           {lastKnown ? (
             <p className="text-caption text-muted-foreground">

@@ -884,9 +884,13 @@ describe("LifecycleHooksTab — what actually runs", () => {
     result: RuntimeHookEventAnswerResult | undefined,
     provider = "claude",
     fetching = false,
+    // The tab's own read. Defaulted, because the panel's own behaviour does
+    // not depend on it — overridden only where the two observations have to
+    // differ, which is what the mismatch warning is about.
+    read: RuntimeHookReadRequest = observation(),
   ) {
     hookQuery.mockReturnValue({
-      data: observation(),
+      data: read,
       error: null,
       isFetching: false,
     });
@@ -1333,6 +1337,30 @@ describe("LifecycleHooksTab — what actually runs", () => {
     expect(text).toMatch(/They are two different reads/);
   });
 
+  // LOCO-521, constraint 1 of DP-LOCO-114-04. `observationMismatch` compares
+  // the answer's stamp with the tab's, and the tab's must reach it raw. Route
+  // the placeable one instead and an unreadably dated tab reads as no
+  // observation at all, which sends `mismatch` to false and silently retires
+  // this warning — the panel would then show an answer beside rows from a
+  // different read and say nothing.
+  it("still warns of two different reads when the tab's own stamp does not place", () => {
+    const { container } = mountWithAnswer(
+      answerResult({ matched: [answerEntry()] }, { observed_at: "2026-09-11T09:00:00Z" }),
+      "claude",
+      false,
+      observation({ observed_at: "not-a-date" }),
+    );
+    const text = container.textContent ?? "";
+
+    expect(text).toMatch(/They are two different reads/);
+    // Both stamps are named in the warning, including the one that does not
+    // place: it is the evidence a reader would report.
+    expect(text).toMatch(/not-a-date/);
+    expect(text).toMatch(/Observed at 2026-09-11T09:00:00Z/);
+    // The answer's own date places, so its age still renders.
+    expect(text).not.toMatch(/NaN/);
+  });
+
   it("renders an answer with no observation date as a refusal, with no counts and no sets", () => {
     // The acceptance rule this panel exists for: nothing renders as "these
     // fire" without a value and a dated observation behind it. The body is
@@ -1430,5 +1458,150 @@ describe("LifecycleHooksTab — what actually runs", () => {
       expect(label).not.toMatch(/\bpark\b|\bunpark\b|\bdisable\b|\benable\b/i);
       expect(label).not.toMatch(/\badd\b|\bedit\b|\bdelete\b|\bremove\b|\bsave\b/i);
     }
+  });
+});
+
+
+// LOCO-521. A completed read whose `observed_at` does not parse used to reach
+// every relative-age caption as a raw string, and `timeAgo` turned it into
+// `NaNd ago` — `NaN日前`, `NaN일 전`, `NaN 天前` in the other three bundles, so
+// `NaN` is the only token an assertion can share with them.
+//
+// Ruling DP-LOCO-114-04 chose what replaces it: keep the rows, keep the host's
+// stamp, drop only the age. So each case below asserts three things together —
+// no `NaN`, the rows or the affordance still there, and the stamp still
+// printed. Asserting only the first would pass on a screen that refused the
+// whole observation, which is the option the ruling rejected.
+//
+// The rule is `hookObservationView`'s `datedAt`; these are its surfaces, not
+// six guards. Reinstate the hole by returning the raw stamp as `datedAt` and
+// all five of these fail.
+describe("LifecycleHooksTab — an observation the host dated unreadably", () => {
+  const UNPLACEABLE = "not-a-date";
+
+  it("dates a live read's banner and rail with no age rather than with NaN", () => {
+    hookQuery.mockReturnValue({
+      data: observation({ observed_at: UNPLACEABLE }),
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount();
+    const text = container.textContent ?? "";
+
+    expect(text).not.toMatch(/NaN/);
+    // Banner and right-column rail, the two live surfaces.
+    expect(
+      screen.getAllByText(/its age is unknown, so treat it as stale/).length,
+    ).toBe(2);
+    expect(text).toMatch(/Observed at not-a-date/);
+    // And the read's own content is still on screen: the rows, the sources and
+    // the summary. This is the half option 1 would have taken away.
+    expect(screen.getByText("guard.sh")).toBeInTheDocument();
+    expect(screen.getAllByText("PreToolUse").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("user/json").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the offline card's reveal on offer with no age rather than NaN", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        cached: true,
+        offline: true,
+        observed_at: UNPLACEABLE,
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount("claude", { status: "offline" });
+
+    expect(container.textContent ?? "").not.toMatch(/NaN/);
+    expect(
+      screen.getByText(/Multica has a stored observation, but the host's timestamp/),
+    ).toBeInTheDocument();
+    // Twice while gated: the card and the rail beside it, the same pair the
+    // dated case shows.
+    expect(screen.getAllByText(/Observed at not-a-date/).length).toBe(2);
+    // The stored snapshot is still reachable. `canReveal` gates on the stamp
+    // existing, never on it placing, so a malformed timestamp must not delete
+    // the only route to the data.
+    expect(
+      screen.getByRole("button", { name: /last known hooks/i }),
+    ).toBeInTheDocument();
+    // Nor may the card claim nothing was ever read from this host.
+    expect(
+      screen.queryByText(/Nothing has ever been read from this host/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reveals the snapshot with an age-less banner and rail, not NaN ones", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        cached: true,
+        offline: true,
+        observed_at: UNPLACEABLE,
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount("claude", { status: "offline" });
+    fireEvent.click(screen.getByRole("button", { name: /last known hooks/i }));
+    const text = container.textContent ?? "";
+
+    expect(text).not.toMatch(/NaN/);
+    // The last-known banner and the rail, both undated and both still saying
+    // this is last known rather than current.
+    expect(
+      screen.getByText("Last known state, read at a time Multica cannot place"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Stored at a time Multica cannot place/)).toBeInTheDocument();
+    expect(text).toMatch(/not as they are now/);
+    expect(screen.getAllByText(/Observed at not-a-date/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("guard.sh")).toBeInTheDocument();
+  });
+
+  it("dates the empty card with no age rather than with NaN", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        observed_at: UNPLACEABLE,
+        resolved: {
+          provider: "claude",
+          event_value_roles: {},
+          entries: [],
+        },
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount();
+    const text = container.textContent ?? "";
+
+    expect(text).not.toMatch(/NaN/);
+    expect(
+      screen.getByText("Last read at a time Multica cannot place"),
+    ).toBeInTheDocument();
+    // Still a statement about a moment, and still about named files.
+    expect(text).toMatch(/Observed at not-a-date/);
+    expect(text).toMatch(/\.claude\/settings\.json/);
+  });
+
+  // The control: a stamp that places still renders its age, so the four
+  // assertions above are about this input rather than about a screen that
+  // stopped dating anything.
+  it("still ages an observation whose stamp places", () => {
+    hookQuery.mockReturnValue({
+      data: observation({ observed_at: "2026-09-12T09:00:00Z" }),
+      error: null,
+      isFetching: false,
+    });
+
+    const { container } = mount();
+    const text = container.textContent ?? "";
+
+    expect(text).not.toMatch(/NaN/);
+    expect(text).toMatch(/Read \d+[dhm] ago/);
+    expect(text).not.toMatch(/its age is unknown/);
   });
 });
