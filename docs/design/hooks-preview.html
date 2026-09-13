@@ -1112,19 +1112,29 @@ function runState(h, runtime) {
    three events the matcher is parsed and then ignored.
 
    Matcher-ignoring is NOT a Codex-only rule, which is what this sketch used
-   to say. The four constants below mirror shipped Go rather than the
+   to say. The five constants below mirror shipped Go rather than the
    provider docs, because a third source of truth is exactly how the model
-   drifted from the implementation it claims to describe. All four live in
+   drifted from the implementation it claims to describe. All five live in
    server/internal/runtimehooks/matchers.go and are read by EvaluateMatcher
    in the same package's presentation.go:
      CODEX_MATCHERLESS            <- codexIgnoresMatcher
      CLAUDE_MATCHERLESS           <- claudeIgnoresMatcher
      CLAUDE_NARROW_MATCHER_EVENTS <- isClaudeNarrowMatcherEvent
+     CLAUDE_EXACT_SET             <- claudeExactMatcher
      CLAUDE_NARROW_EXACT_SET      <- claudeNarrowExactMatcher
-   Keep each element for element with its Go source. Note also that the
-   empty/* check in EvaluateMatcher precedes its ignore check, so a
-   matcherless event with an empty or * matcher reads as `all`, not
-   `ignored` — both render as "fires on every occurrence". */
+   Keep each element for element with its Go source.
+
+   interpretMatcher below runs its checks in EvaluateMatcher's order, and
+   that order is load-bearing: empty/* -> `all` first, then the Codex ignore
+   check, then the Claude one. A matcherless event whose matcher is empty or
+   * therefore reads as `all`, never `ignored`. Those two kinds do NOT render
+   alike — only the tail of the sentence does. `all` heads the notice
+   "Matches all" with notice class ok and a check icon, and pushes no problem
+   entry; `ignored` heads it "Not used on this event" with class warn, an
+   alert icon, and a warn entry on the matcher field. Telling a reader that
+   whatever they typed is parsed and discarded when they typed nothing is the
+   false warning this order exists to prevent. Do not hoist either ignore
+   check above the empty/* check. */
 const CODEX_MATCHERLESS = ['UserPromptSubmit', 'Stop', 'Interrupt'];
 const CLAUDE_MATCHERLESS = ['UserPromptSubmit', 'PostToolBatch', 'Stop', 'TeammateIdle', 'TaskCreated',
   'TaskCompleted', 'WorktreeCreate', 'WorktreeRemove', 'MessageDisplay', 'CwdChanged'];
@@ -1134,13 +1144,13 @@ const CLAUDE_NARROW_EXACT_SET = /^[A-Za-z0-9_|]+$/;
 
 function interpretMatcher(v, prov, event) {
   const s = (v || '').trim();
+  if (s === '' || s === '*') return { kind: 'all', text: 'every occurrence fires this hook. Empty and * are the same thing.' };
+
   if (prov === 'codex' && event && CODEX_MATCHERLESS.includes(event)) {
     return { kind: 'ignored', text: 'ignored. Codex does not honour a matcher on ' + event + ' — whatever you type here is parsed and discarded, and the hook fires on every occurrence.' };
   }
-  if (s === '' || s === '*') return { kind: 'all', text: 'every occurrence fires this hook. Empty and * are the same thing.' };
-
   if (prov !== 'codex' && event && CLAUDE_MATCHERLESS.includes(event)) {
-    return { kind: 'ignored', text: 'ignored. Claude does not honour a matcher on ' + event + ' — whatever you type here is parsed and discarded, and the hook fires on every occurrence. Ten Claude events do this; the hint above lists them.' };
+    return { kind: 'ignored', text: 'ignored. Claude does not honour a matcher on ' + event + ' — whatever you type here is parsed and discarded, and the hook fires on every occurrence. ' + CLAUDE_MATCHERLESS.length + ' Claude events do this; the hint above lists them.' };
   }
 
   if (prov === 'codex') {
@@ -2437,10 +2447,10 @@ function editorDialog() {
           <code class="cmd">|</code>/<code class="cmd">,</code>-separated exact list. <strong class="semibold">Any other character makes it an
           unanchored JavaScript regex</strong> — <code class="cmd">Edit.*</code> also matches <code class="cmd">NotebookEdit</code>.
           <code class="cmd">FileChanged</code> and <code class="cmd">StopFailure</code> narrow that set to <code class="cmd">[A-Za-z0-9_|]</code>.
-          Ten events (${CLAUDE_MATCHERLESS.join(', ')}) discard this field entirely.` : `
+          ${CLAUDE_MATCHERLESS.length} events (${CLAUDE_MATCHERLESS.map((e) => '<code class="cmd">' + e + '</code>').join(', ')}) discard this field entirely.` : `
           <code class="cmd">*</code> or empty matches everything. Everything else is <strong class="semibold">always a regular expression</strong> —
           Codex has no exact-string path, so <code class="cmd">Bash</code> here behaves differently from <code class="cmd">Bash</code> on Claude.
-          Three events (<code class="cmd">UserPromptSubmit</code>, <code class="cmd">Stop</code>, <code class="cmd">Interrupt</code>) ignore this field entirely.`}
+          ${CODEX_MATCHERLESS.length} events (${CODEX_MATCHERLESS.map((e) => '<code class="cmd">' + e + '</code>').join(', ')}) ignore this field entirely.`}
         </div>
         <div class="notice ${mi.kind === 'regex' || mi.kind === 'ignored' ? 'warn' : 'ok'} t-caption" style="padding:7px 10px">
           ${ic(mi.kind === 'regex' || mi.kind === 'ignored' ? 'alert' : 'check', 13, 'ico')}
