@@ -82,6 +82,15 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function unreadHookCaptions(hooks: unknown, sources: string): string[] {
+  const declared = [...new Set(leafPaths(hooks).map(baseKey))];
+  return declared.filter(
+    (key) =>
+      // A dot continues a property path; it cannot terminate a leaf reference.
+      !new RegExp(`${escapeRegex(`$.hooks.${key}`)}(?![A-Za-z0-9_.])`).test(sources),
+  );
+}
+
 describe("hooks captions", () => {
   const sources = runtimeSources();
 
@@ -93,14 +102,28 @@ describe("hooks captions", () => {
     expect(sources).toContain("$.hooks.tab_overview");
   });
 
+  it("does not let a child reference hide an unread collapsed plural leaf", () => {
+    const collisionBundle = {
+      hooks: {
+        seat: {
+          count_one: "one seat",
+          count_other: "{{count}} seats",
+          count: { hint: "Seat count help" },
+        },
+      },
+    };
+    const childOnlySource = "t(($) => $.hooks.seat.count.hint)";
+
+    expect(unreadHookCaptions(collisionBundle.hooks, childOnlySource)).toEqual([
+      "seat.count",
+    ]);
+  });
+
   for (const [locale, bundle] of Object.entries(LOCALES)) {
     it(`${locale}: declares no hooks caption the components never read`, () => {
       const declared = [...new Set(leafPaths(bundle.hooks).map(baseKey))];
       expect(declared.length).toBeGreaterThan(0);
-      const unread = declared.filter(
-        (key) =>
-          !new RegExp(`${escapeRegex(`$.hooks.${key}`)}(?![A-Za-z0-9_])`).test(sources),
-      );
+      const unread = unreadHookCaptions(bundle.hooks, sources);
       expect(unread).toEqual([]);
     });
   }
