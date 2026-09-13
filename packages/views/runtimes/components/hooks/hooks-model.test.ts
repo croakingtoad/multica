@@ -154,6 +154,20 @@ describe("hookScopeRows", () => {
     expect(rows[0]?.entryCount).toBeNull();
   });
 
+  // Pass entries and the error independently on purpose: this pins the
+  // three-argument model boundary even for a payload shape the producer does
+  // not emit, rather than relying on one parsed projection fixture.
+  it("states no entry count for a found source when an error accompanies entries", () => {
+    const rows = hookScopeRows(
+      "claude",
+      [source()],
+      [entry()],
+      "parse ~/.claude/settings.json: unexpected end of JSON input",
+    );
+
+    expect(rows[0]?.entryCount).toBeNull();
+  });
+
   // LOCO-408 AC3: the fix is not "suppress zeros". A source that resolved
   // cleanly and genuinely holds nothing still says so.
   it("still states zero for a source that resolved cleanly and holds nothing", () => {
@@ -320,10 +334,11 @@ describe("hookTotals", () => {
   // implies no entry total was established.
   //
   // Both inputs come from one projection object here, parsed through the same
-  // wire schema the client parses a response with, so this test cannot restate
-  // the impossible pair even by accident — a payload it could construct is a
-  // payload the server could send. The producer's half of the contract lives
-  // on `Projection` in `server/internal/runtimehooks/projection.go`.
+  // wire schema the client uses. The schema accepts entries and an error
+  // independently, so parsing does not enforce their exclusivity; the explicit
+  // length premise below pins the producer's half of the contract. That
+  // producer contract lives on `Projection` in
+  // `server/internal/runtimehooks/projection.go`.
   it("establishes no entry total for a projection that reports an error", () => {
     const projection = RuntimeHookResolutionSchema.parse({
       provider: "claude",
