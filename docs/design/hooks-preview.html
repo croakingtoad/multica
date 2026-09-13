@@ -1124,7 +1124,7 @@ function runState(h, runtime) {
    they differ per provider, so the hint is live and provider-aware rather
    than one tooltip that is half-wrong wherever you read it.
    Claude: exact-string unless the value contains a character outside
-   [A-Za-z0-9_-,| ], in which case it is an unanchored JS regex — except on
+   [-A-Za-z0-9_, |], in which case it is an unanchored JS regex — except on
    FileChanged and StopFailure, which take a narrower [A-Za-z0-9_|] set, and
    on ten events where the matcher is parsed and then ignored.
    Codex: always a regex. There is no exact-match path at all, and on
@@ -1226,7 +1226,7 @@ function interpretMatcher(v, prov, event) {
     extra.push('Unanchored — it matches anywhere in the tool name. Add ^ and $ to pin it.');
   }
   return { kind: 'regex', text: 'treated as a JavaScript regex, because it contains a character outside '
-    + (narrow ? '[A-Za-z0-9_|], the narrower set ' + event + ' uses' : '[A-Za-z0-9_-,| ]') + '. ' + extra.join(' ') };
+    + (narrow ? '[A-Za-z0-9_|], the narrower set ' + event + ' uses' : '[-A-Za-z0-9_, |]') + '. ' + extra.join(' ') };
 }
 
 function validateCommand(cmd) {
@@ -1931,7 +1931,7 @@ function precedenceRail(r) {
         <hr class="sep" />
         <div><strong class="semibold">Trust</strong><div class="muted">Codex records trust against a hook's current hash; a new or edited hook is skipped until reviewed in <code class="cmd">/hooks</code>. Enabling a plugin does not trust its hooks. Claude has no equivalent — its gate is workspace trust on the folder, not the hook.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Matcher semantics</strong><div class="muted">Claude: exact string unless it contains a character outside <code class="cmd">[A-Za-z0-9_-,| ]</code>, then an unanchored regex — <code class="cmd">FileChanged</code> and <code class="cmd">StopFailure</code> use a narrower <code class="cmd">[A-Za-z0-9_|]</code>. Codex: <em>always</em> a regex — no exact path at all. <strong class="semibold">Both providers discard the matcher on some events</strong>, not just Codex: Codex on <code class="cmd">UserPromptSubmit</code>, <code class="cmd">Stop</code> and <code class="cmd">Interrupt</code>, Claude on those first two plus <code class="cmd">PostToolBatch</code>, <code class="cmd">TeammateIdle</code>, <code class="cmd">TaskCreated</code>, <code class="cmd">TaskCompleted</code>, <code class="cmd">WorktreeCreate</code>, <code class="cmd">WorktreeRemove</code>, <code class="cmd">MessageDisplay</code> and <code class="cmd">CwdChanged</code> — ten in all, where a matcher you write reads as a narrow guard and behaves as none.</div></div>
+        <div><strong class="semibold">Matcher semantics</strong><div class="muted">Claude: exact string unless it contains a character outside <code class="cmd">[-A-Za-z0-9_, |]</code>, then an unanchored regex — <code class="cmd">FileChanged</code> and <code class="cmd">StopFailure</code> use a narrower <code class="cmd">[A-Za-z0-9_|]</code>. Codex: <em>always</em> a regex — no exact path at all. <strong class="semibold">Both providers discard the matcher on some events</strong>, not just Codex: Codex on <code class="cmd">UserPromptSubmit</code>, <code class="cmd">Stop</code> and <code class="cmd">Interrupt</code>, Claude on those first two plus <code class="cmd">PostToolBatch</code>, <code class="cmd">TeammateIdle</code>, <code class="cmd">TaskCreated</code>, <code class="cmd">TaskCompleted</code>, <code class="cmd">WorktreeCreate</code>, <code class="cmd">WorktreeRemove</code>, <code class="cmd">MessageDisplay</code> and <code class="cmd">CwdChanged</code> — ten in all, where a matcher you write reads as a narrow guard and behaves as none.</div></div>
         <hr class="sep" />
         <div><strong class="semibold">Deduplication</strong><div class="muted">Claude collapses a byte-identical handler defined in two settings files to one spawn; a plugin or skill copy stays separate. Codex documents none.</div></div>
         <hr class="sep" />
@@ -2495,7 +2495,7 @@ function editorDialog() {
           aria-invalid="${perField('matcher').some((p) => p.level === 'error')}" />
         <div class="hint">
           ${ed.provider === 'claude' ? `
-          <code class="cmd">*</code> or empty matches everything. Only <code class="cmd">[A-Za-z0-9_-,| ]</code> means an exact string or a
+          <code class="cmd">*</code> or empty matches everything. Only <code class="cmd">[-A-Za-z0-9_, |]</code> means an exact string or a
           <code class="cmd">|</code>/<code class="cmd">,</code>-separated exact list. <strong class="semibold">Any other character makes it an
           unanchored JavaScript regex</strong> — <code class="cmd">Edit.*</code> also matches <code class="cmd">NotebookEdit</code>.
           <code class="cmd">FileChanged</code> and <code class="cmd">StopFailure</code> narrow that set to <code class="cmd">[A-Za-z0-9_|]</code>.
