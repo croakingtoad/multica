@@ -1143,7 +1143,18 @@ const CLAUDE_EXACT_SET = /^[A-Za-z0-9_\-,| ]+$/;
 const CLAUDE_NARROW_EXACT_SET = /^[A-Za-z0-9_|]+$/;
 
 function interpretMatcher(v, prov, event) {
-  const s = (v || '').trim();
+  /* No .trim() here, deliberately. EvaluateMatcher normalises nothing: it
+     tests matcher == "" || matcher == "*" on the raw configured value and
+     hands that same raw value to claudeExactMatcher / claudeNarrowExactMatcher
+     / regexp.Compile. So " " is not `all` on either provider, and " Bash "
+     leaves the exact-string path on FileChanged and StopFailure, whose narrow
+     set has no space in it. Trimming first classified a value the reader had
+     not typed and, worse, withheld the warning shipped Go warrants.
+     `v || ''` stays — it covers an absent field, not a typed one.
+     The per-element .trim() in the exact list below is a DIFFERENT rule and
+     stays: it mirrors strings.TrimSpace in exactMatcherMatches, which really
+     does trim each |/,-separated candidate before comparing it. */
+  const s = v || '';
   if (s === '' || s === '*') return { kind: 'all', text: 'every occurrence fires this hook. Empty and * are the same thing.' };
 
   if (prov === 'codex' && event && CODEX_MATCHERLESS.includes(event)) {
@@ -1156,7 +1167,13 @@ function interpretMatcher(v, prov, event) {
   if (prov === 'codex') {
     const extra = [];
     if (!s.startsWith('^') || !s.endsWith('$')) {
-      extra.push('Unanchored, so it matches anywhere in the name — ^' + s.replace(/[^A-Za-z0-9_]/g, '') + '$ pins it.');
+      /* Only offer ^s$ when that is the SAME value pinned. The old form ran s
+         through .replace(/[^A-Za-z0-9_]/g, ''), which proposed a matcher the
+         reader never wrote: "Edit.*" came back as ^Edit$, losing the wildcard,
+         and an untrimmed " * " would now come back as the unmatchable ^$. */
+      extra.push(/^[A-Za-z0-9_]+$/.test(s)
+        ? 'Unanchored, so it matches anywhere in the name — ^' + s + '$ pins it.'
+        : 'Unanchored, so it matches anywhere in the name. Add ^ and $ around the pattern you want to pin it.');
     }
     if (/^[A-Za-z0-9_]+$/.test(s)) {
       extra.push('On Claude this same value would be an exact match; on Codex it is not.');
@@ -1167,7 +1184,15 @@ function interpretMatcher(v, prov, event) {
   const narrow = !!event && CLAUDE_NARROW_MATCHER_EVENTS.includes(event);
   if ((narrow ? CLAUDE_NARROW_EXACT_SET : CLAUDE_EXACT_SET).test(s)) {
     const parts = s.split(narrow ? /\|/ : /[|,]/).map((x) => x.trim()).filter(Boolean);
-    return { kind: 'exact', text: (parts.length > 1
+    /* Reachable, and not only through this fix: " ", ",", "|" and " , " are
+       all inside the exact set, and every candidate in them is blank once
+       exactMatcherMatches has trimmed it. parts[0] was undefined there, so
+       the notice read "matches only undefined". Go's verdict is precise —
+       it compares "" against the tool name and no tool name is empty. */
+    return { kind: 'exact', text: (parts.length === 0
+      ? 'on the exact-string path, but every name in it is blank — exactMatcherMatches trims each '
+        + (narrow ? '|' : '|/,') + '-separated candidate, leaving only the empty string to compare, and no tool name is empty. It matches nothing.'
+      : parts.length > 1
       ? 'matches only ' + parts.join(', ') + ' — nothing else.'
       : 'matches only ' + parts[0] + ' — nothing else.')
       + (narrow
