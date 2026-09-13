@@ -661,7 +661,33 @@ const LAYERS = {
    managers clobbering unrelated settings).
    `parked` — the entry sits in a `_disabledHooks` sidecar key, not in
    `hooks`, so it is configured but not registered. See PARK_COPY.
-   `trust` — Codex only: 'trusted' | 'stale' | 'n/a'. */
+   `trust` — Codex only, mirroring shipped TrustState verbatim: 'not_applicable' | 'pending_review' | 'trusted_as_of_snapshot' | 'disabled' | 'managed_by_policy'.
+   Mirrored from TrustState, server/internal/runtimehooks/runstate.go:35-43.
+   Claude rows carry no `trust` field at all, which is TrustNotApplicable —
+   shipped useTrustLabel drops the whole cell rather than printing "not
+   applicable" on every Claude row (hook-state-badges.tsx:281-284).
+   There is deliberately NO 'stale' member, and the sketch must not invent one:
+   applyCodexConfiguration (runstate.go:355-358) "intentionally do[es] not read,
+   compute, or compare trusted_hash because its algorithm is undocumented", so
+   Multica cannot distinguish a hook edited since its review from one that was
+   not. Presence of a state record proves only that Codex reviewed the hook at
+   snapshot time — hence CodexTrustSnapshotCaveat below, which rides along with
+   every trusted_as_of_snapshot presentation on this page. */
+
+/* Verbatim CodexTrustSnapshotCaveat, runstate.go:45-48. Shipped useTrustLabel
+   renders it as the hint on every trusted_as_of_snapshot row
+   (hook-state-badges.tsx:288-295); every presentation here does the same. */
+const CODEX_TRUST_CAVEAT = 'trusted when last reviewed; Multica cannot confirm it is unchanged';
+
+/* Labels mirrored from packages/views/locales/en/runtimes.json hooks.trust.*
+   (:688-695) — the shipped vocabulary, not a re-derivation from Codex docs. */
+const TRUST_LABEL = {
+  pending_review: 'Never reviewed',
+  trusted_as_of_snapshot: 'Trusted when last reviewed',
+  disabled: 'Switched off',
+  managed_by_policy: 'Trusted by policy',
+};
+
 const HOOKS = {
   /* ---------------- Claude (cc-claudesp) ----------------
      Shaped to teach ACCUMULATION. PreToolUse below carries five entries
@@ -771,64 +797,63 @@ const HOOKS = {
   /* ---------------- Codex (cc-claudesp) ---------------- */
   '3327c002-1f3d-4c64-9eb7-e7cb1c77fd1f': [
     { id: 'x1', event: 'PreToolUse', matcher: 'Bash', scope: 'user-json', type: 'command',
-      command: '~/.codex/hooks/shell-policy.sh', timeout: 15, async: false, trust: 'trusted',
+      command: '~/.codex/hooks/shell-policy.sh', timeout: 15, async: false, trust: 'trusted_as_of_snapshot',
       statusMessage: 'Checking shell policy…', owner: 'user', parked: false,
       desc: 'Shell commands match as Bash. Here that is a regex, not an exact string — Codex has no exact-match path.' },
     { id: 'x2', event: 'PreToolUse', matcher: '^apply_patch$', scope: 'repo-json', type: 'command',
-      command: '.codex/hooks/repo-patch-allowlist.py', timeout: 10, async: false, trust: 'trusted',
+      command: '.codex/hooks/repo-patch-allowlist.py', timeout: 10, async: false, trust: 'trusted_as_of_snapshot',
       owner: 'user', parked: false,
       desc: 'Anchored on purpose. apply_patch also answers to the Edit and Write matcher aliases.' },
     { id: 'x3', event: 'PreToolUse', matcher: '*', scope: 'user-toml', type: 'command',
-      command: '~/.codex/hooks/tool-audit.sh', timeout: 10, async: true, trust: 'trusted',
+      command: '~/.codex/hooks/tool-audit.sh', timeout: 10, async: true, trust: 'trusted_as_of_snapshot',
       owner: 'multica', parked: false,
       desc: 'Fires on every tool call — but not on hosted tools like WebSearch, which never take the local hook path.' },
     { id: 'x3b', event: 'PreToolUse', matcher: 'Bash', scope: 'managed', type: 'command',
       command: '/enterprise/hooks/pre_tool_use_policy.py', commandWindows: 'py -3 C:\\enterprise\\hooks\\pre_tool_use_policy.py',
-      timeout: 30, trust: 'managed', statusMessage: 'Checking managed Bash command',
+      timeout: 30, trust: 'managed_by_policy', statusMessage: 'Checking managed Bash command',
       owner: 'managed', parked: false,
       desc: 'From requirements.toml. Trusted by policy, exempt from review, and cannot be disabled from /hooks.' },
 
     { id: 'x4', event: 'PostToolUse', matcher: 'apply_patch', scope: 'user-json', type: 'command',
       command: '~/.codex/hooks/format-patch.sh', commandWindows: 'powershell -File %USERPROFILE%\\.codex\\hooks\\format-patch.ps1',
-      timeout: 30, async: true, trust: 'trusted', owner: 'multica', parked: false, installedFrom: 'auto-format',
+      timeout: 30, async: true, trust: 'trusted_as_of_snapshot', owner: 'multica', parked: false, installedFrom: 'auto-format',
       desc: 'Has a commandWindows override — a Codex-only field.' },
 
     { id: 'x5', event: 'PostToolUse', matcher: 'apply_patch', scope: 'user-json', type: 'command',
-      command: '~/.codex/hooks/secret-firewall.js', timeout: 20, async: false, trust: 'stale',
-      trustedHash: 'b41c9f0e7a2d5e88', currentHash: '1f7ad30c9b6e4412', editedAt: '2026-09-11 15:47 EDT',
+      command: '~/.codex/hooks/secret-firewall.js', timeout: 20, async: false, trust: 'trusted_as_of_snapshot',
       owner: 'multica', parked: false, installedFrom: 'secret-firewall',
-      desc: 'Edited since it was trusted. Codex skips it entirely until it is re-trusted.' },
+      desc: 'Multica observed a Codex review record for this entry and nothing more. If it has been edited since, this row looks exactly the same: applyCodexConfiguration (runstate.go:355-358) never reads, computes or compares trusted_hash, so there is no edited-since-trusted verdict to show. Non-managed Codex effectiveness therefore stays EffectivenessTrustUnknown whatever the state column says.' },
 
     { id: 'x6', event: 'UserPromptSubmit', matcher: 'Bash', scope: 'user-json', type: 'prompt',
       prompt: 'Rewrite the user prompt to include the current sprint goal.', timeout: 30,
-      trust: 'trusted', owner: 'user', parked: false, ineffective: true,
+      trust: 'trusted_as_of_snapshot', owner: 'user', parked: false, ineffective: true,
       desc: 'Two failures in one entry: type: prompt is parsed as a valid handler type and never dispatched, and a matcher on UserPromptSubmit is parsed and discarded.' },
 
     { id: 'x7', event: 'Stop', matcher: '', scope: 'user-json', type: 'command',
-      command: '~/.codex/hooks/turn-gate.py', timeout: 20, async: false, trust: 'trusted',
+      command: '~/.codex/hooks/turn-gate.py', timeout: 20, async: false, trust: 'trusted_as_of_snapshot',
       owner: 'user', parked: false, stopBlock: true,
       desc: 'Emits decision:"block" on Stop. That continues the turn on BOTH providers — it never rejects it. What differs is the reason: Codex turns it into a new continuation prompt. A continue:false from any Stop hook overrides the continuation.' },
     { id: 'x7b', event: 'PostToolUse', matcher: 'Bash', scope: 'user-json', type: 'command',
-      command: '~/.codex/hooks/log-shell.sh', timeout: 10, async: false, trust: 'trusted',
+      command: '~/.codex/hooks/log-shell.sh', timeout: 10, async: false, trust: 'disabled',
       owner: 'user', parked: false, disabledNative: true,
       desc: 'Switched off in the Codex /hooks browser. Codex has a real per-hook disable — Claude does not — so nothing needed inventing here.' },
 
     { id: 'x8', event: 'Interrupt', matcher: '', scope: 'user-json', type: 'command',
-      command: '~/.codex/hooks/on-interrupt-cleanup.sh', timeout: 10, async: false, trust: 'trusted',
+      command: '~/.codex/hooks/on-interrupt-cleanup.sh', timeout: 10, async: false, trust: 'trusted_as_of_snapshot',
       owner: 'multica', parked: false, desc: 'Interrupt has no Claude equivalent.' },
 
     { id: 'x9', event: 'SessionStart', matcher: 'startup|resume|clear|compact', scope: 'plugin', type: 'command',
-      command: '$PLUGIN_ROOT/hooks/bootstrap.js', timeout: 15, async: false, trust: 'review',
+      command: '$PLUGIN_ROOT/hooks/bootstrap.js', timeout: 15, async: false, trust: 'pending_review',
       additionalContextLimit: 5000, owner: 'plugin', parked: false,
       desc: 'Plugin-bundled and never reviewed. Enabling the plugin did not trust its hooks — Codex skips it until someone opens /hooks.' },
 
     { id: 'x10', event: 'PermissionRequest', matcher: 'Bash', scope: 'user-json', type: 'mcp_tool',
-      mcpTool: 'loco-policy__review_command', timeout: 20, trust: 'trusted',
+      mcpTool: 'loco-policy__review_command', timeout: 20, trust: 'trusted_as_of_snapshot',
       owner: 'multica', parked: false,
       desc: 'mcp_tool is effective on both providers. It reuses an existing MCP connection — it will not start a server.' },
 
     { id: 'x11', event: 'SessionEnd', matcher: '', scope: 'user-json', type: 'command',
-      command: '~/.codex/hooks/session-logger.js', timeout: 10, async: false, trust: 'trusted',
+      command: '~/.codex/hooks/session-logger.js', timeout: 10, async: false, trust: 'disabled',
       owner: 'multica', parked: false, disabledNative: true, installedFrom: 'session-logger',
       desc: 'Switched off through Codex\u2019s own per-hook disable. Multica does not park on Codex — there is a real feature to drive, and moving the entry would cost it its trust hash.' },
   ],
@@ -886,8 +911,6 @@ const FIRE_LOG = {
         note: '4 handlers fired on this one shell call, from 4 different files. The managed one would survive both kill switches.' },
       { t: '15:52:05', event: 'SessionStart', hook: 'bootstrap.js (plugin)', verdict: 'untrusted',
         stderr: 'hook skipped: definition has never been trusted\nenabling the plugin does not trust its hooks — run `/hooks` to review' },
-      { t: '15:51:58', event: 'PostToolUse', hook: 'secret-firewall.js', verdict: 'untrusted',
-        stderr: 'hook skipped: trusted_hash b41c9f0e… does not match current hash 1f7ad30c…\nrun `/hooks` in Codex to review and trust it' },
       { t: '15:51:58', event: 'PostToolUse', hook: 'format-patch.sh', verdict: 'async' },
       { t: '15:51:12', event: 'UserPromptSubmit', hook: 'prompt-rewrite (type: prompt)', verdict: 'ineffective',
         note: 'Codex parsed the entry and skipped it. type: prompt is never executed on Codex — and its matcher ("Bash") was discarded too, since UserPromptSubmit ignores matchers.' },
@@ -912,7 +935,7 @@ const VERDICTS = {
   deduped:     { label: 'collapsed · ran once', cls: '', icon: 'copy' },
   neverran:    { label: 'never invoked', cls: 'b-bad', icon: 'ban' },
   skippedif:   { label: 'if did not match', cls: '', icon: 'filter' },
-  untrusted:   { label: 'skipped · not trusted', cls: 'b-bad', icon: 'key' },
+  untrusted:   { label: 'skipped · never reviewed', cls: 'b-bad', icon: 'key' },
   ineffective: { label: 'skipped · type not supported', cls: 'b-bad', icon: 'ban' },
   continued:   { label: 'continued turn', cls: 'b-warn', icon: 'info' },
   feedback:    { label: 'stop feedback · continued', cls: '', icon: 'info' },
@@ -1105,10 +1128,13 @@ function runState(h, runtime) {
       : h.type === 'http'
         ? 'Codex has no http handler type at all, so this entry can never execute.'
         : 'Codex parses type: ' + h.type + ' as a valid handler type and then never dispatches it. It has never executed.' };
-  if (h.trust === 'stale') return { runs: false, label: 'Not trusted', cls: 'b-bad', icon: 'key',
-    why: 'Edited since it was trusted. Codex skips it until the new hash is trusted on the host.' };
-  if (h.trust === 'review') return { runs: false, label: 'Needs review', cls: 'b-bad', icon: 'key',
-    why: 'Never trusted. Codex requires you to review the exact definition in /hooks before it can run — installing the plugin was not enough.' };
+  /* TrustPendingReview is the ONE trust state that lets this page say a hook is
+     not running, because the shipped hint says so outright (runtimes.json:694,
+     hooks.trust.pending_review_hint). There is deliberately no counterpart for
+     an edited-since-trusted hook: shipped TrustState (runstate.go:35-43) has no
+     such member, so nothing below may claim one. */
+  if (h.trust === 'pending_review') return { runs: false, label: TRUST_LABEL.pending_review, cls: 'b-bad', icon: 'key',
+    why: 'Codex requires the exact definition to be reviewed in /hooks before the hook can run. Installing or enabling its source is not enough.' };
   if (h.ifOnNonToolEvent) return { runs: false, label: 'Never runs', cls: 'b-bad', icon: 'ban',
     why: 'An if condition is only evaluated on tool events. On ' + h.event + ', a handler with if set never runs at all.' };
   if (h._dupOf) return { runs: false, label: 'Runs once', cls: '', icon: 'copy',
@@ -1379,7 +1405,7 @@ function screenHooks() {
     }
     const open = !state.collapsed[ev];
     const running = group.filter((h) => runState(h, r).runs).length;
-    const trouble = group.filter((h) => { const st = runState(h, r); return !st.runs && (!handlerTypeEffective(r.provider, h.event, h.type) || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review'); }).length;
+    const trouble = group.filter((h) => { const st = runState(h, r); return !st.runs && (!handlerTypeEffective(r.provider, h.event, h.type) || h.ifOnNonToolEvent || h.trust === 'pending_review'); }).length;
 
     return `
     <div class="event-group">
@@ -1408,7 +1434,7 @@ function screenHooks() {
         ${ic('info', 14, 'ico')}
         <div>The shipped <code class="cmd">protocol.HookFire</code> record has no duration on any row, so no timing for a run reaches the fire log.</div>
       </div>
-      ${r.provider === 'codex' && hooks.some((h) => h.trust === 'stale' || h.trust === 'review') ? trustBanner(hooks.filter((h) => h.trust === 'stale' || h.trust === 'review')) : ''}
+      ${r.provider === 'codex' && hooks.length ? trustBanner(hooks.filter((h) => h.trust === 'pending_review')) : ''}
       ${hooks.some((h) => h.broken === 'path') ? `
         <div class="notice bad t-label">
           ${ic('circleAlert', 15, 'ico')}
@@ -1513,9 +1539,10 @@ function hookRow(h, r) {
     <td>
       <div class="inline">
         <span class="badge ${st.cls}">${ic(st.icon, 11)}${esc(st.label)}</span>
-        ${h.trust === 'stale' || h.trust === 'review' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}${h.trust === 'review' ? 'Review' : 'Re-trust'}</button>` : ''}
+        ${h.trust === 'pending_review' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}Review</button>` : ''}
       </div>
       <div class="t-micro faint" style="margin-top:3px">${esc(st.why)}</div>
+      ${trustNote(h)}
     </td>
     <td class="nowrap">
       <div class="inline" style="gap:2px">
@@ -1541,15 +1568,36 @@ function hookRow(h, r) {
 }
 const ordinal = (n) => n + (['th','st','nd','rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : Math.min(n % 10, 4)] || 'th');
 
-function trustBanner(stale) {
+/* The snapshot caveat, on every trusted_as_of_snapshot presentation. Shipped
+   useTrustLabel attaches entry.trust_caveat — CodexTrustSnapshotCaveat — as the
+   hint on exactly this state and no other (hook-state-badges.tsx:288-295), so a
+   row that reads "Trusted when last reviewed" never reads it unqualified. */
+function trustNote(h) {
+  if (h.trust !== 'trusted_as_of_snapshot') return '';
+  return `<div class="t-micro" style="margin-top:3px;color:var(--warning)">${ic('alert', 10)} Trust snapshot — ${esc(CODEX_TRUST_CAVEAT)}.</div>`;
+}
+
+/* Codex trust, stated once per screen. Two separate claims, and only the first
+   one is a verdict: TrustPendingReview is not running (runtimes.json:694), and
+   everything else is a snapshot Multica cannot re-check, because
+   applyCodexConfiguration deliberately never reads, computes or compares
+   trusted_hash (runstate.go:355-358) and non-managed Codex effectiveness stays
+   EffectivenessTrustUnknown as a result (runstate.go:337-340). This notice is
+   not conditional on a staleness finding — there is no such finding to make. */
+function trustBanner(pendingReview) {
+  const n = pendingReview.length;
   return `
-  <div class="notice bad t-label">
+  <div class="notice ${n ? 'bad' : 'warn'} t-label">
     ${ic('key', 15, 'ico')}
     <div>
-      <strong class="semibold">${stale.length} Codex hook${stale.length > 1 ? 's are' : ' is'} edited but not trusted — ${stale.length > 1 ? 'they are' : 'it is'} not running.</strong>
-      Codex records trust against the hook's hash in <code class="cmd">[hooks.state]</code>. Any edit — including one Multica makes — invalidates it,
-      and Codex marks the hook for review and skips it until the new hash is trusted. Startup is not silent: Codex prints a warning telling you to open <code class="cmd">/hooks</code>.
-      <div style="margin-top:6px">${stale.map((h) => `<button class="btn sm" data-retrust="${h.id}">${ic('key', 13)}Re-trust ${esc((h.command || '').split('/').pop())}</button>`).join(' ')}</div>
+      ${n ? `<strong class="semibold">${n} Codex hook${n > 1 ? 's have' : ' has'} never been reviewed — ${n > 1 ? 'they are' : 'it is'} not running.</strong>
+      Codex requires the exact definition to be reviewed in <code class="cmd">/hooks</code> before the hook can run; installing or enabling its source is not enough.
+      Startup is not silent: Codex prints a warning telling you to open <code class="cmd">/hooks</code>.<div style="height:5px"></div>` : ''}
+      <strong class="semibold">Every other trust verdict on this screen is a snapshot.</strong>
+      Codex records trust against a hash whose algorithm is undocumented, so Multica never reads, computes or compares it. Every hook below marked
+      <em>${esc(TRUST_LABEL.trusted_as_of_snapshot)}</em> carries only this much: <em>${esc(CODEX_TRUST_CAVEAT)}</em>. An edit since that review — including
+      one Multica makes — looks identical here. Read the running counts as what the file read supports, not as confirmed trust.
+      ${n ? `<div style="margin-top:6px">${pendingReview.map((h) => `<button class="btn sm" data-retrust="${h.id}">${ic('key', 13)}Review ${esc((h.command || '').split('/').pop())}</button>`).join(' ')}</div>` : ''}
     </div>
   </div>`;
 }
@@ -1561,7 +1609,7 @@ function railCards(r, hooks) {
   const running = hooks.filter((h) => runState(h, r).runs).length;
   const parked = hooks.filter((h) => h.parked || h.disabledNative).length;
   const deduped = hooks.filter((h) => h._dupOf).length;
-  const broken = hooks.filter((h) => h.broken || !handlerTypeEffective(r.provider, h.event, h.type) || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review').length;
+  const broken = hooks.filter((h) => h.broken || !handlerTypeEffective(r.provider, h.event, h.type) || h.ifOnNonToolEvent || h.trust === 'pending_review').length;
   const busiest = hooks.reduce((a, h) => (h._fires > (a._fires || 0) ? h : a), {});
 
   return `
@@ -1611,7 +1659,7 @@ function railCards(r, hooks) {
         <div>${ic('x', 11)} <strong class="semibold">${r.provider === 'claude' ? 'Parking' : 'Disabling'}</strong> — ${r.provider === 'claude'
           ? 'Multica\u2019s own invention. Claude has no per-hook disable at all, so there is no feature to drive.'
           : 'Codex <em>does</em> have a per-hook disable, but Multica has no way to reach its hook-state store on the host.'}</div>
-        <div>${ic('x', 11)} <strong class="semibold">Re-trusting</strong> a Codex hook — trust is granted by an interactive CLI on the host.</div>
+        <div>${ic('x', 11)} <strong class="semibold">Granting trust</strong> to a Codex hook — trust is granted by an interactive CLI on the host. Nor can Multica detect that a granted trust has lapsed: <code class="cmd">runstate.go:355-358</code> deliberately never reads, computes or compares <code class="cmd">trusted_hash</code>.</div>
         <div>${ic('x', 11)} <strong class="semibold">Ownership-tagging</strong> a write — the <code class="cmd">_multica</code> block in the dry-run diff has no store behind it. No per-runtime settings table exists, and <code class="cmd">agent_runtime.metadata</code> is system-owned and on the hot claim path.</div>
       </div>
     </div>
@@ -1880,9 +1928,10 @@ function layerStack(r) {
                   </div>
                   <div class="cmd t-caption" style="margin-top:2px">${esc(h.command || h.url || h.mcpTool || h.prompt || '')}</div>
                   <div class="t-micro ${st.runs ? 'faint' : ''}" style="margin-top:2px;${st.runs ? '' : 'color:var(--warning)'}">${esc(st.why)}</div>
+                  ${trustNote(h)}
                 </div>
                 <span class="spacer"></span>
-                ${h.trust === 'stale' || h.trust === 'review' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}${h.trust === 'review' ? 'Review' : 'Re-trust'}</button>` : ''}
+                ${h.trust === 'pending_review' ? `<button class="btn xs" data-retrust="${h.id}">${ic('key', 11)}Review</button>` : ''}
               </div>`;
             }).join('')
               : '<div class="layer-entry"><span class="t-caption faint">No hooks in this layer.</span></div>'}
@@ -1929,7 +1978,7 @@ function precedenceRail(r) {
         <hr class="sep" />
         <div><strong class="semibold">Per-hook disable</strong><div class="muted"><strong>Codex has one</strong> — <code class="cmd">/hooks</code> disables an individual non-managed hook and the entry stays in the file. <strong>Claude has none</strong>: the docs say so outright, so Multica has to invent the mechanism there and only there.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Trust</strong><div class="muted">Codex records trust against a hook's current hash; a new or edited hook is skipped until reviewed in <code class="cmd">/hooks</code>. Enabling a plugin does not trust its hooks. Claude has no equivalent — its gate is workspace trust on the folder, not the hook.</div></div>
+        <div><strong class="semibold">Trust</strong><div class="muted">Codex records trust against a hook's current hash; a new or edited hook is skipped until reviewed in <code class="cmd">/hooks</code>. Enabling a plugin does not trust its hooks. Claude has no equivalent — its gate is workspace trust on the folder, not the hook. <strong class="semibold">What Multica can see of this is one-way:</strong> a review record proves Codex reviewed the hook at snapshot time, and nothing more. The hash algorithm is undocumented, so Multica never reads, computes or compares it, so every trusted verdict here means only <em>${esc(CODEX_TRUST_CAVEAT)}</em>.</div></div>
         <hr class="sep" />
         <div><strong class="semibold">Matcher semantics</strong><div class="muted">Claude: exact string unless it contains a character outside <code class="cmd">[-A-Za-z0-9_, |]</code>, then an unanchored regex — <code class="cmd">FileChanged</code> and <code class="cmd">StopFailure</code> use a narrower <code class="cmd">[A-Za-z0-9_|]</code>. Codex: <em>always</em> a regex — no exact path at all. <strong class="semibold">Both providers discard the matcher on some events</strong>, not just Codex: Codex on <code class="cmd">UserPromptSubmit</code>, <code class="cmd">Stop</code> and <code class="cmd">Interrupt</code>, Claude on those first two plus <code class="cmd">PostToolBatch</code>, <code class="cmd">TeammateIdle</code>, <code class="cmd">TaskCreated</code>, <code class="cmd">TaskCompleted</code>, <code class="cmd">WorktreeCreate</code>, <code class="cmd">WorktreeRemove</code>, <code class="cmd">MessageDisplay</code> and <code class="cmd">CwdChanged</code> — ten in all, where a matcher you write reads as a narrow guard and behaves as none.</div></div>
         <hr class="sep" />
@@ -2050,7 +2099,7 @@ function screenLog() {
             <div><span class="badge b-bad">${ic('ban', 11)}never invoked</span> <span class="muted">Loaded, but the provider never calls it. No error is raised, so this row is inferred from an absence rather than read from a log line.</span></div>
             <div><span class="badge">${ic('copy', 11)}collapsed · ran once</span> <span class="muted">Claude only. Two identical settings-file entries, one process.</span></div>
             <div><span class="badge">${ic('filter', 11)}if did not match</span> <span class="muted">Claude only. Deliberate: the pre-filter kept the process from spawning.</span></div>
-            <div><span class="badge b-bad">${ic('key', 11)}not trusted</span> <span class="muted">Codex only. Skipped on a hash mismatch.</span></div>
+            <div><span class="badge b-bad">${ic('key', 11)}skipped · never reviewed</span> <span class="muted">Codex only. The definition has never been reviewed in <code class="cmd">/hooks</code>, so Codex skipped it. There is no <em>edited since trusted</em> counterpart: Multica never reads, computes or compares Codex's <code class="cmd">trusted_hash</code>, so a hook that was reviewed and has since been edited is indistinguishable from one that was not, and no row here claims otherwise.</span></div>
             <div><span class="badge b-warn">${ic('info', 11)}continued turn</span> <span class="muted">Either provider. <code class="cmd">decision:"block"</code> on <code class="cmd">Stop</code> continues the turn — it never rejects it. Claude reads the <code class="cmd">reason</code> as why to continue; Codex replays it as a new user prompt.</span></div>
             <div><span class="badge">${ic('info', 11)}stop feedback · continued</span> <span class="muted">Claude only. <code class="cmd">hookSpecificOutput.additionalContext</code> on <code class="cmd">Stop</code>/<code class="cmd">SubagentStop</code> — the turn continues the same way, but it is guidance rather than a hook error.</span></div>
           </div>
@@ -2764,8 +2813,8 @@ function diffDialog() {
         ${ic('key', 13, 'ico')}
         <div><strong class="semibold">This write will leave 1 hook needing trust.</strong> Codex records trust against each hook's own hash, so only
         the new entry is affected: it will not run until it is trusted with <code class="cmd">/hooks</code> on ${esc(machineOf(rt()).title)}.
-        Untouched entries in the same file keep their trust. (<code class="cmd">secret-firewall.js</code> is also untrusted, but it was already stale
-        before this write — it was edited at 15:47.) Multica cannot grant trust remotely.</div>
+        Untouched entries in the same file keep their trust. Multica cannot grant trust remotely — and it cannot verify afterwards that it stayed
+        granted either, because it never reads, computes or compares <code class="cmd">trusted_hash</code>.</div>
       </div>` : ''}
       <div class="notice warn t-caption">
         ${ic('alert', 13, 'ico')}
@@ -2848,8 +2897,8 @@ function trustDialog() {
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="trTitle">
     <div class="dialog-head">
       <div>
-        <div class="t-title-lg" id="trTitle">${h.trust === 'review' ? 'Review and trust this Codex hook' : 'Re-trust this Codex hook'}</div>
-        <div class="t-caption muted" style="margin-top:2px">${h.trust === 'review' ? 'It has never run. Codex is waiting for someone to review the definition.' : 'It has not run since it was edited.'}</div>
+        <div class="t-title-lg" id="trTitle">Review and trust this Codex hook</div>
+        <div class="t-caption muted" style="margin-top:2px">It has never run. Codex is waiting for someone to review the definition.</div>
       </div>
       <span class="spacer"></span>
       <button class="btn ghost icon" data-close="1" aria-label="Close">${ic('x', 16)}</button>
@@ -2858,13 +2907,16 @@ function trustDialog() {
       <div class="card"><div class="card-body tight">
         <div class="inline"><span class="mono t-label medium">${esc(h.event)}</span>
           <span class="cmd t-caption faint">${h.matcher ? esc(h.matcher) : '*'}</span>
-          <span class="badge b-bad">${ic('key', 11)}${h.trust === 'review' ? 'needs review' : 'not trusted'}</span></div>
+          <span class="badge b-bad">${ic('key', 11)}${esc(TRUST_LABEL[h.trust] || h.trust)}</span></div>
         <div class="cmd t-caption" style="margin-top:6px">${esc(h.command || '')}</div>
+        <!-- Everything below is observable from the file read that produced this
+             row. No hash pair and no "edited at": Multica has neither, because
+             applyCodexConfiguration never reads trusted_hash (runstate.go:355-358). -->
         <dl class="kv" style="margin-top:10px">
-          <dt>Trusted hash</dt><dd class="cmd ${h.trustedHash ? '' : 'faint'}">${esc(h.trustedHash || 'never trusted')}</dd>
-          <dt>Current hash</dt><dd class="cmd" style="color:var(--destructive)">${esc(h.currentHash || 'c0d3a71f4e9b2856')}</dd>
-          <dt>${h.trust === 'review' ? 'First seen' : 'Edited'}</dt><dd>${esc(h.editedAt || '2026-09-08 11:02 EDT')}</dd>
-          <dt>Fires missed</dt><dd>${h.trust === 'review' ? '14 session starts' : '7 since the edit'}</dd>
+          <dt>Trust state</dt><dd>${esc(TRUST_LABEL[h.trust] || h.trust)} <span class="cmd faint">${esc(h.trust)}</span></dd>
+          <dt>Source</dt><dd class="cmd">${esc(layerMeta(r.provider, h.scope).file)}</dd>
+          <dt>Observed</dt><dd>${esc(r.scanned)} <span class="faint">— the read this verdict comes from</span></dd>
+          <dt>Hash</dt><dd class="faint">Not read. Codex's algorithm is undocumented, so Multica never computes or compares one.</dd>
         </dl>
         ${h.scope === 'plugin' ? `<div class="t-caption muted" style="margin-top:8px">${ic('pkg', 11)} This one arrived with a plugin. Installing or enabling a plugin does <strong class="semibold">not</strong> trust its hooks — they stay skipped until reviewed, which is easy to miss because the plugin itself looks fine.</div>` : ''}
       </div></div>
@@ -2874,7 +2926,11 @@ function trustDialog() {
         <code class="cmd">[hooks.state].trusted_hash</code> in <code class="cmd">~/.codex/config.toml</code>. Any edit — including one Multica
         makes on your behalf — breaks the match, and Codex then marks the hook for review and skips it until it is trusted again. You do get a
         warning at startup telling you to open <code class="cmd">/hooks</code>. Writing Codex hooks from a web app
-        therefore breaks them by definition, and re-trust has to be part of the flow rather than an afterthought.</div>
+        therefore breaks them by definition, and re-trust has to be part of the flow rather than an afterthought.
+        <strong class="semibold">Multica cannot tell you when it has happened.</strong> <code class="cmd">applyCodexConfiguration</code>
+        (<code class="cmd">runstate.go:355-358</code>) intentionally does not read, compute or compare <code class="cmd">trusted_hash</code>,
+        because the algorithm is undocumented — so this dialog is reachable only from a hook Codex has <em>never</em> reviewed, and a hook whose
+        trust has lapsed since the review Multica observed shows up nowhere at all.</div>
       </div>
       <div class="field">
         <label>Run this on ${esc(machineOf(r).title)}</label>
@@ -3092,7 +3148,7 @@ document.addEventListener('click', (e) => {
     }
     case 'requestTrust':
       closeModal();
-      wouldWrite('Would notify the owner of cc-claudesp to run <span class="mono">/hooks</span> and trust the new hash.');
+      wouldWrite('Would notify the owner of cc-claudesp to run <span class="mono">/hooks</span> and review the definition.');
       break;
   }
 });
