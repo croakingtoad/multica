@@ -1097,7 +1097,7 @@ function runState(h, runtime) {
   if (h.broken === 'path') return { runs: true, label: 'Failing',  cls: 'b-bad',  icon: 'circleAlert',
     why: 'Registered and fires, but the command cannot be found. The shell exits 127 and only exit 2 blocks, so the action proceeds. Claude does not see the failure either \u2014 PreCompact shows an exit-2 stderr message to the user, discards systemMessage and takes no additionalContext, so nothing this hook returns has a path to the model. The transcript does get a hook-error notice with the first line of stderr, and the full text lands in the debug log; what nothing keeps is a record of it.' };
   if (h.async)       return { runs: true,  label: 'Active · async', cls: 'b-ok', icon: 'zap',
-    why: 'Runs detached, so its exit status is not acted on and a failure drives nothing on its own — asyncRewake is the field that wakes Claude on exit code 2. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. The record has no duration field, so no timing for the run reaches the fire log. Completion notices are suppressed unless you run --verbose or press Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' };
+    why: 'Runs detached, so its exit status is not acted on and a failure drives nothing on its own — asyncRewake is the field that wakes Claude on exit code 2. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. Completion notices are suppressed unless you run --verbose or press Ctrl+O, and its additionalContext and systemMessage still reach Claude on the next turn.' };
   return { runs: true, label: 'Active', cls: 'b-ok', icon: 'check', why: 'Registered and running.' };
 }
 
@@ -1320,6 +1320,10 @@ function screenHooks() {
     <div class="col-main">
       ${runtimePicker()}
       ${behaviorStrip(r.provider)}
+      <div class="notice info t-caption">
+        ${ic('info', 14, 'ico')}
+        <div>The shipped <code class="cmd">protocol.HookFire</code> record has no duration on any row, so no timing for a run reaches the fire log.</div>
+      </div>
       ${r.provider === 'codex' && hooks.some((h) => h.trust === 'stale' || h.trust === 'review') ? trustBanner(hooks.filter((h) => h.trust === 'stale' || h.trust === 'review')) : ''}
       ${hooks.some((h) => h.broken === 'path') ? `
         <div class="notice bad t-label">
@@ -1330,7 +1334,7 @@ function screenHooks() {
             Status 127 is not exit 2, so it does not block — the compact proceeds. Claude does not see it either: <code class="cmd">PreCompact</code> shows an exit-2 stderr
             message to the user, discards <code class="cmd">systemMessage</code> and takes no <code class="cmd">additionalContext</code>, so nothing this hook returns has a path to
             the model. Each fire prints one <code class="cmd">hook error</code> notice in the transcript, with the full stderr in the debug log if you turn it on — but no
-            duration, no history, nothing to filter on.
+            history and nothing to filter on.
             <div style="margin-top:6px"><button class="btn sm" data-screen="log">${ic('activity', 13)}Open fire log</button>
             <button class="btn sm" data-edit="c14">${ic('pencil', 13)}Fix the path</button></div>
           </div>
@@ -1942,7 +1946,7 @@ function screenLog() {
 
       <div class="notice ${feed.sourceOk ? 'info' : 'warn'} t-caption">
         ${ic(feed.sourceOk ? 'info' : 'alert', 14, 'ico')}
-        <div><strong class="semibold">Where this comes from.</strong> ${esc(feed.source)}</div>
+        <div><strong class="semibold">Where this comes from.</strong> ${esc(feed.source)} The shipped <code class="cmd">protocol.HookFire</code> carries no duration, matcher or task reference, so none of those fields appears in this log.</div>
       </div>
     </div>
     <div class="col-rail">
@@ -1966,14 +1970,11 @@ function screenLog() {
       </div>
       <div class="card" style="border-color:color-mix(in oklab, var(--warning) 30%, var(--border))">
         <div class="card-head" style="background:color-mix(in oklab, var(--warning) 8%, transparent)">
-          <span class="t-label medium">${ic('alert', 14)} Not built yet</span>
+          <span class="t-label medium">${ic('alert', 14)} Codex fire feed not built yet</span>
         </div>
         <div class="card-body tight">
           <div class="t-caption muted stack">
-            <div>Claude writes per-hook results host-side today, so the data exists — but nothing ships it to the server.</div>
-            <div>${ic('x', 11)} No log-tailing pending action, and no store for fires.</div>
-            <div>${ic('x', 11)} Codex writes no per-hook log at all. The Codex feed above is inferred rather than dressed up.</div>
-            <div>${ic('x', 11)} The shipped <code class="cmd">protocol.HookFire</code> carries no duration, matcher or task reference, so none of those fields appears in this log.</div>
+            <div>${ic('x', 11)} Codex writes no per-hook log at all, so there is no Codex fire producer. The feed above is explicitly inferred rather than presented as observed.</div>
           </div>
         </div>
       </div>
@@ -2311,7 +2312,7 @@ function editorProblems() {
   if (ed.if && ed.if.trim() && ed.provider === 'codex') out.push({ level: 'error', field: 'if',
     text: 'Codex has no if field. It would be stored and ignored.' });
   if (ed.async) out.push({ level: 'warn', field: 'async',
-    text: 'async detaches the process. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timed from receipt and stamped inferred rather than debug_log. The record has no duration field, so no timing for the run reaches this editor or the fire log. Matcher counts are a separate debug-log artifact, written only at CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose. Its exit status is not acted on; asyncRewake is the field that wakes Claude on exit code 2. Claude still delivers the hook response\'s additionalContext and systemMessage on the next turn, and its completion notice is suppressed unless you run --verbose or press Ctrl+O. Claude also stops enforcing timeout once an async command hook is running, though it keeps enforcing it on an asyncRewake hook.' });
+    text: 'async detaches the process. Claude Code does emit a completion record when the process exits — hook_response, with exit_code and outcome — and that record only reaches a host through the Agent SDK stream (includeHookEvents, default off) or --output-format stream-json --verbose with --include-hook-events, which is how Multica launches claude, so the outcome does reach the fire log. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timestamped on receipt and stamped inferred rather than debug_log. Matcher counts are a separate debug-log artifact, written only at CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose. Its exit status is not acted on; asyncRewake is the field that wakes Claude on exit code 2. Claude still delivers the hook response\'s additionalContext and systemMessage on the next turn, and its completion notice is suppressed unless you run --verbose or press Ctrl+O. Claude also stops enforcing timeout once an async command hook is running, though it keeps enforcing it on an asyncRewake hook.' });
   if (ed.provider === 'codex') out.push({ level: 'warn', field: 'trust',
     text: 'Codex records trust against each hook\u2019s own hash, so saving a new or edited entry leaves that entry needing review in /hooks before it can run. Untouched entries in the same file keep their trust — the hash is per hook, not per file.' });
   return out;
@@ -2365,6 +2366,10 @@ function editorDialog() {
     </div>
 
     <div class="dialog-body">
+      <div class="notice info t-caption">
+        ${ic('info', 14, 'ico')}
+        <div>The shipped <code class="cmd">protocol.HookFire</code> record has no duration on any row, so no timing for a run reaches this editor or the fire log.</div>
+      </div>
       <!-- Event: searchable combobox, not a 33-item dropdown. -->
       <div class="field">
         <label for="edEvent">Event</label>
