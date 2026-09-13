@@ -642,6 +642,8 @@ const LAYERS = {
 };
 
 /* ---- Hook fixtures ---------------------------------------------------
+   `desc` — maintainer-facing fixture documentation only. It does not
+   render; retain it as rationale for future implementers.
    `owner` — who wrote the entry. Multica may only park/unpark what it
    wrote; foreign entries are shown but not touched (LOCO-79 pain #3:
    managers clobbering unrelated settings).
@@ -682,7 +684,7 @@ const HOOKS = {
       desc: 'Formats whatever the turn touched. async, so its exit status is not acted on.' },
     { id: 'c6', event: 'PostToolUse', matcher: 'Edit.*', scope: 'user', type: 'command',
       command: '~/.claude/hooks/no-mock-code.py', timeout: 15, async: false, shell: 'bash',
-      owner: 'user', parked: false, overmatch: true,
+      owner: 'user', parked: false,
       desc: 'Matcher is an unanchored regex — also fires on NotebookEdit and MultiEdit.' },
     { id: 'c6b', event: 'PostToolUse', matcher: 'Write|Edit', scope: 'plugin', type: 'command',
       command: '~/.claude/hooks/format-changed.sh', timeout: 30, async: true, shell: 'bash',
@@ -787,7 +789,7 @@ const HOOKS = {
 
     { id: 'x6', event: 'UserPromptSubmit', matcher: 'Bash', scope: 'user-json', type: 'prompt',
       prompt: 'Rewrite the user prompt to include the current sprint goal.', timeout: 30,
-      trust: 'trusted', owner: 'user', parked: false, ineffective: true, matcherIgnored: true,
+      trust: 'trusted', owner: 'user', parked: false, ineffective: true,
       desc: 'Two failures in one entry: type: prompt is parsed as a valid handler type and never dispatched, and a matcher on UserPromptSubmit is parsed and discarded.' },
 
     { id: 'x7', event: 'Stop', matcher: '', scope: 'user-json', type: 'command',
@@ -1951,7 +1953,7 @@ function screenLog() {
         <div class="card-body tight">
           <div class="stack t-caption">
             <div><span class="badge b-ok">${ic('check', 11)}success</span> <span class="muted">exit 0.</span></div>
-            <div><span class="badge b-warn">${ic('ban', 11)}blocked</span> <span class="muted">exit 2 on a blockable event — the tool call was rejected.</span></div>
+            <div><span class="badge b-warn">${ic('ban', 11)}blocked</span> <span class="muted">exit 2 on a blockable event — that event's action was rejected, such as compaction for <code class="cmd">PreCompact</code>.</span></div>
             <div><span class="badge b-bad">${ic('circleAlert', 11)}failed</span> <span class="muted">non-zero but not 2, so it did not block and the action proceeded. Whether Claude saw it is per-event: <code class="cmd">PostToolUse</code> and <code class="cmd">PostToolUseFailure</code> show an exit-2 stderr to Claude, while <code class="cmd">SessionEnd</code> shows its stderr to the user, as does <code class="cmd">PreCompact</code> on a manual <code class="cmd">/compact</code> — the auto-triggered case is undocumented. The transcript got a one-line hook-error notice; this row is the only record.</span></div>
             <div><span class="badge b-bad">${ic('clock', 11)}timed out</span> <span class="muted">killed at its timeout.</span></div>
             <div><span class="badge">${ic('zap', 11)}async · no duration</span> <span class="muted">detached, so the timing column stays a dash. Claude only: Claude Code does emit a completion record when the process exits — <code class="cmd">hook_response</code>, with <code class="cmd">exit_code</code> and <code class="cmd">outcome</code> — and that record only reaches a host through the Agent SDK stream (<code class="cmd">includeHookEvents</code>, default off) or <code class="cmd">--output-format stream-json --verbose</code> with <code class="cmd">--include-hook-events</code>, which is how Multica launches <code class="cmd">claude</code>, so the outcome does reach the Claude feed. The host debug log is what carries no such record, so a fire whose debug line cannot be matched 1:1 to a response is timed from receipt and stamped <code class="cmd">inferred</code> rather than <code class="cmd">debug_log</code>. The record has no duration field either, which is the gap that keeps the timing column a dash. Codex writes no per-hook log at all, so its async rows are inferred. The hook's additionalContext and systemMessage still reach Claude on the next turn, and completion notices are suppressed unless you run <code class="cmd">--verbose</code> or press Ctrl+O.</span></div>
