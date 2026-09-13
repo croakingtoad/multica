@@ -1354,8 +1354,17 @@ describe("LifecycleHooksTab — what actually runs", () => {
 
     expect(text).toMatch(/They are two different reads/);
     // Both stamps are named in the warning, including the one that does not
-    // place: it is the evidence a reader would report.
-    expect(text).toMatch(/not-a-date/);
+    // place: it is the evidence a reader would report. Scoped to the warning's
+    // own sentence rather than the container, because the container cannot say
+    // which surface printed the stamp. Route `tabObservedAt` through
+    // `view.datedAt` (lifecycle-hooks-tab.tsx:290) and
+    // `rows: tabObservedAt ?? ""` renders "…while the entries above come
+    // from ." — the warning stays up but stops naming the stamp that is its
+    // entire evidence, while a container-wide /not-a-date/ still passes on the
+    // banner's own `Observed at not-a-date` elsewhere on the page.
+    expect(
+      screen.getByText(/while the entries above come from not-a-date/),
+    ).toBeInTheDocument();
     expect(text).toMatch(/Observed at 2026-09-11T09:00:00Z/);
     // The answer's own date places, so its age still renders.
     expect(text).not.toMatch(/NaN/);
@@ -1494,7 +1503,11 @@ describe("LifecycleHooksTab — an observation the host dated unreadably", () =>
     expect(
       screen.getAllByText(/its age is unknown, so treat it as stale/).length,
     ).toBe(2);
-    expect(text).toMatch(/Observed at not-a-date/);
+    // Scoped to the element that prints the raw stamp — the banner, the only
+    // surface a live read has for it. A container-wide match says the stamp is
+    // somewhere on the page, not that the banner is where it came from, nor
+    // that exactly one surface printed it.
+    expect(screen.getByText("Observed at not-a-date")).toBeInTheDocument();
     // And the read's own content is still on screen: the rows, the sources and
     // the summary. This is the half option 1 would have taken away.
     expect(screen.getByText("guard.sh")).toBeInTheDocument();
@@ -1582,8 +1595,11 @@ describe("LifecycleHooksTab — an observation the host dated unreadably", () =>
     expect(
       screen.getByText("Last read at a time Multica cannot place"),
     ).toBeInTheDocument();
-    // Still a statement about a moment, and still about named files.
-    expect(text).toMatch(/Observed at not-a-date/);
+    // Still a statement about a moment, and still about named files. The raw
+    // stamp is scoped to the banner that prints it: the empty card makes its
+    // own dated claim in the line above, and a container-wide match would let
+    // either stand in for the other.
+    expect(screen.getByText("Observed at not-a-date")).toBeInTheDocument();
     expect(text).toMatch(/\.claude\/settings\.json/);
   });
 
@@ -1603,5 +1619,85 @@ describe("LifecycleHooksTab — an observation the host dated unreadably", () =>
     expect(text).not.toMatch(/NaN/);
     expect(text).toMatch(/Read \d+[dhm] ago/);
     expect(text).not.toMatch(/its age is unknown/);
+  });
+});
+
+// LOCO-650. The dated direction of the same renderings. `datedAt` picks one of
+// two captions at each surface above, and the undated arm was pinned at all
+// six while four of the dated arms were pinned nowhere: forcing
+// `datedAt === null` to a constant `true` at hook-offline-card.tsx:71 and
+// :128, hook-empty-card.tsx:105 and hook-observation-banner.tsx:124 each left
+// the suite green. A screen that withholds an age it has is as wrong as one
+// that invents an age it does not, so those four get what the control above
+// already gives the live banner.
+describe("LifecycleHooksTab — an observation the host dated readably", () => {
+  // Fixed rather than relative: `timeAgo` answers "just now" under a minute,
+  // and a caption with no age in it has nothing for these to assert on.
+  const PLACEABLE = "2026-09-12T09:00:00Z";
+
+  function mountOfflineWithSnapshot() {
+    hookQuery.mockReturnValue({
+      data: observation({
+        cached: true,
+        offline: true,
+        observed_at: PLACEABLE,
+      }),
+      error: null,
+      isFetching: false,
+    });
+    mount("claude", { status: "offline" });
+  }
+
+  it("ages the offline card's stored snapshot and the rail beside it", () => {
+    mountOfflineWithSnapshot();
+
+    // The card's own sentence, while the snapshot is still behind the reveal.
+    expect(
+      screen.getByText(/Multica has a stored observation from \d+[dhm] ago/),
+    ).toBeInTheDocument();
+    // And the rail, which states the age a second time so the reading survives
+    // a scroll past the card.
+    expect(screen.getByText(/Stored from \d+[dhm] ago/)).toBeInTheDocument();
+    // Neither reaches for the undated caption when there is an age to state.
+    expect(
+      screen.queryByText(/the host's timestamp cannot be read as a date/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Stored at a time Multica cannot place/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ages the revealed last-known banner", () => {
+    mountOfflineWithSnapshot();
+    fireEvent.click(screen.getByRole("button", { name: /last known hooks/i }));
+
+    expect(
+      screen.getByText(/Last known state, read \d+[dhm] ago/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Last known state, read at a time Multica cannot place",
+      ),
+    ).not.toBeInTheDocument();
+    // Still last known rather than current — which is what the age is for.
+    expect(screen.getByText(/not as they are now/)).toBeInTheDocument();
+  });
+
+  it("ages the empty card's last-read line", () => {
+    hookQuery.mockReturnValue({
+      data: observation({
+        observed_at: PLACEABLE,
+        resolved: { provider: "claude", event_value_roles: {}, entries: [] },
+      }),
+      error: null,
+      isFetching: false,
+    });
+
+    mount();
+
+    expect(screen.getByText(/Last read \d+[dhm] ago/)).toBeInTheDocument();
+    expect(
+      screen.queryByText("Last read at a time Multica cannot place"),
+    ).not.toBeInTheDocument();
   });
 });
