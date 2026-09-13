@@ -31,11 +31,15 @@ export function HookEmptyCard({
   runtimeName,
   summary,
   observedAt,
+  datedAt,
   timeAgo,
 }: {
   runtimeName: string;
   summary: HookEmptySummary;
+  /** The observation's stamp as the host sent it, or null when it sent none. */
   observedAt: string | null;
+  /** The same stamp when it places as a date; null leaves the line age-less. */
+  datedAt: string | null;
   timeAgo: (value: string) => string;
 }) {
   const { t } = useT("runtimes");
@@ -98,9 +102,11 @@ export function HookEmptyCard({
 
       {observedAt ? (
         <p className="text-caption text-muted-foreground">
-          {t(($) => $.hooks.events.empty_last_read, {
-            when: timeAgo(observedAt),
-          })}
+          {datedAt === null
+            ? t(($) => $.hooks.events.empty_last_read_undated)
+            : t(($) => $.hooks.events.empty_last_read, {
+                when: timeAgo(datedAt),
+              })}
         </p>
       ) : null}
     </Empty>

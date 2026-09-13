@@ -174,6 +174,11 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
       asked?.value ?? "",
     ),
   );
+  // The raw stamp, deliberately, not `view.datedAt`. `hookAnswerView` compares
+  // it with the answer's own observation to raise the mismatch warning, and
+  // that comparison is between two strings the server sent — narrowing it to
+  // the placeable one would make an unreadably dated tab read as no
+  // observation at all and silently retire the warning.
   const answerView = useMemo(
     () =>
       hookAnswerView(
@@ -244,6 +249,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
             runtimeName={runtime.name}
             lastSeenAt={runtime.last_seen_at}
             observedAt={view.observedAt}
+            datedAt={view.datedAt}
             timeAgo={timeAgo}
             onReread={reread}
             onReveal={
@@ -280,6 +286,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
                     asked={asked}
                     view={answerView}
                     timeAgo={timeAgo}
+                    /* Raw, for the same reason as `answerView` above. */
                     tabObservedAt={view.observedAt}
                     notCheckedSources={totals.notCheckedSources}
                     onSelectEntry={(entry, member) => setSelected({ entry, member })}
@@ -351,6 +358,7 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
                       runtimeName={runtime.name}
                       summary={emptySummary}
                       observedAt={view.observedAt}
+                      datedAt={view.datedAt}
                       timeAgo={timeAgo}
                     />
                   )
@@ -425,7 +433,11 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
         {/* Dated in the rail as well as the banner, so the last-known reading
             survives scrolling past the top of the page. */}
         {lastKnown && view.observedAt ? (
-          <HookLastKnownRail observedAt={view.observedAt} timeAgo={timeAgo} />
+          <HookLastKnownRail
+            observedAt={view.observedAt}
+            datedAt={view.datedAt}
+            timeAgo={timeAgo}
+          />
         ) : null}
         {showsEntries ? <HookSummaryCard totals={totals} /> : null}
         {/* Only for a live read: a cached snapshot already reads as last
@@ -433,9 +445,14 @@ export function LifecycleHooksTab({ runtime }: { runtime: AgentRuntime }) {
         {view.kind === "live" && view.stale ? (
           <p className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/5 p-3 text-caption text-muted-foreground">
             <RefreshCw aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
-            {t(($) => $.hooks.observation.live_stale, {
-              when: view.observedAt ? timeAgo(view.observedAt) : "",
-            })}
+            {/* Aged from `datedAt`, never from `observedAt`: the raw stamp is
+                what the host said, and an unplaceable one has no age to
+                state here either. Same caption pair as the banner. */}
+            {view.datedAt === null
+              ? t(($) => $.hooks.observation.live_undated)
+              : t(($) => $.hooks.observation.live_stale, {
+                  when: timeAgo(view.datedAt),
+                })}
           </p>
         ) : null}
       </div>

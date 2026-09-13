@@ -349,8 +349,23 @@ export type HookObservationKind =
 
 export interface HookObservationView {
   kind: HookObservationKind;
-  /** Never null for `live` or `last_known`: those two are dated by definition. */
+  /**
+   * The stamp the host reported, verbatim, or null when it reported none.
+   * Never null for `live` or `last_known`: those two carry an observation by
+   * definition. It answers "is there an observation?" and it is the string the
+   * absolute `observed_at` caption prints — it is not a date, because a host
+   * can report one Multica cannot place. Nothing may subtract it.
+   */
   observedAt: string | null;
+  /**
+   * The same observation's date, and only when it places — `datedObservation()`
+   * of `observedAt`. The one field a relative age may be computed from, which
+   * is the split `hookAnswerView` already keeps between its raw stamp and its
+   * dated one. Null with a non-null `observedAt` means the host dated the
+   * observation in a way Multica cannot read: the rows are still true, their
+   * age is not knowable, and the caption says so instead of subtracting `NaN`.
+   */
+  datedAt: string | null;
   stale: boolean;
   /**
    * Whether the runtime was offline when the server answered. Server-reported,
@@ -383,6 +398,7 @@ export function hookObservationView(
     return {
       kind: "discovering",
       observedAt: null,
+      datedAt: null,
       stale: false,
       offline: false,
       error: null,
@@ -393,6 +409,7 @@ export function hookObservationView(
     return {
       kind: "failed",
       observedAt: null,
+      datedAt: null,
       stale: false,
       offline: false,
       error: queryError instanceof Error ? queryError.message : null,
@@ -403,6 +420,7 @@ export function hookObservationView(
     return {
       kind: "no_observation",
       observedAt: null,
+      datedAt: null,
       stale: false,
       offline: false,
       error: null,
@@ -422,6 +440,7 @@ export function hookObservationView(
     return {
       kind: offline && !observedAt ? "offline_no_snapshot" : "failed",
       observedAt,
+      datedAt: datedObservation(observedAt),
       stale: false,
       offline,
       error: data.error ?? null,
@@ -432,18 +451,26 @@ export function hookObservationView(
     return {
       kind: offline ? "offline_no_snapshot" : "no_observation",
       observedAt: null,
+      datedAt: null,
       stale: false,
       offline,
       error: data.error ?? null,
       resolutionError,
     };
   }
-  const parsed = Date.parse(observedAt);
+  // The date rule runs once, here, and both consequences read off its result:
+  // `datedAt` is what may be subtracted, and a stamp that does not place is
+  // stale for the same reason a far-past one is — nothing whose age Multica
+  // cannot establish may present as current. The rows themselves are not in
+  // doubt, so the view keeps them and the raw stamp beside them.
+  const datedAt = datedObservation(observedAt);
   const stale =
-    Number.isNaN(parsed) || now - parsed > HOOK_OBSERVATION_STALE_AFTER_MS;
+    datedAt === null ||
+    now - Date.parse(datedAt) > HOOK_OBSERVATION_STALE_AFTER_MS;
   return {
     kind: data.cached ? "last_known" : "live",
     observedAt,
+    datedAt,
     // A cached observation is always last-known, whatever its age, so the
     // staleness flag only has to add the age warning a live read can also need.
     stale,
@@ -457,9 +484,17 @@ export function hookObservationView(
  * The date rule, in one place. A timestamp only dates an observation if it
  * parses: `Date.parse("not-a-date")` is `NaN`, and everything downstream that
  * subtracts it — `packages/views/i18n/use-time-ago.ts` among them — renders
- * that as `NaN days ago` beside the string itself. An unparsable stamp is not
- * a weaker date than none; it is a date Multica cannot place, and treating it
- * as one is the same unearned claim as counting an unresolved source as zero.
+ * that beside the string itself as `NaNd ago` in English, `NaN日前` in
+ * Japanese, `NaN일 전` in Korean and `NaN 天前` in Chinese. `NaN` is the only
+ * token common to the four, so that is what a guard asserts on. An unparsable
+ * stamp is not a weaker date than none; it is a date Multica cannot place, and
+ * treating it as one is the same unearned claim as counting an unresolved
+ * source as zero.
+ *
+ * Two callers, two consequences, and both keep the raw stamp beside the result
+ * rather than substituting it: `hookAnswerView` refuses the answer, because a
+ * count nobody can date is not an answer, while `hookObservationView` keeps
+ * the observation and drops only its age.
  */
 function datedObservation(value: string | null | undefined): string | null {
   if (!value) return null;

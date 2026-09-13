@@ -573,6 +573,74 @@ describe("hookObservationView", () => {
     expect(view.stale).toBe(true);
   });
 
+  // LOCO-521. An unplaceable stamp is two facts, not one: there *is* an
+  // observation, and its age cannot be established. The view carries both, so
+  // no consumer has to re-derive the second from the first — the split
+  // `hookAnswerView` already keeps between its raw stamp and its dated one.
+  it("keeps the rows and the host's own stamp when that stamp does not place", () => {
+    const view = hookObservationView(
+      read({
+        observed_at: "not-a-date",
+        resolved: { provider: "claude", entries: [entry()] },
+      }),
+      false,
+      null,
+      NOW,
+    );
+
+    expect(view.kind).toBe("live");
+    // Verbatim: it is what the absolute caption prints and what the answer
+    // panel compares against, and it is the only evidence a reader can report.
+    expect(view.observedAt).toBe("not-a-date");
+    // And nothing may age it.
+    expect(view.datedAt).toBeNull();
+    expect(view.stale).toBe(true);
+    // The read completed and resolved, so its rows are not in doubt.
+    expect(hookObservationShowsEntries(view)).toBe(true);
+  });
+
+  it("keeps a cached snapshot revealable when its stamp does not place", () => {
+    const view = hookObservationView(
+      read({ cached: true, offline: true, observed_at: "not-a-date" }),
+      false,
+      null,
+      NOW,
+    );
+
+    // `last_known`, not `no_observation`: the reveal affordance and the whole
+    // stored projection hang off `observedAt`, and a malformed timestamp is
+    // not grounds for claiming this host was never read.
+    expect(view.kind).toBe("last_known");
+    expect(view.observedAt).toBe("not-a-date");
+    expect(view.datedAt).toBeNull();
+    expect(hookObservationShowsEntries(view)).toBe(true);
+  });
+
+  it("sets both fields to the same stamp when it does place", () => {
+    const view = hookObservationView(
+      read({ observed_at: "2026-09-12T11:59:30Z" }),
+      false,
+      null,
+      NOW,
+    );
+
+    expect(view.observedAt).toBe("2026-09-12T11:59:30Z");
+    expect(view.datedAt).toBe("2026-09-12T11:59:30Z");
+    expect(view.stale).toBe(false);
+  });
+
+  // The limit of a parse guard, pinned rather than left implicit.
+  // `Date.parse("0")` is 946702800000 — V8's legacy parser reads it as the
+  // year 2000 — so `"0"` is a plausible-but-wrong date, not an unplaceable
+  // one, and it still ages. Rejecting it is a format question for the API
+  // boundary (LOCO-638), not something this rule can decide.
+  it("places a stamp Date.parse accepts, however implausible", () => {
+    const view = hookObservationView(read({ observed_at: "0" }), false, null, NOW);
+
+    expect(view.datedAt).toBe("0");
+    expect(view.stale).toBe(true);
+  });
+
   it("surfaces a query failure as a failure, not an empty runtime", () => {
     const view = hookObservationView(
       undefined,

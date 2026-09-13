@@ -458,7 +458,9 @@
     "observation": {
       "live": "{{when}}에 읽음",
       "live_stale": "{{when}}에 읽음 — 실시간 읽기치고는 오래되었으므로 만료된 값으로 보세요.",
+      "live_undated": "읽기는 완료했지만 호스트의 타임스탬프를 날짜로 읽을 수 없습니다 — 경과 시간을 알 수 없으므로 만료된 값으로 보세요.",
       "last_known_title": "마지막으로 확인된 상태, {{when}}에 읽음",
+      "last_known_title_undated": "마지막으로 확인된 상태, Multica가 특정할 수 없는 시각에 읽음",
       "last_known_body": "이 런타임은 오프라인입니다. 아래는 그 읽기 시점의 소스이며 현재 상태가 아닙니다.",
       "observed_at": "{{stamp}}에 관측",
       "no_observation_title": "이 호스트에서 읽은 내용이 아직 없습니다",
@@ -487,11 +489,13 @@
       "last_seen": "데몬이 마지막으로 확인된 시점은 {{when}}입니다.",
       "last_seen_never": "데몬이 한 번도 확인된 적이 없습니다.",
       "with_snapshot": "Multica에는 {{when}}에 저장된 관측이 있습니다 — 그 시점의 상태이며 현재 상태가 아닙니다.",
+      "with_snapshot_undated": "Multica에는 저장된 관측이 있지만 호스트의 타임스탬프를 날짜로 읽을 수 없습니다 — 그 시점의 상태이며 현재 상태가 아닙니다.",
       "without_snapshot": "이 호스트에서는 한 번도 읽은 적이 없으므로 마지막으로 확인된 상태도 없습니다.",
       "reveal": "마지막으로 확인된 hooks 보기",
       "read_needs_host": "읽기는 호스트에서 실행되므로 데몬이 다시 확인될 때까지 수행할 수 없습니다.",
       "rail_title": "마지막으로 확인된 상태",
-      "rail_body": "{{when}}에 저장된 것입니다. 읽기 전용으로 표시하며, 현재 상태가 아니라 마지막으로 확인된 상태로 명시합니다."
+      "rail_body": "{{when}}에 저장된 것입니다. 읽기 전용으로 표시하며, 현재 상태가 아니라 마지막으로 확인된 상태로 명시합니다.",
+      "rail_body_undated": "Multica가 특정할 수 없는 시각에 저장된 것입니다. 읽기 전용으로 표시하며, 현재 상태가 아니라 마지막으로 확인된 상태로 명시합니다."
     },
     "behaviour": {
       "claude_title": "hooks는 누적됩니다.",
@@ -604,6 +608,7 @@
       "empty_not_checked": "확인하지 않음:",
       "empty_not_checked_note": "아무도 이들을 보지 않았으므로 위 설명은 이들에 대해 아무것도 말하지 않습니다.",
       "empty_last_read": "마지막 읽기 {{when}}",
+      "empty_last_read_undated": "마지막 읽기는 Multica가 특정할 수 없는 시각",
       "unresolved_title": "해석할 수 없는 소스의 항목은 나열할 수 없습니다",
       "unresolved_body": "읽기는 소스에 도달했지만 해석할 수 없었기 때문에, 여기의 어떤 내용도 소스가 무엇을 담고 있는지에 대한 진술이 아닙니다. 이유는 위 배너에 있습니다.",
       "filter_label": "hooks 필터",

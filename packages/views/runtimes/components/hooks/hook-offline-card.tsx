@@ -26,14 +26,21 @@ export function HookOfflineCard({
   runtimeName,
   lastSeenAt,
   observedAt,
+  datedAt,
   timeAgo,
   onReread,
   onReveal,
 }: {
   runtimeName: string;
   lastSeenAt: string | null;
-  /** The stored observation's date, or null when nothing was ever stored. */
+  /** The stored observation's stamp as sent, or null when nothing was stored. */
   observedAt: string | null;
+  /**
+   * The same stamp when it places as a date, null when it does not. Only this
+   * one may be aged; `observedAt` is what says a snapshot exists at all, and
+   * the two differ when the host dates its observation unreadably.
+   */
+  datedAt: string | null;
   timeAgo: (value: string) => string;
   onReread: () => void;
   /** Omitted when there is no snapshot, which removes the reveal button. */
@@ -57,10 +64,15 @@ export function HookOfflineCard({
           {lastSeenAt
             ? t(($) => $.hooks.offline.last_seen, { when: timeAgo(lastSeenAt) })
             : t(($) => $.hooks.offline.last_seen_never)}{" "}
+          {/* A snapshot exists or it does not — that is `observedAt`. Whether
+              its age can be stated is `datedAt`, a separate question, and the
+              reveal button below turns on the first rather than the second. */}
           {observedAt
-            ? t(($) => $.hooks.offline.with_snapshot, {
-                when: timeAgo(observedAt),
-              })
+            ? datedAt === null
+              ? t(($) => $.hooks.offline.with_snapshot_undated)
+              : t(($) => $.hooks.offline.with_snapshot, {
+                  when: timeAgo(datedAt),
+                })
             : t(($) => $.hooks.offline.without_snapshot)}
         </EmptyDescription>
       </EmptyHeader>
@@ -94,9 +106,12 @@ export function HookOfflineCard({
  */
 export function HookLastKnownRail({
   observedAt,
+  datedAt,
   timeAgo,
 }: {
   observedAt: string;
+  /** Null when the host's stamp does not place; the rail then states no age. */
+  datedAt: string | null;
   timeAgo: (value: string) => string;
 }) {
   const { t } = useT("runtimes");
@@ -110,7 +125,9 @@ export function HookLastKnownRail({
       </div>
       <div className="space-y-1 px-4 py-3">
         <p className="text-caption text-muted-foreground">
-          {t(($) => $.hooks.offline.rail_body, { when: timeAgo(observedAt) })}
+          {datedAt === null
+            ? t(($) => $.hooks.offline.rail_body_undated)
+            : t(($) => $.hooks.offline.rail_body, { when: timeAgo(datedAt) })}
         </p>
         <p className="font-mono text-caption text-muted-foreground">
           {t(($) => $.hooks.observation.observed_at, { stamp: observedAt })}

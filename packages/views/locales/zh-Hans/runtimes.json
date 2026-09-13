@@ -458,7 +458,9 @@
     "observation": {
       "live": "读取于 {{when}}",
       "live_stale": "读取于 {{when}} — 比实时读取应有的时间更早，请视为已过期。",
+      "live_undated": "已完成读取，但无法将主机的时间戳读作日期 — 无从得知已过多久，请视为已过期。",
       "last_known_title": "最后已知状态，读取于 {{when}}",
+      "last_known_title_undated": "最后已知状态，读取于 Multica 无法确定的时刻",
       "last_known_body": "此运行时已离线。以下是那次读取时的来源状态，不是当前状态。",
       "no_observation_title": "尚未从此主机读取过任何内容",
       "no_observation_body": "此运行时没有快照 — 不是空快照。读取完成前无法显示下面的内容。",
@@ -487,11 +489,13 @@
       "last_seen": "守护进程最后一次签入于 {{when}}。",
       "last_seen_never": "守护进程从未签入过。",
       "with_snapshot": "Multica 保存了一份 {{when}} 的观测 — 那是当时的状态，不是现在的状态。",
+      "with_snapshot_undated": "Multica 保存了一份观测，但无法将主机的时间戳读作日期 — 那是当时的状态，不是现在的状态。",
       "without_snapshot": "从未从此主机读取过任何内容，因此也没有可回退的最后已知状态。",
       "reveal": "查看最后已知的 hooks",
       "read_needs_host": "读取在主机上执行，因此必须等到守护进程再次签入才能进行。",
       "rail_title": "最后已知状态",
-      "rail_body": "保存于 {{when}}。以只读方式显示，并标注为最后已知状态，而不是当作当前状态提供。"
+      "rail_body": "保存于 {{when}}。以只读方式显示，并标注为最后已知状态，而不是当作当前状态提供。",
+      "rail_body_undated": "保存于 Multica 无法确定的时刻。以只读方式显示，并标注为最后已知状态，而不是当作当前状态提供。"
     },
     "behaviour": {
       "claude_title": "hooks 会累加。",
@@ -604,6 +608,7 @@
       "empty_not_checked": "未检查:",
       "empty_not_checked_note": "没有人查看过它们，因此上面的结论没有涵盖它们。",
       "empty_last_read": "最后读取于 {{when}}",
+      "empty_last_read_undated": "最后读取于 Multica 无法确定的时刻",
       "unresolved_title": "无法列出解析失败的来源中的条目",
       "unresolved_body": "读取已到达这些来源，但无法解读它们，因此这里的内容不构成对来源内容的任何判断。原因见上方的横幅。",
       "filter_label": "筛选 hooks",

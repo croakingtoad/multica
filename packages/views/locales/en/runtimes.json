@@ -474,7 +474,9 @@
     "observation": {
       "live": "Read {{when}}",
       "live_stale": "Read {{when}} — older than a live read should be, so treat it as stale.",
+      "live_undated": "Read, but the host's timestamp cannot be read as a date — its age is unknown, so treat it as stale.",
       "last_known_title": "Last known state, read {{when}}",
+      "last_known_title_undated": "Last known state, read at a time Multica cannot place",
       "last_known_body": "This runtime is offline. These are the sources as they were at that read, not as they are now.",
       "no_observation_title": "Nothing has been read from this host",
       "no_observation_body": "There is no snapshot for this runtime — not an empty one. Nothing below can be shown until a read completes.",
@@ -503,11 +505,13 @@
       "last_seen": "The daemon last checked in {{when}}.",
       "last_seen_never": "The daemon has never checked in.",
       "with_snapshot": "Multica has a stored observation from {{when}} — what was there then, not what is there now.",
+      "with_snapshot_undated": "Multica has a stored observation, but the host's timestamp cannot be read as a date — what was there then, not what is there now.",
       "without_snapshot": "Nothing has ever been read from this host, so there is no last known state to fall back to either.",
       "reveal": "View last known hooks",
       "read_needs_host": "A read runs on the host itself, so it cannot happen until the daemon checks in again.",
       "rail_title": "Last known state",
-      "rail_body": "Stored from {{when}}. Shown read-only, and labelled as last known rather than served as current."
+      "rail_body": "Stored from {{when}}. Shown read-only, and labelled as last known rather than served as current.",
+      "rail_body_undated": "Stored at a time Multica cannot place. Shown read-only, and labelled as last known rather than served as current."
     },
     "behaviour": {
       "claude_title": "Hooks accumulate.",
@@ -622,6 +626,7 @@
       "empty_not_checked": "Not checked:",
       "empty_not_checked_note": "Nobody looked at these, so the statement above says nothing about them.",
       "empty_last_read": "Last read {{when}}",
+      "empty_last_read_undated": "Last read at a time Multica cannot place",
       "unresolved_title": "Multica cannot list entries from sources it could not resolve",
       "unresolved_body": "The read reached the sources but could not interpret them, so nothing here is a statement about what they hold. The reason is in the banner above.",
       "filter_label": "Filter hooks",
