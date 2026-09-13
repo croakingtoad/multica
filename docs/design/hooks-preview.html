@@ -576,33 +576,45 @@ const CODEX_EVENTS = [
 ];
 const CODEX_ONLY = ['Interrupt'];
 
-/* Handler types. `effective:false` = the entry cannot run on that provider.
-   Two distinct cases, and the per-type note says which: the type is not in the
-   provider's handler set at all, or it is a real variant that the dispatcher
-   never reaches. Either way the hook is configured and never executes — the
-   failure class LOCO-79 says dominates the complaints, so the editor has to
-   refuse it rather than accept it.
+/* Handler types. `effectiveOn` is the event-qualified support matrix mirrored
+   from handlerTypeSupported and claudeAllHandlerTypeEvents in
+   server/internal/runtimehooks/runstate.go. An empty list means the entry
+   cannot run on that provider. Two distinct cases, and the per-type note says
+   which: the type is not in the provider's handler set at all, or it is a real
+   variant that the dispatcher never reaches. Either way the hook is configured
+   and never executes — the failure class LOCO-79 says dominates the complaints,
+   so the editor has to refuse it rather than accept it.
    Codex side sourced from openai/codex @ 53c542d944c7: handler enum at
    codex-rs/config/src/hook_config.rs:161 (command, mcp_tool, prompt, agent —
    no http), dispatch at codex-rs/hooks/src/engine/dispatcher.rs:190 (command
    and mcp_tool only). Whether Codex emits anything when it skips a parsed
    handler is undocumented and unmeasured — do not claim either way. */
+const CLAUDE_ALL_HANDLER_TYPE_EVENTS = [
+  'PermissionDenied','PermissionRequest','PostToolBatch','PostToolUse','PostToolUseFailure',
+  'PreToolUse','Stop','SubagentStop','TaskCompleted','TaskCreated','TeammateIdle',
+  'UserPromptExpansion','UserPromptSubmit',
+];
 const HANDLER_TYPES = {
   claude: [
-    { v: 'command',  label: 'command',  effective: true,  note: 'Runs a shell command or an exec-form binary.' },
-    { v: 'http',     label: 'http',     effective: true,  note: 'POSTs the hook payload to a URL.' },
-    { v: 'mcp_tool', label: 'mcp_tool', effective: true,  note: 'Invokes an MCP tool.' },
-    { v: 'prompt',   label: 'prompt',   effective: true,  note: 'Asks the model inline; 30 s default timeout.' },
-    { v: 'agent',    label: 'agent',    effective: true,  note: 'Dispatches a subagent; 60 s default timeout.' },
+    { v: 'command',  label: 'command',  effectiveOn: CLAUDE_EVENTS, note: 'Runs a shell command or an exec-form binary.' },
+    { v: 'http',     label: 'http',     effectiveOn: CLAUDE_EVENTS.filter((event) => event !== 'SessionStart' && event !== 'Setup'), note: 'POSTs the hook payload to a URL.' },
+    { v: 'mcp_tool', label: 'mcp_tool', effectiveOn: CLAUDE_EVENTS.filter((event) => event !== 'Setup'), note: 'Invokes an MCP tool.' },
+    { v: 'prompt',   label: 'prompt',   effectiveOn: CLAUDE_ALL_HANDLER_TYPE_EVENTS, note: 'Asks the model inline; 30 s default timeout.' },
+    { v: 'agent',    label: 'agent',    effectiveOn: CLAUDE_ALL_HANDLER_TYPE_EVENTS, note: 'Dispatches a subagent; 60 s default timeout.' },
   ],
   codex: [
-    { v: 'command',  label: 'command',  effective: true,  note: 'Runs a shell command. Supports commandWindows.' },
-    { v: 'mcp_tool', label: 'mcp_tool', effective: true,  note: 'Invokes an MCP tool.' },
-    { v: 'http',     label: 'http',     effective: false, note: 'Not part of the Codex handler set.' },
-    { v: 'prompt',   label: 'prompt',   effective: false, note: 'A real Codex handler type, but the dispatcher never runs it.' },
-    { v: 'agent',    label: 'agent',    effective: false, note: 'A real Codex handler type, but the dispatcher never runs it.' },
+    { v: 'command',  label: 'command',  effectiveOn: CODEX_EVENTS, note: 'Runs a shell command. Supports commandWindows.' },
+    { v: 'mcp_tool', label: 'mcp_tool', effectiveOn: CODEX_EVENTS, note: 'Invokes an MCP tool.' },
+    { v: 'http',     label: 'http',     effectiveOn: [], note: 'Not part of the Codex handler set.' },
+    { v: 'prompt',   label: 'prompt',   effectiveOn: [], note: 'A real Codex handler type, but the dispatcher never runs it.' },
+    { v: 'agent',    label: 'agent',    effectiveOn: [], note: 'A real Codex handler type, but the dispatcher never runs it.' },
   ],
 };
+
+function handlerTypeEffective(provider, event, type) {
+  const handler = HANDLER_TYPES[provider].find((candidate) => candidate.v === type);
+  return !!handler && handler.effectiveOn.includes(event);
+}
 
 /* ---- Scope layers ----------------------------------------------------
    NOT a precedence ladder. Hook entries MERGE across every layer on both
@@ -1072,6 +1084,9 @@ function resolve(runtime) {
    on either provider is ever displaced by another layer. */
 function runState(h, runtime) {
   const prov = runtime.provider;
+  /* FORWARD DESIGN — NOT SHIPPED. These kill-switch states are sketched so
+     Marty can react to them, not because they exist. Shipped RunStates() has no
+     kill-switch input and therefore never produces either state below. */
   if (h._killed === 'all') return { runs: false, label: 'Off · kill switch', cls: 'b-warn', icon: 'ban',
     why: prov === 'claude'
       ? 'disableAllHooks is on. Every non-managed hook stops, whatever layer it lives in.'
@@ -1084,10 +1099,12 @@ function runState(h, runtime) {
     why: 'Switched off per-hook in the Codex /hooks browser. This is a real Codex feature — the entry stays in the file and stops running.' };
   if (h.parked)      return { runs: false, label: 'Parked',       cls: '',       icon: 'archive',
     why: 'Configured but not registered. Multica moved the entry into a _disabledHooks sidecar, because Claude has no per-hook disable of its own.' };
-  if (h.ineffective) return { runs: false, label: 'Never runs',   cls: 'b-bad',  icon: 'ban',
-    why: h.type === 'http'
-      ? 'Codex has no http handler type at all, so this entry can never execute.'
-      : 'Codex parses type: ' + h.type + ' as a valid handler type and then never dispatches it. It has never executed.' };
+  if (h.ineffective || !handlerTypeEffective(prov, h.event, h.type)) return { runs: false, label: 'Never runs', cls: 'b-bad', icon: 'ban',
+    why: prov === 'claude'
+      ? 'Claude does not support ' + h.type + ' handlers on ' + h.event + ', so this entry can never execute.'
+      : h.type === 'http'
+        ? 'Codex has no http handler type at all, so this entry can never execute.'
+        : 'Codex parses type: ' + h.type + ' as a valid handler type and then never dispatches it. It has never executed.' };
   if (h.trust === 'stale') return { runs: false, label: 'Not trusted', cls: 'b-bad', icon: 'key',
     why: 'Edited since it was trusted. Codex skips it until the new hash is trusted on the host.' };
   if (h.trust === 'review') return { runs: false, label: 'Needs review', cls: 'b-bad', icon: 'key',
@@ -1247,7 +1264,7 @@ function behaviorStrip(prov) {
       <div>
         <div class="t-label"><strong class="semibold">Hooks accumulate.</strong>
         Every layer's entries merge and all of them run — nothing is ever displaced. Adding a hook
-        only ever adds work. 33 events, but handler support varies: all five types on 13 of them, <code class="cmd">command</code>/<code class="cmd">http</code>/<code class="cmd">mcp_tool</code> on 18, and <code class="cmd">command</code>/<code class="cmd">mcp_tool</code> only on SessionStart and Setup.</div>
+        only ever adds work. 33 events, but handler support varies: all five types on 13 of them, <code class="cmd">command</code>/<code class="cmd">http</code>/<code class="cmd">mcp_tool</code> on 18, <code class="cmd">command</code>/<code class="cmd">mcp_tool</code> only on SessionStart, and <code class="cmd">command</code> alone on Setup.</div>
         <div class="t-caption muted" style="margin-top:2px">Claude has <strong class="semibold">no per-hook disable</strong>, so the pile only grows. A byte-identical handler in two settings files is the single exception — it collapses and runs once.</div>
       </div>
       <span class="spacer"></span>
@@ -1297,7 +1314,7 @@ function screenHooks() {
     }
     const open = !state.collapsed[ev];
     const running = group.filter((h) => runState(h, r).runs).length;
-    const trouble = group.filter((h) => { const st = runState(h, r); return !st.runs && (h.ineffective || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review'); }).length;
+    const trouble = group.filter((h) => { const st = runState(h, r); return !st.runs && (!handlerTypeEffective(r.provider, h.event, h.type) || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review'); }).length;
 
     return `
     <div class="event-group">
@@ -1379,6 +1396,7 @@ function hookRow(h, r) {
   const st = runState(h, r);
   const lm = layerMeta(r.provider, h.scope);
   const types = HANDLER_TYPES[r.provider].find((t) => t.v === h.type);
+  const typeEffective = handlerTypeEffective(r.provider, h.event, h.type);
   const target = h.command || h.url || h.mcpTool || h.prompt || '—';
   const mi = interpretMatcher(h.matcher, r.provider, h.event);
   const cmdIssue = h.type === 'command' ? validateCommand(h.command) : null;
@@ -1393,9 +1411,9 @@ function hookRow(h, r) {
         : ''}
     </td>
     <td>
-      <span class="badge ${types && !types.effective ? 'b-bad' : ''}">${esc(h.type)}</span>
+      <span class="badge ${types && !typeEffective ? 'b-bad' : ''}">${esc(h.type)}</span>
       ${h.async ? `<div class="t-micro faint" style="margin-top:2px">async</div>` : ''}
-      ${types && !types.effective ? `<div class="t-micro" style="color:var(--destructive);margin-top:2px">never runs on Codex</div>` : ''}
+      ${types && !typeEffective ? `<div class="t-micro" style="color:var(--destructive);margin-top:2px">never runs on ${esc(providerLabel(r.provider))} for ${esc(h.event)}</div>` : ''}
     </td>
     <td>
       <div class="cmd">${esc(target)}</div>
@@ -1474,7 +1492,7 @@ function railCards(r, hooks) {
   const running = hooks.filter((h) => runState(h, r).runs).length;
   const parked = hooks.filter((h) => h.parked || h.disabledNative).length;
   const deduped = hooks.filter((h) => h._dupOf).length;
-  const broken = hooks.filter((h) => h.broken || h.ineffective || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review').length;
+  const broken = hooks.filter((h) => h.broken || !handlerTypeEffective(r.provider, h.event, h.type) || h.ifOnNonToolEvent || h.trust === 'stale' || h.trust === 'review').length;
   const busiest = hooks.reduce((a, h) => (h._fires > (a._fires || 0) ? h : a), {});
 
   return `
@@ -1669,9 +1687,10 @@ function accumulationTable(r, byEvent) {
   </div>`;
 }
 
-/* Kill switches — the only mechanism on either provider that resembles
-   precedence, and it is global rather than per-entry. Rendered as live
-   what-if toggles so the blast radius is visible instead of described.
+/* FORWARD DESIGN — NOT SHIPPED. These kill switches are sketched so Marty can
+   react to them, not because they exist. Shipped RunStates() has no kill-switch
+   input. They are rendered as live what-if toggles so the blast radius of this
+   proposed global, rather than per-entry, mechanism is visible.
 
    The Claude-side caption names allowedHttpHookUrls and httpHookAllowedEnvVars.
    Both are documented, and so is the merge-across-levels and every-source
@@ -1709,10 +1728,12 @@ function killSwitchCard(r, hooks) {
     <div class="card-head">
       <span class="t-label medium">${ic('ban', 14)} Kill switches</span>
       <span class="spacer"></span>
-      <span class="t-caption muted">Global, never per-entry. This is the closest thing to precedence that actually exists.</span>
+      <span class="badge b-warn">Forward design · not shipped</span>
     </div>
     <div class="card-body">
       <div class="stack" style="gap:12px">
+        <div class="t-caption muted">These controls are sketched so Marty can react to them, not because they exist. Shipped <code class="cmd">RunStates()</code> has no kill-switch input.</div>
+        <hr class="sep" />
         <div class="inline" style="align-items:flex-start;gap:10px">
           <button class="switch ${state.killAll ? 'on' : ''}" role="switch" aria-checked="${state.killAll}" data-act="toggleKillAll" aria-label="Preview ${esc(names.all)}"><span></span></button>
           <div style="min-width:0">
@@ -1847,7 +1868,7 @@ function precedenceRail(r) {
         <hr class="sep" />
         <div><strong class="semibold">Events</strong><div class="muted">Claude 33 · Codex 12. <code class="cmd">Interrupt</code> is Codex-only; <code class="cmd">FileChanged</code>, <code class="cmd">TeammateIdle</code>, <code class="cmd">ConfigChange</code> and 19 more are Claude-only.</div></div>
         <hr class="sep" />
-        <div><strong class="semibold">Handler types</strong><div class="muted">Claude: command, http, mcp_tool, prompt, agent — all effective. Codex: command and mcp_tool only; <code class="cmd">prompt</code> and <code class="cmd">agent</code> are parsed and then skipped, and there is no <code class="cmd">http</code>.</div></div>
+        <div><strong class="semibold">Handler types</strong><div class="muted">Claude: all five on 13 events; <code class="cmd">command</code>/<code class="cmd">http</code>/<code class="cmd">mcp_tool</code> on 18; <code class="cmd">command</code>/<code class="cmd">mcp_tool</code> on SessionStart; <code class="cmd">command</code> alone on Setup. Codex: command and mcp_tool only; <code class="cmd">prompt</code> and <code class="cmd">agent</code> are parsed and then skipped, and there is no <code class="cmd">http</code>.</div></div>
         <hr class="sep" />
         <div><span class="badge b-ok" style="margin-bottom:3px">${ic('check', 10)}same outcome</span>
         <strong class="semibold">Stop + <code class="cmd">decision:"block"</code></strong><div class="muted">On <em>both</em> providers <code class="cmd">block</code> means <strong>keep going</strong> — neither rejects the turn. This row used to call them opposites; that was wrong. The real difference is how your <code class="cmd">reason</code> is delivered: Claude receives it as the explanation for why it should continue, under <code class="cmd">stop_hook_active</code> and an 8-consecutive-continuation cap; Codex turns it into a new continuation prompt that acts as a new user prompt. Claude alone offers a second door on <code class="cmd">Stop</code>/<code class="cmd">SubagentStop</code> — <code class="cmd">hookSpecificOutput.additionalContext</code> continues the turn under the same two loop protections but lands as <em>Stop hook feedback</em> rather than a hook error. Codex has no <code class="cmd">additionalContext</code> on these events at all. On both, a <code class="cmd">continue:false</code> from any matching Stop hook is what actually ends the turn, and on Codex it takes precedence over every other continuation decision.</div></div>
@@ -2282,10 +2303,12 @@ function editorProblems() {
   const types = HANDLER_TYPES[ed.provider];
   const t = types.find((x) => x.v === ed.type);
   if (!ed.event) out.push({ level: 'error', field: 'event', text: 'Pick an event.' });
-  if (t && !t.effective) out.push({ level: 'error', field: 'type',
-    text: (ed.type === 'http'
-      ? 'Codex has no http handler type at all.'
-      : 'Codex parses type: ' + ed.type + ' as a valid handler type and then never dispatches it.')
+  if (ed.event && t && !handlerTypeEffective(ed.provider, ed.event, ed.type)) out.push({ level: 'error', field: 'type',
+    text: (ed.provider === 'claude'
+      ? 'Claude does not support ' + ed.type + ' handlers on ' + ed.event + '.'
+      : ed.type === 'http'
+        ? 'Codex has no http handler type at all.'
+        : 'Codex parses type: ' + ed.type + ' as a valid handler type and then never dispatches it.')
       + ' Saving this would store a hook that can never run — the exact failure this screen exists to prevent.' });
   if (ed.type === 'command') {
     const c = validateCommand(ed.command);
@@ -2439,13 +2462,16 @@ function editorDialog() {
         ${perField('if').map((p) => `<div class="${p.level === 'error' ? 'err' : 'warn'}">${ic('alert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
       </div>` : ''}
 
-      <!-- Handler type: gated per provider. -->
+      <!-- Handler type: gated per provider and event. -->
       <div class="field">
         <label for="edType">Handler type</label>
         <div class="select-wrap">
           <select class="select" id="edType" data-f="type">
-            ${types.map((t) => `<option value="${t.v}" ${t.v === ed.type ? 'selected' : ''} ${t.effective ? '' : 'disabled'}>
-              ${esc(t.label)}${t.effective ? '' : ' — never runs on Codex'}</option>`).join('')}
+            ${types.map((t) => {
+              const effective = !ed.event || handlerTypeEffective(ed.provider, ed.event, t.v);
+              return `<option value="${t.v}" ${t.v === ed.type ? 'selected' : ''} ${effective ? '' : 'disabled'}>
+                ${esc(t.label)}${effective ? '' : ' — never runs on ' + esc(providerLabel(ed.provider)) + ' for ' + esc(ed.event)}</option>`;
+            }).join('')}
           </select>
           ${ic('chevronDown', 14)}
         </div>
@@ -2453,7 +2479,8 @@ function editorDialog() {
         ${ed.provider === 'codex' ? `<div class="hint">Codex implements <code class="cmd">command</code> and <code class="cmd">mcp_tool</code>.
           <code class="cmd">prompt</code> and <code class="cmd">agent</code> are disabled above because they are real handler types that the dispatcher never runs;
           <code class="cmd">http</code> is disabled because Codex has no such handler type at all. Whether Codex prints anything when it skips a parsed
-          handler is undocumented, so assume nothing reaches you and treat the editor as the only warning.</div>` : ''}
+          handler is undocumented, so assume nothing reaches you and treat the editor as the only warning.</div>` :
+          `<div class="hint">Claude handler support depends on the event. Any type the runtime does not support for <code class="cmd">${esc(ed.event || 'the selected event')}</code> is disabled above.</div>`}
         ${perField('type').map((p) => `<div class="err">${ic('circleAlert', 12)}<span>${esc(p.text)}</span></div>`).join('')}
       </div>
 
