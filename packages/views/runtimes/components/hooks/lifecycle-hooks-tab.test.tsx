@@ -1626,10 +1626,15 @@ describe("LifecycleHooksTab — an observation the host dated unreadably", () =>
 // two captions at each surface above, and the undated arm was pinned at all
 // six while four of the dated arms were pinned nowhere: forcing
 // `datedAt === null` to a constant `true` at hook-offline-card.tsx:71 and
-// :128, hook-empty-card.tsx:105 and hook-observation-banner.tsx:124 each left
-// the suite green. A screen that withholds an age it has is as wrong as one
-// that invents an age it does not, so those four get what the control above
-// already gives the live banner.
+// :128 and hook-empty-card.tsx:105 each left the suite green. The banner is
+// the fourth, and it takes a different flip to show it: its predicate is
+// `when === null` at hook-observation-banner.tsx:122, and a constant `true`
+// there already fails `still ages an observation whose stamp places`. What
+// left the suite green was `{when === null` -> `{when === null || lastKnown`,
+// which sends the dated last-known caption down the undated arm while the
+// live captions that control watches keep their age. A screen that withholds
+// an age it has is as wrong as one that invents an age it does not, so those
+// four get what the control above already gives the live banner.
 describe("LifecycleHooksTab — an observation the host dated readably", () => {
   // Fixed rather than relative: `timeAgo` answers "just now" under a minute,
   // and a caption with no age in it has nothing for these to assert on.
