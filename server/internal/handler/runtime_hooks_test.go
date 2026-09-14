@@ -280,7 +280,7 @@ func TestHeartbeatDispatchesPendingHookRead(t *testing.T) {
 	h := &Handler{
 		UpdateStore: NewInMemoryUpdateStore(), ModelListStore: NewInMemoryModelListStore(),
 		HookReadStore: NewInMemoryHookReadStore(), LocalSkillListStore: NewInMemoryLocalSkillListStore(),
-		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
+		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(), PathCheckStore: NewInMemoryPathCheckStore(),
 	}
 	req, err := h.HookReadStore.Create(ctx, "runtime-1")
 	if err != nil {
