@@ -1303,6 +1303,13 @@ export interface RuntimeLocalSkillImportResult {
   conflict?: RuntimeLocalSkillImportConflict;
 }
 
+export type RuntimeHookReadStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timed_out";
+
 // ---------------------------------------------------------------------------
 // Daemon path checks (LOCO-171)
 //
@@ -1321,6 +1328,286 @@ export type DaemonPathCheckStatus =
   | "failed"
   | "timeout"
   | (string & {});
+
+export type RuntimeHookSourceState = "found" | "absent" | "not_checked";
+
+export interface RuntimeHookSource {
+  provider: string;
+  scope: string;
+  format: "json" | "toml";
+  state: RuntimeHookSourceState;
+  source_path: string | null;
+  content_hash: string | null;
+  hooks?: Record<string, unknown> | unknown[];
+  disabled_hooks?: Record<string, unknown> | unknown[];
+  observed_at?: string;
+}
+
+// Configuration and effectiveness are two independent axes. A hook can be
+// parked *and* matcher-ineligible, so a consumer that collapses them into one
+// state loses the fact that unparking it still would not make it run.
+export type RuntimeHookConfiguration = "live" | "parked" | "disabled";
+
+export type RuntimeHookEffectiveness =
+  | "will_run"
+  | "never_runs"
+  | "trust_unknown";
+
+export type RuntimeHookNeverRunsReason =
+  | "matcher_ineligible"
+  | "handler_type_unsupported_by_provider"
+  | "handler_type_unsupported_for_event";
+
+export type RuntimeHookTrust =
+  | "not_applicable"
+  | "pending_review"
+  | "trusted_as_of_snapshot"
+  | "disabled"
+  | "managed_by_policy";
+
+// `unevaluable` is Multica's own limit, not a provider verdict: Go's RE2
+// rejects regex constructs the Claude doc permits. It must never be rendered
+// as a normal matcher, nor as a reason the hook does not run.
+export type RuntimeHookMatcherKind =
+  | "all"
+  | "exact"
+  | "regex"
+  | "ignored"
+  | "unevaluable";
+
+export interface RuntimeHookSourceRef {
+  scope: string;
+  format: string;
+  kind: string;
+  name?: string;
+}
+
+export interface RuntimeHookMember {
+  hook_id: string;
+  occurrence: number;
+  matcher: string;
+  matcher_kind: RuntimeHookMatcherKind;
+  matcher_error?: string;
+  source: RuntimeHookSourceRef;
+}
+
+export interface RuntimeHookEntry {
+  hook_id: string;
+  event: string;
+  matcher: string;
+  matcher_kind: RuntimeHookMatcherKind;
+  matcher_error?: string;
+  handler: Record<string, unknown>;
+  handler_type: string;
+  // More than one source means the providers' own cross-file deduplication
+  // matched the handler. It is provenance, never an execution order.
+  sources: RuntimeHookSourceRef[];
+  // One identity per configured entry that reached this row. A newer backend
+  // always sends it; optionality keeps installed clients compatible with
+  // observations cached by a backend that predates member projection.
+  members?: RuntimeHookMember[];
+  configuration: RuntimeHookConfiguration;
+  parked_at?: string;
+  effectiveness: RuntimeHookEffectiveness;
+  never_runs_reason?: RuntimeHookNeverRunsReason;
+  trust: RuntimeHookTrust;
+  trust_caveat?: string;
+}
+
+export interface RuntimeHookUnrecognizedKey {
+  source: RuntimeHookSourceRef;
+  key: string;
+  reason: string;
+}
+
+// `error` means the snapshot could not be resolved — which is not the same
+// answer as an empty `entries`, and must never be rendered as "no hooks".
+export interface RuntimeHookResolution {
+  provider: string;
+  entries: RuntimeHookEntry[];
+  // What each configured event's matcher is evaluated against, keyed by
+  // event. It is here as well as on an answer because the role belongs to the
+  // event, not to an answer: a value field has to be captioned before any
+  // value exists.
+  event_value_roles?: Record<string, RuntimeHookValueRole>;
+  unrecognized_keys?: RuntimeHookUnrecognizedKey[];
+  error?: string;
+}
+
+export interface RuntimeHookReadRequest {
+  id?: string;
+  runtime_id: string;
+  status: RuntimeHookReadStatus;
+  cached: boolean;
+  // Two bits, not one. `cached` means this answer came from the server's
+  // snapshot; `offline` means the runtime was not online when the server
+  // answered. Cached implies offline; offline does not imply cached — an
+  // offline runtime with no stored observation is the case that needs both,
+  // and it is a state to name rather than a read that failed. Backends that
+  // predate the field omit it; the parser defaults it to `false`.
+  offline: boolean;
+  /**
+   * Seconds the server will give this read's current phase before it ends the
+   * read itself. Absent once the status is terminal, and absent from backends
+   * that predate the field — in both cases there is no number to show, which
+   * is the honest alternative to a client-side guess.
+   */
+  phase_timeout_seconds?: number;
+  observed_at?: string;
+  sources?: RuntimeHookSource[];
+  resolved?: RuntimeHookResolution;
+  error?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// What the provider evaluates an event's matcher against, so a reader knows
+// what kind of value to supply. `unspecified` is every event whose role the
+// provider's own docs do not state — the server withholds the caption rather
+// than inferring one from the event's name, and a consumer must not fill it in.
+export type RuntimeHookValueRole =
+  | "ignored"
+  | "tool_name"
+  | "compaction_trigger"
+  | "session_start_source"
+  | "session_end_reason"
+  | "subagent_type"
+  | "changed_file_basename"
+  | "unspecified";
+
+// One live matcher on an event that the server's regex engine refuses, with
+// the compiler's own message. Multica's limit, never a provider verdict.
+export interface RuntimeHookUnevaluableMatcher {
+  hook_id: string;
+  matcher: string;
+  error: string;
+}
+
+// The server's answer for one event and one candidate value.
+//
+// `answerable: false` means Multica has no answer — it never means nothing
+// runs, and every set below is empty in that case. Rendering an empty
+// `matched` as "nothing fires" states something the server never established.
+// The four sets are unordered: neither provider publishes an execution order,
+// so numbering them or reading array position as sequence invents one.
+export interface RuntimeHookEventAnswer {
+  provider: string;
+  event: string;
+  value: string;
+  value_role: RuntimeHookValueRole;
+  answerable: boolean;
+  error?: string;
+  unevaluable?: RuntimeHookUnevaluableMatcher[];
+  matched: RuntimeHookEntry[];
+  not_matched: RuntimeHookEntry[];
+  never_runs: RuntimeHookEntry[];
+  configuration_excluded: RuntimeHookEntry[];
+}
+
+// An absent `answer` with `error` set is the honest shape for every case where
+// the server has no answer, including a runtime nothing has been read from.
+// `observed_at` dates the answer, because an answer from an undated snapshot
+// would be a claim about a host nobody looked at.
+export interface RuntimeHookEventAnswerResult {
+  runtime_id: string;
+  provider: string;
+  cached: boolean;
+  observed_at?: string;
+  answer?: RuntimeHookEventAnswer;
+  error?: string;
+}
+
+/**
+ * How Multica came to know the time on a hook-fire record. Stated per record,
+ * never per provider — a Claude feed is mixed, and stage 7's audit of a real
+ * 144-response corpus measured 70.1% of it as `inferred`, because 66% of hook
+ * responses print nothing on stdout and so can never be matched to a
+ * host-recorded timestamp.
+ *
+ * - `debug_log`: the host's own debug log recorded this execution and Multica
+ *   matched it uniquely. `fired_at` is the time the host recorded.
+ * - `inferred`: Multica knows from the provider's structured stream that the
+ *   hook ran, and knows its outcome and exit code, but the host recorded no
+ *   timestamp it could match. `fired_at` is when Multica received the record.
+ *   A materially weaker claim than `debug_log`, and the difference is the
+ *   whole point of the two-tier design.
+ *
+ * Never derive or upgrade this client-side. The stored column is rendered
+ * verbatim (DP-LOCO-114-03 condition 2); a render-time provenance decision
+ * reintroduces the fabricated-provenance defect that the capture path is now
+ * audited against.
+ */
+export type RuntimeHookFireProvenance = "debug_log" | "inferred";
+
+/**
+ * Result of one hook fire, as stored.
+ *
+ * `unknown` is not a fallback — it is a real, honest state with two distinct
+ * causes, and it accounted for 66.7% of all non-success outcomes in the
+ * measured corpus:
+ *
+ * 1. Exit 126 or 127. Claude exposes no spawn-failure field, so a hook that
+ *    ran and exited 127 is indistinguishable from a shell that never started
+ *    it. Neither `failure` nor `skipped` would be true.
+ * 2. A provider `cancelled` outcome, e.g. a hook that timed out.
+ *
+ * `skipped` is unreachable on Claude. Nothing may offer the reader a
+ * "never ran" state the data cannot supply.
+ */
+export type RuntimeHookFireOutcome =
+  | "success"
+  | "failure"
+  | "blocked"
+  | "skipped"
+  | "unknown";
+
+/**
+ * One row of the server-authoritative `hook_fire_history` table.
+ *
+ * WARNING on `execution_id`: this is the provider's PER-EXECUTION reference,
+ * fresh on every fire for Claude — not stable configured-hook identity. It
+ * must never be presented to the reader as "this hook", and nothing may group,
+ * join, dedupe or key on it (DP-LOCO-114-02 item 3, foreclosed). Group on the
+ * hook name plus event when grouping is needed, and do not imply the grouping
+ * is by a specific hook configuration.
+ *
+ * `hook_spec` is the handler identity observed AT FIRE TIME, denormalized on
+ * purpose so a later edit or delete of the hook cannot rewrite history. For
+ * Claude capture it carries `{ hook_name, type: "claude_hook_response" }`.
+ *
+ * `fired_at` only means something read together with `provenance` — see
+ * {@link RuntimeHookFireProvenance}.
+ */
+export interface RuntimeHookFire {
+  id: string;
+  provider: string;
+  event: string;
+  execution_id: string;
+  hook_spec?: Record<string, unknown> | unknown[];
+  fired_at: string;
+  /**
+   * Open unions (house style, cf. `PluginHookTrigger | string`) and
+   * deliberately so. The wire value is passed through verbatim and is never
+   * coerced into a known member, because narrowing an unrecognised provenance
+   * into `debug_log` or `inferred` IS a render-time provenance decision — the
+   * exact thing DP-LOCO-114-03 condition 2 forbids. Renderers must carry an
+   * explicit branch for a value they do not recognise and make no strength
+   * claim in it.
+   */
+  provenance: RuntimeHookFireProvenance | string;
+  outcome: RuntimeHookFireOutcome | string;
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * A page of the feed. `truncated` lets the screen state its own completeness
+ * rather than implying it is showing everything that ever fired.
+ */
+export interface RuntimeHookFireFeed {
+  fires: RuntimeHookFire[];
+  limit: number;
+  truncated: boolean;
+}
 
 /**
  * Why a path is unusable, in the vocabulary the desktop bridge already uses

@@ -873,6 +873,12 @@ func (h *Handler) mergeLegacyRuntime(ctx context.Context, newRuntimeID, oldRunti
 	}); err != nil {
 		return fmt.Errorf("record legacy daemon_id: %w", err)
 	}
+	if err := qtx.MergeRuntimeHookData(ctx, db.MergeRuntimeHookDataParams{
+		OldRuntimeID: oldRuntimeID,
+		NewRuntimeID: newRuntimeID,
+	}); err != nil {
+		return fmt.Errorf("merge runtime hook data: %w", err)
+	}
 	if err := qtx.DeleteAgentRuntime(ctx, oldRuntimeID); err != nil {
 		return fmt.Errorf("delete old runtime: %w", err)
 	}
@@ -1184,6 +1190,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if ack.PendingLocalSkills != nil {
 		resp["pending_local_skills"] = ack.PendingLocalSkills
 	}
+	if ack.PendingHookRead != nil {
+		resp["pending_hook_read"] = ack.PendingHookRead
+	}
 	if ack.PendingLocalSkillImport != nil {
 		resp["pending_local_skill_import"] = ack.PendingLocalSkillImport
 	}
@@ -1450,6 +1459,25 @@ func (h *Handler) processHeartbeat(ctx context.Context, runtimeID string, suppor
 		} else {
 			slog.Warn("local skill list HasPending failed", "error", probeErr, "runtime_id", runtimeID)
 		}
+	}
+
+	// Hook reads deliberately have no client capability gate here: a heartbeat
+	// can be served over HTTP or WS, while the capability is carried on the
+	// daemon's result POST. An older daemon ignores this additive field and the
+	// claimed request reaches its distinct timed_out state.
+	probeHookCtx, cancelProbeHook := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasHookRead, probeHookErr := h.HookReadStore.HasPending(probeHookCtx, runtimeID)
+	cancelProbeHook()
+	switch {
+	case probeHookErr == nil && hasHookRead:
+		pendingHookRead, popErr := h.HookReadStore.PopPending(ctx, runtimeID)
+		if popErr != nil {
+			slog.Warn("hook read PopPending failed", "error", popErr, "runtime_id", runtimeID)
+		} else if pendingHookRead != nil {
+			ack.PendingHookRead = &protocol.DaemonHeartbeatPendingHookRead{ID: pendingHookRead.ID}
+		}
+	case probeHookErr != nil:
+		slog.Warn("hook read HasPending failed", "error", probeHookErr, "runtime_id", runtimeID)
 	}
 
 	probeImportStart := time.Now()

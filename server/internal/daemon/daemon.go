@@ -379,6 +379,9 @@ type Daemon struct {
 	skillCache *SkillBundleCache
 	logger     *slog.Logger
 
+	hookFireCaptureMu      sync.Mutex
+	activeHookFireCaptures map[string]struct{}
+
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
 	runtimeIndex map[string]Runtime // runtimeID -> Runtime for provider lookups
@@ -4220,12 +4223,13 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp == nil {
 		return
 	}
-	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingPathCheck != nil {
+	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingHookRead != nil || resp.PendingLocalSkillImport != nil || resp.PendingPathCheck != nil {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
 			"model_list", resp.PendingModelList != nil,
 			"local_skills", resp.PendingLocalSkills != nil,
+			"hook_read", resp.PendingHookRead != nil,
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
 			"path_check", resp.PendingPathCheck != nil,
 		)
@@ -4241,6 +4245,11 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.PendingLocalSkills != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
 			go d.handleLocalSkillList(ctx, *rt, resp.PendingLocalSkills.ID)
+		}
+	}
+	if resp.PendingHookRead != nil {
+		if rt := d.findRuntime(runtimeID); rt != nil {
+			go d.handleHookRead(ctx, *rt, resp.PendingHookRead.ID)
 		}
 	}
 	if resp.PendingPathCheck != nil {
@@ -8350,7 +8359,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Shared across the resume-retry below so the retry's transcript rows
 	// keep ascending seq values for the same task.
 	var msgSeq atomic.Int32
+	var hookCapture *claudeHookFireCapture
+	if provider == "claude" {
+		hookCapture = d.startClaudeHookFireCapture(task.RuntimeID, task.ID, env.RootDir)
+		if hookCapture != nil {
+			execOpts.ClaudeDebugFile = hookCapture.debugPath
+			execOpts.ClaudeHookResponse = hookCapture.observe
+		}
+	}
 	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
+	d.finishClaudeHookFireCapture(hookCapture, task.RuntimeID, task.ID)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -8405,8 +8423,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}
 		}
 		freshPrompt := BuildPrompt(task, provider, promptOptions...)
+		if provider == "claude" {
+			hookCapture = d.startClaudeHookFireCapture(task.RuntimeID, task.ID, env.RootDir)
+			execOpts.ClaudeDebugFile = ""
+			execOpts.ClaudeHookResponse = nil
+			if hookCapture != nil {
+				execOpts.ClaudeDebugFile = hookCapture.debugPath
+				execOpts.ClaudeHookResponse = hookCapture.observe
+			}
+		}
 
 		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
+		d.finishClaudeHookFireCapture(hookCapture, task.RuntimeID, task.ID)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start; keeping the original poisoned result", "error", retryErr)
 		} else if retryResult.Status != "completed" && retryResult.SessionID == "" {

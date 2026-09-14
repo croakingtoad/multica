@@ -2968,6 +2968,436 @@ describe("ApiClient session expiry", () => {
   });
 });
 
+/**
+ * Lifecycle hook reads (LOCO-126).
+ *
+ * The hooks tab renders three distinct source states and two independent
+ * per-entry axes, so a drifted body must not be able to turn any of them into
+ * a confident wrong answer. Two failure modes matter here: an unparseable body
+ * has to become an explicit failed read rather than an empty hook list, and an
+ * unknown enum value has to survive parsing so the UI's default branch — not
+ * the fallback — decides how to render it.
+ */
+describe("ApiClient lifecycle hook reads", () => {
+  function stubHookJSON(body: unknown) {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("degrades a malformed initiate body to an explicit failed read", async () => {
+    stubHookJSON("not-an-object");
+
+    const result = await new ApiClient("https://api.example.test")
+      .initiateHookRead("rt-1");
+
+    expect(result.status).toBe("failed");
+    expect(result.runtime_id).toBe("rt-1");
+    expect(result.cached).toBe(false);
+    // Not an empty array: "we could not read this" must stay distinguishable
+    // from "every expected scope was checked and held nothing".
+    expect(result.sources).toBeUndefined();
+    expect(result.resolved).toBeUndefined();
+  });
+
+  it("keeps offline and cached as two separate bits", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "failed",
+      cached: false,
+      offline: true,
+      error: "runtime is offline and has no last known hook observation",
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .initiateHookRead("rt-1");
+
+    // Offline without a snapshot: the UI needs both bits to tell this apart
+    // from a read that failed on an online runtime.
+    expect(result.offline).toBe(true);
+    expect(result.cached).toBe(false);
+  });
+
+  // R1: the in-progress screen's bound is the server's number, so the parser
+  // has to carry it and has to leave it absent when the server sends none.
+  // 23 is neither of the server's real bounds on purpose — a parser that
+  // substituted a constant would pass a 30-or-60 assertion.
+  it("carries the server's phase bound and leaves it absent when unsent", async () => {
+    stubHookJSON({
+      id: "req-1",
+      runtime_id: "rt-1",
+      status: "pending",
+      cached: false,
+      offline: false,
+      phase_timeout_seconds: 23,
+    });
+
+    const bounded = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-1");
+    expect(bounded.phase_timeout_seconds).toBe(23);
+
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: false,
+      offline: false,
+      observed_at: "2026-09-12T11:00:00Z",
+    });
+
+    const terminal = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-1");
+    expect(terminal.phase_timeout_seconds).toBeUndefined();
+  });
+
+  it("defaults offline to false when a backend omits it", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .initiateHookRead("rt-1");
+
+    expect(result.offline).toBe(false);
+  });
+
+  it("degrades a malformed poll body to an explicit failed read", async () => {
+    stubHookJSON({ sources: "nope" });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-9");
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/did not match/i);
+  });
+
+  it("keeps the resolved projection and its two axes intact", async () => {
+    stubHookJSON({
+      id: "req-1",
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      sources: [
+        {
+          provider: "claude",
+          scope: "user",
+          format: "json",
+          state: "found",
+          source_path: "/home/u/.claude/settings.json",
+          content_hash: "abc",
+        },
+      ],
+      resolved: {
+        provider: "claude",
+        entries: [
+          {
+            hook_id: "sha256:1",
+            event: "Notification",
+            matcher: "",
+            matcher_kind: "all",
+            handler: { type: "command", command: "ping" },
+            handler_type: "command",
+            sources: [{ scope: "user", format: "json", kind: "settings" }],
+            configuration: "parked",
+            parked_at: "2026-09-10T10:00:00Z",
+            effectiveness: "never_runs",
+            never_runs_reason: "matcher_ineligible",
+            trust: "not_applicable",
+          },
+        ],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-1");
+
+    expect(result.status).toBe("completed");
+    const entry = result.resolved?.entries[0];
+    expect(entry?.configuration).toBe("parked");
+    expect(entry?.parked_at).toBe("2026-09-10T10:00:00Z");
+    expect(entry?.effectiveness).toBe("never_runs");
+    expect(entry?.never_runs_reason).toBe("matcher_ineligible");
+    expect(entry?.sources[0]?.scope).toBe("user");
+  });
+
+  it("passes an unknown provider state through instead of discarding the read", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: true,
+      observed_at: "2026-09-12T11:00:00Z",
+      resolved: {
+        provider: "codex",
+        entries: [
+          {
+            hook_id: "sha256:2",
+            event: "PreToolUse",
+            matcher: "Bash",
+            matcher_kind: "regex",
+            handler: { type: "command", command: "guard" },
+            handler_type: "command",
+            sources: [{ scope: "user", format: "toml", kind: "settings" }],
+            configuration: "quarantined",
+            effectiveness: "trust_unknown",
+            trust: "some_future_state",
+          },
+        ],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-2");
+
+    expect(result.status).toBe("completed");
+    expect(result.resolved?.entries[0]?.configuration).toBe("quarantined");
+    expect(result.resolved?.entries[0]?.trust).toBe("some_future_state");
+  });
+
+  it("keeps a resolution failure distinct from an empty hook list", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: true,
+      observed_at: "2026-09-12T11:00:00Z",
+      sources: [],
+      resolved: {
+        provider: "claude",
+        entries: [],
+        error: "decode parked hooks from settings (user/json): unexpected end of JSON input",
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-3");
+
+    expect(result.resolved?.entries).toEqual([]);
+    expect(result.resolved?.error).toMatch(/decode parked hooks/);
+  });
+
+  it("carries the projection's per-event value roles", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      status: "completed",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      resolved: {
+        provider: "claude",
+        entries: [],
+        event_value_roles: { PreToolUse: "tool_name", Stop: "ignored" },
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .getHookReadResult("rt-1", "req-4");
+
+    expect(result.resolved?.event_value_roles?.PreToolUse).toBe("tool_name");
+    expect(result.resolved?.event_value_roles?.Stop).toBe("ignored");
+  });
+
+  it("keeps a per-event answer and every one of its four sets", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      provider: "claude",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      answer: {
+        provider: "claude",
+        event: "PreToolUse",
+        value: "Bash",
+        value_role: "tool_name",
+        answerable: true,
+        matched: [
+          {
+            hook_id: "sha256:a",
+            event: "PreToolUse",
+            matcher: "Bash",
+            matcher_kind: "exact",
+            handler: { type: "command", command: "guard.sh" },
+            handler_type: "command",
+            sources: [{ scope: "user", format: "json", kind: "settings" }],
+            configuration: "live",
+            effectiveness: "will_run",
+            trust: "not_applicable",
+          },
+        ],
+        not_matched: [],
+        never_runs: [],
+        configuration_excluded: [],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .answerHookEvent("rt-1", "PreToolUse", "Bash");
+
+    expect(result.answer?.answerable).toBe(true);
+    expect(result.answer?.matched).toHaveLength(1);
+    expect(result.answer?.matched[0]?.effectiveness).toBe("will_run");
+    expect(result.observed_at).toBe("2026-09-12T11:00:00Z");
+  });
+
+  it("keeps an unanswerable event's reason and asserts no sets", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      provider: "claude",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      answer: {
+        provider: "claude",
+        event: "PreToolUse",
+        value: "Bash",
+        value_role: "tool_name",
+        answerable: false,
+        error: 'compile claude matcher "^(?!Notebook).*" failed',
+        unevaluable: [
+          {
+            hook_id: "sha256:bad",
+            matcher: "^(?!Notebook).*",
+            error: "invalid or unsupported Perl syntax: `(?!`",
+          },
+        ],
+        matched: [],
+        not_matched: [],
+        never_runs: [],
+        configuration_excluded: [],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .answerHookEvent("rt-1", "PreToolUse", "Bash");
+
+    expect(result.answer?.answerable).toBe(false);
+    expect(result.answer?.unevaluable?.[0]?.matcher).toBe("^(?!Notebook).*");
+    expect(result.answer?.error).toMatch(/compile claude matcher/);
+  });
+
+  it("parses every projected member identity on a collapsed answer row", async () => {
+    stubHookJSON({
+      runtime_id: "rt-1",
+      provider: "claude",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      answer: {
+        provider: "claude",
+        event: "PreToolUse",
+        value: "Bash",
+        value_role: "tool_name",
+        answerable: true,
+        matched: [{
+          hook_id: "sha256:user",
+          event: "PreToolUse",
+          matcher: "Bash",
+          matcher_kind: "exact",
+          handler: { type: "command", command: "guard.sh" },
+          handler_type: "command",
+          sources: [
+            { scope: "user", format: "json", kind: "settings" },
+            { scope: "project", format: "json", kind: "settings" },
+          ],
+          members: [
+            {
+              hook_id: "sha256:user",
+              occurrence: 0,
+              matcher: "Bash",
+              matcher_kind: "exact",
+              source: { scope: "user", format: "json", kind: "settings" },
+            },
+            {
+              hook_id: "sha256:project",
+              occurrence: 1,
+              matcher: "Bash|Read",
+              matcher_kind: "regex",
+              source: { scope: "project", format: "json", kind: "settings" },
+            },
+          ],
+          configuration: "live",
+          effectiveness: "will_run",
+          trust: "not_applicable",
+        }],
+        not_matched: [],
+        never_runs: [],
+        configuration_excluded: [],
+      },
+    });
+
+    const result = await new ApiClient("https://api.example.test")
+      .answerHookEvent("rt-1", "PreToolUse", "Bash");
+
+    expect(result.answer?.matched[0]?.members).toEqual([
+      expect.objectContaining({
+        hook_id: "sha256:user",
+        occurrence: 0,
+        matcher: "Bash",
+      }),
+      expect.objectContaining({
+        hook_id: "sha256:project",
+        occurrence: 1,
+        matcher: "Bash|Read",
+      }),
+    ]);
+  });
+
+  // A malformed answer must not parse into an answerable one: an empty
+  // matched set would then read as "nothing fires", which is the exact
+  // statement this endpoint exists not to make.
+  it("degrades a malformed answer body to a refusal with no answer", async () => {
+    stubHookJSON({ answer: { event: "PreToolUse" } });
+
+    const result = await new ApiClient("https://api.example.test")
+      .answerHookEvent("rt-1", "PreToolUse", "Bash");
+
+    expect(result.answer).toBeUndefined();
+    expect(result.error).toMatch(/did not match/i);
+    expect(result.runtime_id).toBe("rt-1");
+  });
+
+  it("degrades a non-object answer body to a refusal", async () => {
+    stubHookJSON("not-an-object");
+
+    const result = await new ApiClient("https://api.example.test")
+      .answerHookEvent("rt-1", "PreToolUse", "Bash");
+
+    expect(result.answer).toBeUndefined();
+    expect(result.error).toMatch(/did not match/i);
+  });
+
+  it("sends the event and value as query parameters", async () => {
+    const fetchMock = stubHookJSON({
+      runtime_id: "rt-1",
+      provider: "claude",
+      cached: false,
+      observed_at: "2026-09-12T11:00:00Z",
+      answer: {
+        provider: "claude",
+        event: "PreToolUse",
+        value: "mcp__fs__read file",
+        value_role: "tool_name",
+        answerable: true,
+        matched: [],
+        not_matched: [],
+        never_runs: [],
+        configuration_excluded: [],
+      },
+    });
+
+    await new ApiClient("https://api.example.test")
+      .answerHookEvent("rt-1", "PreToolUse", "mcp__fs__read file");
+
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toContain("/api/runtimes/rt-1/hooks/answer?");
+    expect(url).toContain("event=PreToolUse");
+    // Encoded, not interpolated raw: a matcher value is arbitrary input.
+    expect(url).toContain("value=mcp__fs__read+file");
+  });
+});
+
 // Daemon path checks (LOCO-171). The picker turns this response into "you may
 // attach this folder" and into whether `worktree` mode is offered, so a drifted
 // body must degrade to a named failure — never to a fabricated success.

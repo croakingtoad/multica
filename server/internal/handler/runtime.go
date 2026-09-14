@@ -1166,7 +1166,8 @@ func (h *Handler) UnbindAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Finally delete the runtime row itself.
+	// Finally delete the runtime row itself. TeardownRuntime already removed
+	// its non-FK hook data inside this transaction.
 	if err := qtx.DeleteAgentRuntime(r.Context(), rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return

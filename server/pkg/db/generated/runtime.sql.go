@@ -181,6 +181,24 @@ func (q *Queries) DeleteAgentRuntime(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const deleteRuntimeHookData = `-- name: DeleteRuntimeHookData :exec
+WITH deleted_snapshots AS (
+    DELETE FROM hook_state_snapshot
+    WHERE hook_state_snapshot.runtime_id = $1
+)
+DELETE FROM hook_fire_history
+WHERE hook_fire_history.runtime_id = $1
+`
+
+// Application-layer runtime-delete contract: hook tables deliberately carry no
+// foreign keys, so no hook row may retain a deleted runtime id. TeardownRuntime
+// removes both dependents on ordinary deletes; MergeRuntimeHookData handles the
+// history-preserving legacy merge. Both run in the parent-delete transaction.
+func (q *Queries) DeleteRuntimeHookData(ctx context.Context, targetRuntimeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRuntimeHookData, targetRuntimeID)
+	return err
+}
+
 const deleteSystemAgentsByRuntime = `-- name: DeleteSystemAgentsByRuntime :exec
 DELETE FROM agent WHERE runtime_id = $1 AND kind = 'system'
 `
@@ -1145,6 +1163,29 @@ func (q *Queries) MarkRuntimesOfflineByIDs(ctx context.Context, arg MarkRuntimes
 		return nil, err
 	}
 	return items, nil
+}
+
+const mergeRuntimeHookData = `-- name: MergeRuntimeHookData :exec
+WITH deleted_snapshots AS (
+    DELETE FROM hook_state_snapshot
+    WHERE hook_state_snapshot.runtime_id = $2
+)
+UPDATE hook_fire_history
+SET runtime_id = $1
+WHERE hook_fire_history.runtime_id = $2
+`
+
+type MergeRuntimeHookDataParams struct {
+	NewRuntimeID pgtype.UUID `json:"new_runtime_id"`
+	OldRuntimeID pgtype.UUID `json:"old_runtime_id"`
+}
+
+// A snapshot is a droppable cache and may collide with the target's independently
+// observed row, so discard it. Fire history is server-authoritative and keyed by
+// a surrogate UUID, so preserve it by re-pointing it to the surviving runtime.
+func (q *Queries) MergeRuntimeHookData(ctx context.Context, arg MergeRuntimeHookDataParams) error {
+	_, err := q.db.Exec(ctx, mergeRuntimeHookData, arg.NewRuntimeID, arg.OldRuntimeID)
+	return err
 }
 
 const reassignAgentsToRuntime = `-- name: ReassignAgentsToRuntime :execrows

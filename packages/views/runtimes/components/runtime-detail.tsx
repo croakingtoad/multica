@@ -7,6 +7,7 @@ import {
   Cpu,
   Globe,
   Lock,
+  Webhook,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
@@ -33,6 +34,12 @@ import {
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@multica/ui/components/ui/tabs";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -44,9 +51,12 @@ import { availabilityConfig, workloadConfig } from "../../agents/presence";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UsageSection } from "./usage-section";
+import { HookFiresSection } from "./hook-fires-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { DeleteRuntimeProfileDialog } from "./delete-runtime-profile-dialog";
 import { runtimeRowLabel } from "./runtime-machines";
+import { LifecycleHooksTab } from "./hooks/lifecycle-hooks-tab";
+import { providerSupportsHooks } from "./hooks/hooks-model";
 import { useT, useTimeAgo } from "../../i18n";
 
 function getCliVersion(metadata: Record<string, unknown>): string | null {
@@ -106,6 +116,7 @@ export function RuntimeDetail({
   const now = useNowTick();
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [tab, setTab] = useState("overview");
 
   const health = deriveRuntimeHealth(runtime, now);
   const ownerMember = runtime.owner_id
@@ -146,6 +157,10 @@ export function RuntimeDetail({
     navigation.replace(deleteDestination);
   };
 
+  // Hooks exist only on the two providers that expose a hook configuration,
+  // and only for a viewer allowed to read this runtime at all.
+  const hooksVisible = canReadRuntime && providerSupportsHooks(runtime.provider);
+
   const daemonShort = shortDaemonId(runtime.daemon_id);
   const lastSeen = runtime.last_seen_at
     ? timeAgo(runtime.last_seen_at)
@@ -184,35 +199,67 @@ export function RuntimeDetail({
           page boundary rather than mid-content; the topbar stays sticky on
           its own because it's navigation, not data. */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="grid grid-cols-1 gap-4 p-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="min-w-0 space-y-5">
-            <HeroCard
-              runtime={runtime}
-              runtimeName={runtimeName}
-              health={health}
-              lastSeen={lastSeen}
-              ownerMember={ownerMember}
-              cliVersion={cliVersion}
-              daemonShort={daemonShort}
-            />
-            {canReadRuntime && <UsageSection runtime={runtime} />}
-          </div>
+        {/* Overview is the default panel so the page opens on what it always
+            showed. Lifecycle Hooks is mounted only while selected: its query
+            initiates a host read, and a background tab must not start one. */}
+        <Tabs
+          value={tab}
+          onValueChange={(next) => setTab(String(next))}
+          className="gap-0 p-6"
+        >
+          <TabsList variant="line" className="mb-5">
+            <TabsTrigger value="overview">
+              {t(($) => $.hooks.tab_overview)}
+            </TabsTrigger>
+            {hooksVisible ? (
+              <TabsTrigger value="hooks">
+                <Webhook aria-hidden="true" />
+                {t(($) => $.hooks.tab_hooks)}
+              </TabsTrigger>
+            ) : null}
+          </TabsList>
 
-          {/* Right rail: serving agents + diagnostics */}
-          <div className="space-y-4">
-            <ServingAgentsCard
-              agents={servingAgents}
-              presenceMap={presenceMap}
-              agentHref={(id) => paths.agentDetail(id)}
-            />
-            <DiagnosticsCard
-              runtime={runtime}
-              canEditVisibility={!!isRuntimeOwner}
-              canDelete={!!canDelete}
-              onDelete={() => setDeleteOpen(true)}
-            />
-          </div>
-        </div>
+          <TabsContent value="overview">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="min-w-0 space-y-5">
+                <HeroCard
+                  runtime={runtime}
+                  runtimeName={runtimeName}
+                  health={health}
+                  lastSeen={lastSeen}
+                  ownerMember={ownerMember}
+                  cliVersion={cliVersion}
+                  daemonShort={daemonShort}
+                />
+                {canReadRuntime && <UsageSection runtime={runtime} />}
+                {/* Hook fires (LOCO-135). Same read gate as usage: this is
+                    per-runtime diagnostic history, not configuration. */}
+                {canReadRuntime && <HookFiresSection runtime={runtime} />}
+              </div>
+
+              {/* Right rail: serving agents + diagnostics */}
+              <div className="space-y-4">
+                <ServingAgentsCard
+                  agents={servingAgents}
+                  presenceMap={presenceMap}
+                  agentHref={(id) => paths.agentDetail(id)}
+                />
+                <DiagnosticsCard
+                  runtime={runtime}
+                  canEditVisibility={!!isRuntimeOwner}
+                  canDelete={!!canDelete}
+                  onDelete={() => setDeleteOpen(true)}
+                />
+              </div>
+            </div>
+          </TabsContent>
+
+          {hooksVisible ? (
+            <TabsContent value="hooks">
+              <LifecycleHooksTab runtime={runtime} />
+            </TabsContent>
+          ) : null}
+        </Tabs>
       </div>
 
       {isCustomRuntime && runtimeProfile ? (

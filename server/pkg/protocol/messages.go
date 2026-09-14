@@ -49,6 +49,13 @@ const (
 	// nothing extra, so the stub retires itself as daemons update.
 	DaemonCapabilityPlatformSkillV1 = "platform-skill-v1"
 
+	// DaemonCapabilityHooksV1 advertises that the daemon can serve hook
+	// reads. Hook state lives in its own table rather than in the
+	// agent_runtime.metadata blob (LOCO-114), so the read path gates on this
+	// capability and fails closed for older daemons: a header that lacks it
+	// is a daemon that cannot serve hooks, never one that can.
+	DaemonCapabilityHooksV1 = "hooks-v1"
+
 	// AppCapabilityChatDraftRestoreV1 is advertised (X-Client-Capabilities) by
 	// app clients that understand the durable draft-restore recovery path:
 	// chat:cancel_finalized as an invalidation hint plus the draft-restores
@@ -138,6 +145,7 @@ const (
 	PendingWorkKindModelList        = "model_list"
 	PendingWorkKindLocalSkills      = "local_skills"
 	PendingWorkKindLocalSkillImport = "local_skill_import"
+	PendingWorkKindHookRead         = "hook_read"
 	// PendingWorkKindPathCheck marks a heartbeat-carried request to inspect a
 	// single absolute path on the daemon's machine (project file picker).
 	PendingWorkKindPathCheck = "path_check"
@@ -389,6 +397,7 @@ type DaemonHeartbeatAckPayload struct {
 	PendingUpdate           *DaemonHeartbeatPendingUpdate           `json:"pending_update,omitempty"`
 	PendingModelList        *DaemonHeartbeatPendingModelList        `json:"pending_model_list,omitempty"`
 	PendingLocalSkills      *DaemonHeartbeatPendingLocalSkills      `json:"pending_local_skills,omitempty"`
+	PendingHookRead         *DaemonHeartbeatPendingHookRead         `json:"pending_hook_read,omitempty"`
 	PendingLocalSkillImport *DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_import,omitempty"`
 	// PendingPathCheck asks the daemon to inspect one absolute path on its
 	// machine and report a boolean bundle back (LOCO-1772). The path rides
@@ -424,6 +433,65 @@ type DaemonHeartbeatPendingModelList struct {
 // local-skill inventory.
 type DaemonHeartbeatPendingLocalSkills struct {
 	ID string `json:"id"`
+}
+
+// DaemonHeartbeatPendingHookRead asks a hooks-v1 daemon to inspect only the
+// provider-owned hook configuration paths compiled into the daemon. It
+// deliberately carries no path or other caller-controlled filesystem target.
+type DaemonHeartbeatPendingHookRead struct {
+	ID string `json:"id"`
+}
+
+// HookConfigSource is one checked provider file. A returned source with both
+// SourcePath and ContentHash nil means "checked and absent"; an omitted source
+// means it was not checked. Scope uses the hook_state_snapshot refresh-key
+// vocabulary. Format disambiguates Codex's hooks.json and inline config.toml
+// sources, which coexist and merge within one scope.
+type HookConfigSource struct {
+	Provider      string          `json:"provider"`
+	Scope         string          `json:"scope"`
+	Format        string          `json:"format"`
+	SourcePath    *string         `json:"source_path"`
+	ContentHash   *string         `json:"content_hash"`
+	Hooks         json.RawMessage `json:"hooks"`
+	DisabledHooks json.RawMessage `json:"disabled_hooks"`
+}
+
+// HookConfigReadReport is the daemon-to-server result contract for hook reads.
+// ObservedAt is host time for the complete observation. Sources contains every
+// compiled-in source checked for the runtime provider; new fields remain
+// optional so older servers can skip them under normal encoding/json behavior.
+type HookConfigReadReport struct {
+	Status     string             `json:"status"`
+	ObservedAt string             `json:"observed_at,omitempty"`
+	Sources    []HookConfigSource `json:"sources,omitempty"`
+	Error      string             `json:"error,omitempty"`
+}
+
+// HookFire is one Claude hook result observed in a task-scoped structured
+// response stream and optionally enriched from the host debug log. ID is
+// deterministic from stream-only identity so a transport retry remains
+// idempotent. Provider comes from the authenticated runtime; Provenance states
+// whether FiredAt and Detail were upgraded from a unique debug-log match.
+// ExecutionID is the provider's per-execution reference: Claude emits a fresh
+// value for every fire, while Codex uses a content-stable trust hash. It must
+// not be presented or joined on as stable configured-hook identity.
+type HookFire struct {
+	ID          string          `json:"id"`
+	Event       string          `json:"event"`
+	ExecutionID string          `json:"execution_id"`
+	HookSpec    json.RawMessage `json:"hook_spec"`
+	FiredAt     string          `json:"fired_at"`
+	Provenance  string          `json:"provenance"`
+	Outcome     string          `json:"outcome"`
+	Detail      json.RawMessage `json:"detail,omitempty"`
+}
+
+// HookFireReport batches stream-derived rows from one completed Claude process.
+// The field stays optional/additive so an older daemon never has to send it
+// and an older server continues to ignore unrelated newer request fields.
+type HookFireReport struct {
+	Fires []HookFire `json:"fires,omitempty"`
 }
 
 // DaemonHeartbeatPendingPathCheck describes a request to inspect one

@@ -51,6 +51,11 @@ func TestClient_IdentityHeaders_PostJSON(t *testing.T) {
 			// and a stale signpost, neither of which any other test would
 			// notice.
 			protocol.DaemonCapabilityPlatformSkillV1,
+			// Hook reads fail closed against a daemon that stops advertising
+			// this (LOCO-114): without hooks-v1 the server treats it as
+			// unable to serve hook reads. Pin it here so dropping it from the
+			// list is a loud test failure, not a silent capability loss.
+			protocol.DaemonCapabilityHooksV1,
 		} {
 			if !capabilities[want] {
 				t.Errorf("X-Client-Capabilities missing %q: %v", want, capabilities)

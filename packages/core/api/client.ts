@@ -83,6 +83,9 @@ import type {
   DaemonPathCheckResponse,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
+  RuntimeHookEventAnswerResult,
+  RuntimeHookReadRequest,
+  RuntimeHookFireFeed,
   TimelineEntry,
   AssigneeFrequencyEntry,
   TaskMessagePayload,
@@ -325,8 +328,13 @@ import {
   SourceContextPreviewSchema,
   CommentSubIssueTaskResponseSchema,
   ListWebhookDeliveriesResponseSchema,
+  RuntimeHookEventAnswerResultSchema,
+  RuntimeHookReadRequestSchema,
+  failedRuntimeHookEventAnswer,
+  failedRuntimeHookRead,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
+  RuntimeHookFireFeedSchema,
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
   SearchIssuesResponseSchema,
@@ -2457,6 +2465,79 @@ export class ApiClient {
     requestId: string,
   ): Promise<RuntimeLocalSkillImportRequest> {
     return this.fetch(`/api/runtimes/${runtimeId}/local-skills/import/${requestId}`);
+  }
+
+  async initiateHookRead(runtimeId: string): Promise<RuntimeHookReadRequest> {
+    const raw = await this.fetch<unknown>(`/api/runtimes/${runtimeId}/hooks`, {
+      method: "POST",
+    });
+    return parseWithFallback(
+      raw,
+      RuntimeHookReadRequestSchema,
+      failedRuntimeHookRead(runtimeId),
+      { endpoint: "POST /api/runtimes/{id}/hooks" },
+    );
+  }
+
+  async getHookReadResult(
+    runtimeId: string,
+    requestId: string,
+  ): Promise<RuntimeHookReadRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/hooks/${requestId}`,
+    );
+    return parseWithFallback(
+      raw,
+      RuntimeHookReadRequestSchema,
+      failedRuntimeHookRead(runtimeId),
+      { endpoint: "GET /api/runtimes/{id}/hooks/{requestId}" },
+    );
+  }
+
+  // Read-only per-event answer. Both parameters are required by the server:
+  // a matcher is evaluated against a value, so it gives no answer without
+  // one, and a 400 here is the boundary refusing to be read as "nothing
+  // fires".
+  async answerHookEvent(
+    runtimeId: string,
+    event: string,
+    value: string,
+  ): Promise<RuntimeHookEventAnswerResult> {
+    const query = new URLSearchParams({ event, value });
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/hooks/answer?${query.toString()}`,
+    );
+    return parseWithFallback(
+      raw,
+      RuntimeHookEventAnswerResultSchema,
+      failedRuntimeHookEventAnswer(runtimeId),
+      { endpoint: "GET /api/runtimes/{id}/hooks/answer" },
+    );
+  }
+
+  /**
+   * Read-only hook-fire feed. Every field, `provenance` included, is whatever
+   * the server stored — this method must never derive, upgrade or normalize
+   * provenance, and neither may its schema (DP-LOCO-114-03 condition 2).
+   *
+   * The empty fallback is a genuinely empty feed, not a zero-provenance feed:
+   * no rows means no provenance claims, which is the only safe default here.
+   */
+  async listRuntimeHookFires(
+    runtimeId: string,
+    params?: { limit?: number },
+  ): Promise<RuntimeHookFireFeed> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/hook-fires?${search}`,
+    );
+    return parseWithFallback<RuntimeHookFireFeed>(
+      raw,
+      RuntimeHookFireFeedSchema,
+      { fires: [], limit: 0, truncated: false },
+      { endpoint: "GET /api/runtimes/:id/hook-fires" },
+    );
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {

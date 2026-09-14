@@ -680,6 +680,20 @@ WHERE project_plan_id IN (
 -- name: DeleteWorkspaceProjectPlans :exec
 DELETE FROM project_plan WHERE workspace_id = $1;
 
+-- name: DeleteWorkspaceRuntimeHookData :exec
+-- Application-layer cascade: resolve the workspace's runtime dependents while
+-- agent_runtime still exists, inside the workspace-delete transaction.
+WITH deleted_snapshots AS (
+    DELETE FROM hook_state_snapshot
+    USING agent_runtime
+    WHERE hook_state_snapshot.runtime_id = agent_runtime.id
+      AND agent_runtime.workspace_id = $1
+)
+DELETE FROM hook_fire_history
+USING agent_runtime
+WHERE hook_fire_history.runtime_id = agent_runtime.id
+  AND agent_runtime.workspace_id = $1;
+
 -- name: DeleteWorkspaceRuntimesAndProjects :exec
 WITH
 deleted_runtimes AS (

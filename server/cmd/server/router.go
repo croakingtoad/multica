@@ -502,6 +502,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if rdb != nil {
 		h.UpdateStore = handler.NewRedisUpdateStore(rdb)
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
+		h.HookReadStore = handler.NewRedisHookReadStore(rdb)
 		h.ModelCatalogCache = handler.NewRedisModelCatalogCache(rdb)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
@@ -1467,6 +1468,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
+		r.Post("/runtimes/{runtimeId}/hooks/{requestId}/result", h.ReportHookReadResult)
+		r.Post("/runtimes/{runtimeId}/hook-fires", h.ReportHookFires)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 		r.Post("/runtimes/{runtimeId}/path-checks/{requestId}/result", h.ReportDaemonPathCheckResult)
@@ -2210,6 +2213,21 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/local-skills/{requestId}", h.GetLocalSkillListRequest)
 					r.Post("/local-skills/import", h.InitiateImportLocalSkill)
 					r.Get("/local-skills/import/{requestId}", h.GetLocalSkillImportRequest)
+					r.Post("/hooks", h.InitiateHookRead)
+					// chi resolves a static segment ahead of a param sibling at
+					// the same level whatever order they are registered in, so
+					// "answer" reaches the answer handler and never reads as a
+					// request id. The order below is for the reader, not for
+					// the router. runtime_hooks_answer_test.go holds the chi
+					// precedence this registration assumes, on a router it
+					// builds itself; nothing holds this file.
+					r.Get("/hooks/answer", h.AnswerHookEvent)
+					r.Get("/hooks/{requestId}", h.GetHookReadRequest)
+					// Read-only hook-fire feed (LOCO-135). Authorised by
+					// DP-LOCO-114-03: the capture path keeps zero reads of
+					// hook_fire_history, and this SELECT renders the stored
+					// per-row `provenance` verbatim rather than deriving it.
+					r.Get("/hook-fires", h.ListHookFires)
 					r.Delete("/", h.DeleteAgentRuntime)
 					// Confirmed variant of DELETE: unbind every agent bound to
 					// this runtime (they keep their configuration and chats and

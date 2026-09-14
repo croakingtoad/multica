@@ -74,6 +74,8 @@ import type {
   PluginPreview,
   PluginSurfaceLaunch,
   ResourceLabelsResponse,
+  RuntimeHookEventAnswerResult,
+  RuntimeHookReadRequest,
   RuntimeModelListRequest,
   SearchIssuesResponse,
   SearchProjectsResponse,
@@ -1801,6 +1803,43 @@ const RuntimeUsageByAgentSchema = z.object({
 
 export const RuntimeUsageByAgentListSchema = z.array(RuntimeUsageByAgentSchema);
 
+// ---------------------------------------------------------------------------
+// Hook-fire feed schema (LOCO-135) — `/api/runtimes/:id/hook-fires`.
+//
+// `provenance` and `outcome` are typed as plain strings ON PURPOSE. A
+// `z.enum([...]).catch("inferred")` would be the usual leniency move here and
+// it would be a defect: coercing an unrecognised value into a known one is a
+// render-time provenance decision, which DP-LOCO-114-03 condition 2 forbids.
+// The stored column travels through this schema untouched, and the renderer
+// carries an explicit branch for a value it does not recognise.
+//
+// Defaulting them to "" is safe for the same reason — "" matches no known
+// provenance, so it falls into that unrecognised branch and makes no claim,
+// rather than silently asserting the stronger `debug_log` reading.
+// ---------------------------------------------------------------------------
+
+const RuntimeHookFireSchema = z.object({
+  id: z.string().default(""),
+  provider: z.string().default(""),
+  event: z.string().default(""),
+  // Per-execution reference, fresh on every fire for Claude. Diagnostic only:
+  // never a grouping key, never presented as "this hook".
+  execution_id: z.string().default(""),
+  hook_spec: z.union([z.record(z.string(), z.unknown()), z.array(z.unknown())]).optional(),
+  fired_at: z.string().default(""),
+  provenance: z.string().default(""),
+  outcome: z.string().default(""),
+  detail: z.record(z.string(), z.unknown()).optional(),
+}).loose();
+
+export const RuntimeHookFireFeedSchema = z.object({
+  fires: z.array(RuntimeHookFireSchema).default([]),
+  limit: z.number().default(0),
+  // Absent/malformed reads as "not truncated": the screen then states it is
+  // showing the most recent fires without claiming rows were hidden.
+  truncated: z.boolean().default(false),
+}).loose();
+
 const RuntimeUsageByHourSchema = z.object({
   hour: z.number().default(0),
   model: z.string().default(""),
@@ -3525,3 +3564,149 @@ export const EMPTY_JOIN_SHARE_LINK_RESPONSE: {
   workspace_id: "",
   workspace_slug: "",
 };
+
+// Lifecycle hooks. Every enum stays `z.string()` so an unknown provider state
+// still parses and reaches a `default`-bearing switch rather than collapsing
+// the whole observation to the fallback. The fallback itself is a failed read,
+// not an empty one: "we could not parse this" and "this runtime has no hooks"
+// are different answers and the UI renders them differently.
+export const RuntimeHookSourceRefSchema = z.object({
+  scope: z.string().default(""),
+  format: z.string().default(""),
+  kind: z.string().default("settings"),
+  name: z.string().optional(),
+}).loose();
+
+export const RuntimeHookMemberSchema = z.object({
+  hook_id: z.string(),
+  occurrence: z.number().int().nonnegative(),
+  matcher: z.string().default(""),
+  matcher_kind: z.string().default("all"),
+  matcher_error: z.string().optional(),
+  source: RuntimeHookSourceRefSchema,
+}).loose();
+
+export const RuntimeHookEntrySchema = z.object({
+  hook_id: z.string(),
+  event: z.string().default(""),
+  matcher: z.string().default(""),
+  matcher_kind: z.string().default("all"),
+  matcher_error: z.string().optional(),
+  handler: z.record(z.string(), z.unknown()).default({}),
+  handler_type: z.string().default(""),
+  sources: z.array(RuntimeHookSourceRefSchema).default([]),
+  members: z.array(RuntimeHookMemberSchema).default([]),
+  configuration: z.string().default("live"),
+  parked_at: z.string().optional(),
+  effectiveness: z.string().default("will_run"),
+  never_runs_reason: z.string().optional(),
+  trust: z.string().default("not_applicable"),
+  trust_caveat: z.string().optional(),
+}).loose();
+
+export const RuntimeHookResolutionSchema = z.object({
+  provider: z.string().default(""),
+  entries: z.array(RuntimeHookEntrySchema).default([]),
+  // Left as a string map so an unrecognised role still parses and reaches a
+  // default-bearing switch rather than collapsing the whole observation.
+  event_value_roles: z.record(z.string(), z.string()).optional(),
+  unrecognized_keys: z.array(z.object({
+    source: RuntimeHookSourceRefSchema,
+    key: z.string().default(""),
+    reason: z.string().default(""),
+  }).loose()).optional(),
+  error: z.string().optional(),
+}).loose();
+
+export const RuntimeHookSourceSchema = z.object({
+  provider: z.string().default(""),
+  scope: z.string().default(""),
+  format: z.string().default("json"),
+  state: z.string().default("not_checked"),
+  // Both null together is the server's "checked and absent" signal, so these
+  // stay nullable rather than defaulting to an empty string.
+  source_path: z.string().nullable().default(null),
+  content_hash: z.string().nullable().default(null),
+  hooks: z.unknown().optional(),
+  disabled_hooks: z.unknown().optional(),
+  observed_at: z.string().optional(),
+}).loose();
+
+export const RuntimeHookReadRequestSchema = z.object({
+  id: z.string().optional(),
+  runtime_id: z.string().default(""),
+  status: z.string().default("failed"),
+  cached: z.boolean().default(false),
+  // Whether the runtime was offline when the server answered. Distinct from
+  // `cached`, which says the answer came from the snapshot: an offline runtime
+  // with nothing ever observed is offline and uncached. A backend that predates
+  // the field omits it, and `false` is the safe fallback — it keeps that case
+  // reading as a failed read, which is what shipped before the field existed.
+  offline: z.boolean().default(false),
+  // The bound the server will enforce on this read's current phase, in
+  // seconds. Present only while the read is in flight, and phase-specific:
+  // queued and running are bounded separately. Carried so the in-progress
+  // screen states the server's own number instead of keeping a copy of a
+  // server constant, which is what drifts.
+  phase_timeout_seconds: z.number().optional(),
+  observed_at: z.string().optional(),
+  // Absent `sources` is meaningful: a queued read has no observation yet, and
+  // an empty array would claim every expected scope was checked and empty.
+  sources: z.array(RuntimeHookSourceSchema).optional(),
+  resolved: RuntimeHookResolutionSchema.optional(),
+  error: z.string().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+}).loose();
+
+export const failedRuntimeHookRead = (runtimeId: string): RuntimeHookReadRequest => ({
+  runtime_id: runtimeId,
+  status: "failed",
+  cached: false,
+  offline: false,
+  error: "hook read response did not match the expected shape",
+});
+
+// The per-event answer. `answerable` has no default: a malformed response must
+// not parse into an answer that reads as "nothing runs", so the whole payload
+// falls back to failedRuntimeHookEventAnswer below instead. The four sets do
+// default to empty, because they are only ever read once `answerable` is true.
+export const RuntimeHookEventAnswerSchema = z.object({
+  provider: z.string().default(""),
+  event: z.string().default(""),
+  value: z.string().default(""),
+  value_role: z.string().default("unspecified"),
+  answerable: z.boolean(),
+  error: z.string().optional(),
+  unevaluable: z.array(z.object({
+    hook_id: z.string().default(""),
+    matcher: z.string().default(""),
+    error: z.string().default(""),
+  }).loose()).optional(),
+  matched: z.array(RuntimeHookEntrySchema).default([]),
+  not_matched: z.array(RuntimeHookEntrySchema).default([]),
+  never_runs: z.array(RuntimeHookEntrySchema).default([]),
+  configuration_excluded: z.array(RuntimeHookEntrySchema).default([]),
+}).loose();
+
+export const RuntimeHookEventAnswerResultSchema = z.object({
+  runtime_id: z.string().default(""),
+  provider: z.string().default(""),
+  cached: z.boolean().default(false),
+  // Absent is meaningful: an answer with no date is one the server declined
+  // to give, never a current one.
+  observed_at: z.string().optional(),
+  answer: RuntimeHookEventAnswerSchema.optional(),
+  error: z.string().optional(),
+}).loose();
+
+// The fallback is a refusal, not an empty answer — `answer` stays absent so
+// no surface can render a parse failure as an event with nothing on it.
+export const failedRuntimeHookEventAnswer = (
+  runtimeId: string,
+): RuntimeHookEventAnswerResult => ({
+  runtime_id: runtimeId,
+  provider: "",
+  cached: false,
+  error: "hook answer response did not match the expected shape",
+});
