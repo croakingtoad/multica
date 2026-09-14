@@ -21,6 +21,7 @@ describe("left sidebar resizing", () => {
   });
 
   it("previews width directly and commits only when the pointer is released", () => {
+    expect(localStorage).toBeInstanceOf(Storage);
     const stableConsumerRender = vi.fn();
     const setItem = vi.spyOn(Storage.prototype, "setItem");
 
@@ -90,6 +91,7 @@ describe("left sidebar resizing", () => {
     expect(wrapper.style.getPropertyValue("--sidebar-width")).toBe("300px");
     expect(setItem).toHaveBeenCalledTimes(1);
     expect(setItem).toHaveBeenCalledWith("sidebar_width", "300");
+    expect(localStorage.getItem("sidebar_width")).toBe("300");
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
     expect(wrapper).not.toHaveAttribute("data-sidebar-resizing");
     expect(document.documentElement).not.toHaveAttribute("data-sidebar-resizing");
