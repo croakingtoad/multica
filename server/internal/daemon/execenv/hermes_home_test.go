@@ -3,6 +3,7 @@ package execenv
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -531,12 +532,23 @@ func TestResolveHermesProfile(t *testing.T) {
 		}
 	})
 
-	t.Run("empty inputs resolve to a platform default", func(t *testing.T) {
-		t.Parallel()
-		if res := ResolveHermesProfile("", "", false, false); res.SourceHome == "" {
-			t.Error("empty inputs should resolve to a platform default, not empty")
-		}
-	})
+}
+
+func TestResolveHermesProfileEmptyInputsUsePlatformDefault(t *testing.T) {
+	isolatedHome := t.TempDir()
+	t.Setenv("HERMES_HOME", "")
+	t.Setenv("HOME", isolatedHome)
+	t.Setenv("USERPROFILE", isolatedHome)
+	t.Setenv("LOCALAPPDATA", "")
+
+	res := ResolveHermesProfile("", "", false, false)
+	if res.SourceHome == "" {
+		t.Error("empty inputs should resolve to a platform default, not empty")
+	}
+	want := platformDefaultHermesHomeFor(runtime.GOOS, "", isolatedHome)
+	if res.SourceHome != want {
+		t.Errorf("empty inputs resolved to %q, want isolated platform default %q", res.SourceHome, want)
+	}
 }
 
 // TestHermesExternalDirsExpandsAgainstSelectedProfileHome is the review's blocker

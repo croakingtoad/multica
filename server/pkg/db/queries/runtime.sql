@@ -60,6 +60,20 @@ FOR UPDATE;
 SELECT * FROM agent_runtime
 WHERE id = $1 AND workspace_id = $2;
 
+-- name: ListRuntimesByDaemonOwner :many
+-- Every runtime the owner has registered under one daemon_id in the
+-- workspace, most recently seen first. A machine hosts one runtime per
+-- provider, so this is a handful of rows at most. The path-check dispatch
+-- (LOCO-1772) uses it to pick the daemon's online runtime without ever
+-- touching a runtime another member registered on the same hostname: the
+-- owner_id predicate keeps a second user's machine out of reach even
+-- when the daemon_id (hostname) collides.
+SELECT * FROM agent_runtime
+WHERE workspace_id = @workspace_id
+  AND daemon_id = @daemon_id
+  AND owner_id = @owner_id
+ORDER BY last_seen_at DESC;
+
 -- name: UpsertAgentRuntime :one
 -- (xmax = 0) AS inserted distinguishes a fresh insert (true) from an upsert
 -- that updated an existing row (false). Analytics reads this to fire

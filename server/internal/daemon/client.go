@@ -630,6 +630,7 @@ type (
 	PendingLocalSkills      = protocol.DaemonHeartbeatPendingLocalSkills
 	PendingHookRead         = protocol.DaemonHeartbeatPendingHookRead
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
+	PendingPathCheck        = protocol.DaemonHeartbeatPendingPathCheck
 )
 
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
@@ -672,6 +673,13 @@ func (c *Client) ReportHookReadResult(ctx context.Context, runtimeID, requestID 
 // server-authoritative fire history.
 func (c *Client) ReportHookFires(ctx context.Context, runtimeID string, report protocol.HookFireReport) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/hook-fires", runtimeID), report, nil)
+}
+
+// ReportPathCheckResult sends the verdict for one absolute path back to the
+// server. The payload is the bounded boolean bundle from checkLocalPath plus
+// status "completed", or {"status":"failed","error":"..."} (LOCO-1772).
+func (c *Client) ReportPathCheckResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/path-checks/%s/result", runtimeID, requestID), result, nil)
 }
 
 // WorkspaceInfo holds minimal workspace metadata returned by the API.

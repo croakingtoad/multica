@@ -1310,6 +1310,25 @@ export type RuntimeHookReadStatus =
   | "failed"
   | "timed_out";
 
+// ---------------------------------------------------------------------------
+// Daemon path checks (LOCO-171)
+//
+// Answers "does this absolute path exist on THAT machine, and is it usable?"
+// for the project local_directory picker. The browser cannot answer it for any
+// machine but its own, so the question is asked of the daemon: the server
+// records a pending request, wakes the daemon over the existing hub, the daemon
+// POSTs its answer back, and the client polls — the same shape as the runtime
+// local-skill list request.
+// ---------------------------------------------------------------------------
+
+export type DaemonPathCheckStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timeout"
+  | (string & {});
+
 export type RuntimeHookSourceState = "found" | "absent" | "not_checked";
 
 export interface RuntimeHookSource {
@@ -1589,3 +1608,42 @@ export interface RuntimeHookFireFeed {
   limit: number;
   truncated: boolean;
 }
+
+/**
+ * Why a path is unusable, in the vocabulary the desktop bridge already uses
+ * (see packages/views/platform/local-directory.ts) so one message table serves
+ * both. Empty string means "no objection" — the daemon writes it on success.
+ */
+export type DaemonPathCheckReason =
+  | ""
+  | "not_absolute"
+  | "not_found"
+  | "not_a_directory"
+  | "not_readable"
+  | "not_writable";
+
+export interface DaemonPathCheckOutcome {
+  exists: boolean;
+  is_directory: boolean;
+  readable: boolean;
+  writable: boolean;
+  /** Drives whether `worktree` execution mode can be offered at all. */
+  is_git_repo: boolean;
+  reason: DaemonPathCheckReason | string;
+}
+
+export interface CreateDaemonPathCheckRequest {
+  path: string;
+}
+
+export interface DaemonPathCheckResponse extends DaemonPathCheckOutcome {
+  id: string;
+  runtime_id: string;
+  path: string;
+  status: DaemonPathCheckStatus;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CreateDaemonPathCheckResponse = DaemonPathCheckResponse;

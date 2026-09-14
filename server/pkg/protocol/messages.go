@@ -146,6 +146,9 @@ const (
 	PendingWorkKindLocalSkills      = "local_skills"
 	PendingWorkKindLocalSkillImport = "local_skill_import"
 	PendingWorkKindHookRead         = "hook_read"
+	// PendingWorkKindPathCheck marks a heartbeat-carried request to inspect a
+	// single absolute path on the daemon's machine (project file picker).
+	PendingWorkKindPathCheck = "path_check"
 )
 
 // PendingWorkPayload is sent from server to daemon as a wakeup hint when a
@@ -396,6 +399,12 @@ type DaemonHeartbeatAckPayload struct {
 	PendingLocalSkills      *DaemonHeartbeatPendingLocalSkills      `json:"pending_local_skills,omitempty"`
 	PendingHookRead         *DaemonHeartbeatPendingHookRead         `json:"pending_hook_read,omitempty"`
 	PendingLocalSkillImport *DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_import,omitempty"`
+	// PendingPathCheck asks the daemon to inspect one absolute path on its
+	// machine and report a boolean bundle back (LOCO-1772). The path rides
+	// in the heartbeat payload — the work is the path itself, so the
+	// server-side request record is only the correlation point for the
+	// report, not a registry the daemon can re-fetch from.
+	PendingPathCheck *DaemonHeartbeatPendingPathCheck `json:"pending_path_check,omitempty"`
 	// PendingLocalSkillImports carries multiple import requests in a single
 	// heartbeat so the daemon can process them concurrently. Old daemons
 	// that don't know this field silently ignore it (standard JSON behavior)
@@ -483,6 +492,14 @@ type HookFire struct {
 // and an older server continues to ignore unrelated newer request fields.
 type HookFireReport struct {
 	Fires []HookFire `json:"fires,omitempty"`
+}
+
+// DaemonHeartbeatPendingPathCheck describes a request to inspect one
+// absolute path on the daemon's machine. Path is always non-empty and
+// absolute — the server rejects anything else before dispatch (LOCO-1772).
+type DaemonHeartbeatPendingPathCheck struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
 }
 
 // DaemonHeartbeatPendingLocalSkillImport describes a request to import a

@@ -16,6 +16,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import type { ProjectPlanOverview, ProjectPlanPart, ProjectPlanPhase } from "@multica/core/types";
+import type { SupportedLocale } from "@multica/core/i18n";
 import { NavigationProvider, type NavigationAdapter } from "../../../navigation";
 import { renderWithI18n } from "../../../test/i18n";
 import { PlanModePane } from "./plan-mode-pane";
@@ -110,6 +111,7 @@ function renderWithProviders(ui: ReactElement) {
 function renderPane(
   getActiveProjectPlan: ApiClient["getActiveProjectPlan"],
   mode: "plan_document" | "plan_pipeline" | "plan_coverage" = "plan_document",
+  locale?: SupportedLocale,
 ) {
   setApiInstance({
     getActiveProjectPlan,
@@ -130,8 +132,77 @@ function renderPane(
         <PlanModePane mode={mode} projectId="project-1" />
       </NavigationProvider>
     </QueryClientProvider>,
+    { locale },
   );
 }
+
+/**
+ * Part-card task count label (LOCO-1682): it reads from
+ * `part.rollup.tasks_total` — the same field as the progress bar's denominator
+ * — and pluralizes. When the sibling rollup lands, a part with one linked
+ * issue can still carry a full subtree of tasks: the card must read
+ * "13 tasks" under a 12/13 bar, not "1 tasks".
+ */
+describe("PlanPipelinePane part-card task count", () => {
+  afterEach(cleanup);
+
+  /** One part with a single link row but a 13-task subtree, plus a one-task part. */
+  function makePartCountOverview(): ProjectPlanOverview {
+    const base = makeOverview();
+    const phase = base.phases[0]!;
+    const template = phase.parts[0]!;
+    const parts: ProjectPlanPart[] = [
+      {
+        ...template,
+        id: "part-thirteen",
+        title: "Thirteen task part",
+        coverage_state: "in_progress",
+        rollup: { tasks_done: 12, tasks_total: 13, percent: 92 },
+      },
+      {
+        ...template,
+        id: "part-one",
+        title: "One task part",
+        coverage_state: "in_progress",
+        rollup: { tasks_done: 0, tasks_total: 1, percent: 0 },
+      },
+    ];
+    return {
+      ...base,
+      rollup: { tasks_done: 12, tasks_total: 14, percent: 86, parts_covered: 2, parts_total: 2, parts_without_tasks: 0 },
+      phases: [{ ...phase, rollup: { tasks_done: 12, tasks_total: 14, percent: 86 }, parts }],
+    };
+  }
+
+  it("labels each part by its subtree task total, singular at one (en)", async () => {
+    renderPane(() => Promise.resolve(makePartCountOverview()), "plan_pipeline");
+    await waitFor(() => expect(screen.getByText("Launch Plan")).toBeInTheDocument());
+    // The 13-task part reads plural, the one-task part reads singular, and the
+    // old link-row count (1) must never surface as the label.
+    expect(screen.getByText("13 tasks")).toBeInTheDocument();
+    expect(screen.getByText("1 task")).toBeInTheDocument();
+    expect(screen.queryByText("1 tasks")).not.toBeInTheDocument();
+    // The plan header stays a bare plural after its fraction — out of scope here.
+    // The fraction lives in a <b> inside the stat span, so match the label's
+    // direct text and the fraction element separately.
+    expect(screen.getByText("tasks").querySelector("b")?.textContent).toBe("12/14");
+  });
+
+  // The CJK locales never pluralize: the label keeps rendering count + the
+  // bare noun exactly as today, and the bare key still resolves in each of
+  // them (a missing key would fall back to the English plural).
+  it.each([
+    ["ja", "13 タスク", "1 タスク", "タスク"],
+    ["ko", "13 작업", "1 작업", "작업"],
+    ["zh-Hans", "13 个任务", "1 个任务", "个任务"],
+  ] as const)("%s keeps the part-card label unpluralized", async (locale, pluralLabel, singularLabel, headerNoun) => {
+    renderPane(() => Promise.resolve(makePartCountOverview()), "plan_pipeline", locale);
+    await waitFor(() => expect(screen.getByText("Launch Plan")).toBeInTheDocument());
+    expect(screen.getByText(pluralLabel)).toBeInTheDocument();
+    expect(screen.getByText(singularLabel)).toBeInTheDocument();
+    expect(screen.getByText(headerNoun).querySelector("b")?.textContent).toBe("12/14");
+  });
+});
 
 /** All 5 coverage states plus a phase-level blocking dependency, for the Pipeline/Coverage smoke tests below. */
 function makeFullOverview(): ProjectPlanOverview {
