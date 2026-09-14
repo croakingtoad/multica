@@ -72,6 +72,7 @@
     "./chat/unread": "./chat/unread.ts",
     "./runtimes": "./runtimes/index.ts",
     "./runtimes/queries": "./runtimes/queries.ts",
+    "./runtimes/daemon-path-check": "./runtimes/daemon-path-check.ts",
     "./runtimes/mutations": "./runtimes/mutations.ts",
     "./runtimes/custom-pricing-store": "./runtimes/custom-pricing-store.ts",
     "./dashboard": "./dashboard/index.ts",

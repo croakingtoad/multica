@@ -2967,3 +2967,159 @@ describe("ApiClient session expiry", () => {
     expect(storage.getItem("multica_token")).toBeNull();
   });
 });
+
+// Daemon path checks (LOCO-171). The picker turns this response into "you may
+// attach this folder" and into whether `worktree` mode is offered, so a drifted
+// body must degrade to a named failure — never to a fabricated success.
+describe("ApiClient daemon path-check response schema", () => {
+  function stubJSON(body: unknown, status = 200) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+  }
+
+  const pendingRecord = {
+    id: "req-1",
+    runtime_id: "runtime-1",
+    path: "/srv/app",
+    status: "pending",
+    exists: false,
+    is_directory: false,
+    readable: false,
+    writable: false,
+    is_git_repo: false,
+    created_at: "2026-09-12T08:38:19.7231482Z",
+    updated_at: "2026-09-12T08:38:19.7231482Z",
+  };
+
+  it("sends the path and parses the real server initiate record", async () => {
+    stubJSON(pendingRecord);
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).initiateDaemonPathCheck("ws-1", "daemon-a", "/srv/app");
+
+    expect(result).toEqual({ ...pendingRecord, reason: "" });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/workspaces/ws-1/daemons/daemon-a/path-checks",
+    );
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ path: "/srv/app" }),
+    });
+  });
+
+  it("parses a completed check, keeping every flag the picker branches on", async () => {
+    stubJSON({
+      ...pendingRecord,
+      status: "completed",
+      exists: true,
+      is_directory: true,
+      readable: true,
+      writable: true,
+      is_git_repo: true,
+    });
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result.status).toBe("completed");
+    expect(result).toMatchObject({
+      exists: true,
+      is_directory: true,
+      readable: true,
+      writable: true,
+      is_git_repo: true,
+    });
+  });
+
+  // An empty id is safe to hand back because the client module refuses
+  // to poll on one; a fabricated id would 404 and read as "not your daemon".
+  it("degrades a malformed initiate response to an empty id", async () => {
+    stubJSON({ ...pendingRecord, id: 7 });
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).initiateDaemonPathCheck("ws-1", "daemon-a", "/srv/app");
+
+    expect(result.id).toBe("");
+  });
+
+  it("degrades a malformed poll response to an explicit failure", async () => {
+    stubJSON("not-an-object");
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("invalid path check response");
+  });
+
+  // A daemon that omits a flag has not vouched for it. Reading a missing
+  // `readable` as readable would let the create succeed and the first task fail.
+  it("defaults every omitted flag to the pessimistic value", async () => {
+    stubJSON({
+      id: "req-1",
+      runtime_id: "runtime-1",
+      path: "/srv/app",
+      status: "completed",
+      created_at: pendingRecord.created_at,
+      updated_at: pendingRecord.updated_at,
+    });
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result).toMatchObject({
+      exists: false,
+      is_directory: false,
+      readable: false,
+      writable: false,
+      is_git_repo: false,
+      reason: "",
+    });
+  });
+
+  it("keeps an unknown status verbatim so the caller's default branch sees it", async () => {
+    stubJSON({ ...pendingRecord, status: "queued_on_daemon" });
+
+    const result = await new ApiClient(
+      "https://api.example.test",
+    ).getDaemonPathCheck("ws-1", "daemon-a", "req-1");
+
+    expect(result.status).toBe("queued_on_daemon");
+  });
+
+  it("carries Retry-After on a rate-limit error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "too many path checks" }), {
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "60",
+          },
+        }),
+      ),
+    );
+
+    await expect(
+      new ApiClient("https://api.example.test").initiateDaemonPathCheck(
+        "ws-1",
+        "daemon-a",
+        "/srv/app",
+      ),
+    ).rejects.toMatchObject({ status: 429, retryAfter: "60" });
+  });
+});

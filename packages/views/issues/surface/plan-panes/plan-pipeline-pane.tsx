@@ -50,8 +50,8 @@ function PartCard({ part }: { part: ProjectPlanPart }) {
           <PlanProgressBar done={part.rollup.tasks_done} total={part.rollup.tasks_total} className="mt-2" />
           <div className="mt-2 flex items-center justify-between">
             <span className="text-micro text-muted-foreground">
-              {part.issues.filter((i) => !i.deleted).length}{" "}
-              {t(($) => $.plan.pipeline.stat_tasks)}
+              {part.rollup.tasks_total}{" "}
+              {t(($) => $.plan.pipeline.part_tasks, { count: part.rollup.tasks_total })}
             </span>
             <CoverageBadge state={part.coverage_state} />
           </div>

@@ -218,7 +218,10 @@ type Handler struct {
 	ModelListStore        ModelListStore
 	LocalSkillListStore   LocalSkillListStore
 	LocalSkillImportStore LocalSkillImportStore
-	FeatureFlags          *featureflag.Service
+	// PathCheckStore holds daemon path-check requests (LOCO-1772) the same
+	// way LocalSkillListStore holds skill inventories.
+	PathCheckStore PathCheckStore
+	FeatureFlags   *featureflag.Service
 	// IssueStatusCatalog reads the workspace status catalog. Defaults to
 	// Queries; a test can substitute a counting wrapper to assert HOW MANY
 	// catalog reads a request performs, which is the only property that
@@ -252,8 +255,11 @@ type Handler struct {
 	WebhookIPRateLimiter         WebhookRateLimiter
 	WebhookAbsoluteIPRateLimiter WebhookRateLimiter
 	InvitationRateLimiters       InvitationRateLimiters
-	WebhookDeliveryWorker        *WebhookDeliveryWorker
-	CloudRuntime                 cloudRuntimeProxy
+	// PathCheckRateLimiter is the per-user budget for initiating daemon
+	// path checks. Nil-safe: a nil limiter admits everything.
+	PathCheckRateLimiter  SlidingWindowRateLimiter
+	WebhookDeliveryWorker *WebhookDeliveryWorker
+	CloudRuntime          cloudRuntimeProxy
 	// Test-only HTTP override; nil uses the default client in production.
 	googleOAuthHTTPClient *http.Client
 	// Lark integration. All three are nil when the Lark master key
@@ -487,6 +493,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		ModelCatalogCache:            NewInMemoryModelCatalogCache(),
 		LocalSkillListStore:          NewInMemoryLocalSkillListStore(),
 		LocalSkillImportStore:        NewInMemoryLocalSkillImportStore(),
+		PathCheckStore:               NewInMemoryPathCheckStore(),
+		PathCheckRateLimiter:         newMemorySlidingWindowRateLimiter(DefaultPathCheckRateLimit()),
 		LivenessStore:                NewNoopLivenessStore(),
 		HeartbeatScheduler:           NewPassthroughHeartbeatScheduler(queries),
 		Storage:                      store,

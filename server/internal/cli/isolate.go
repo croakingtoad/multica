@@ -11,8 +11,10 @@ import (
 //
 // TestMain in cmd/multica/cmd_auth_test.go unsets MULTICA_TASK_CONFIG_ROOT but
 // does not pin HOME, so cmd/multica tests that need config isolation use this
-// helper per test. internal/daemon, internal/daemon/execenv, and internal/cli
-// have no TestMain and do the same.
+// helper per test. Tests that deliberately distinguish the owner home from a
+// task-local root pin both roots themselves. internal/daemon,
+// internal/daemon/execenv, and internal/cli have no TestMain and do the same.
+// Because this helper calls t.Setenv, callers must not use t.Parallel.
 //
 // This is the single entry point any test in this repository should use when
 // it wants to read or write the CLI config (CLIConfig, LoadCLIConfig,

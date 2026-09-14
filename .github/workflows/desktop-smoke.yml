@@ -2,6 +2,15 @@ name: Desktop Smoke Build
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Build channel to package (stable = existing smoke behaviour, dev = private Multica Dev installer)"
+        type: choice
+        required: false
+        default: stable
+        options:
+          - stable
+          - dev
 
 permissions:
   contents: read
@@ -17,6 +26,11 @@ jobs:
           - os: windows-latest
             target: win
     runs-on: ${{ matrix.os }}
+    env:
+      # `inputs.channel` is empty when the workflow is dispatched by an API
+      # client that omits the input, so default to stable here as well and
+      # keep the pre-existing stable smoke behaviour the no-input default.
+      MULTICA_CHANNEL: ${{ inputs.channel || 'stable' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,16 +62,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Package Desktop installers (${{ matrix.target }})
+      - name: Package Desktop installers (${{ matrix.target }}, ${{ env.MULTICA_CHANNEL }})
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           MULTICA_SHARED_STATE_COMPAT: "stable"
+        # `--publish never`: this workflow never pushes to GitHub Releases.
+        # The dev channel in particular is a private build distributed only as
+        # a workflow artifact.
         run: node scripts/package.mjs --${{ matrix.target }} --x64 --arm64 --publish never
 
-      - name: Upload Desktop artifacts (${{ matrix.target }})
+      - name: Upload Desktop artifacts (${{ matrix.target }}, ${{ env.MULTICA_CHANNEL }})
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.target }}
+          # Stable keeps its historical artifact name; dev gets its own so a
+          # dev run can never be mistaken for the stable smoke output.
+          name: desktop-${{ matrix.target }}${{ env.MULTICA_CHANNEL == 'dev' && '-dev' || '' }}
           path: apps/desktop/dist
           if-no-files-found: error
