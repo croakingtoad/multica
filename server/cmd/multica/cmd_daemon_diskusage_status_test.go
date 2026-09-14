@@ -174,8 +174,7 @@ func TestDiskUsageNeedsParentStatus(t *testing.T) {
 // resolve nothing, so an unreachable server cannot make a local diagnostic hang.
 func TestRunDaemonDiskUsageByWorkspaceTableMakesNoRequest(t *testing.T) {
 	pinHumanCLIContext(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 	t.Setenv("MULTICA_SERVER_URL", "")
 
@@ -205,8 +204,7 @@ func TestRunDaemonDiskUsageByWorkspaceTableMakesNoRequest(t *testing.T) {
 // default per-task view does resolve, and the status reaches the rendered table.
 func TestRunDaemonDiskUsageTaskTableResolvesStatus(t *testing.T) {
 	pinHumanCLIContext(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 	t.Setenv("MULTICA_SERVER_URL", "")
 
@@ -232,8 +230,7 @@ func TestRunDaemonDiskUsageTaskTableResolvesStatus(t *testing.T) {
 // scripts consuming --output json keep working when the API is down.
 func TestRunDaemonDiskUsageJSONSurvivesServerFailure(t *testing.T) {
 	pinHumanCLIContext(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 	t.Setenv("MULTICA_SERVER_URL", "")
 
@@ -277,8 +274,7 @@ func TestRunDaemonDiskUsageJSONSurvivesServerFailure(t *testing.T) {
 // token, not whichever one happened to be loaded first.
 func TestRunDaemonDiskUsageAllProfilesUsesPerProfileToken(t *testing.T) {
 	pinHumanCLIContext(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := cli.IsolateConfigRoot(t)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 	t.Setenv("MULTICA_SERVER_URL", "")
 
@@ -377,6 +373,7 @@ func setupTaskDiskUsageContext(t *testing.T, home, ownerServerURL string) string
 	t.Helper()
 	t.Chdir(t.TempDir())
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 	t.Setenv("MULTICA_SERVER_URL", "")
 
@@ -481,8 +478,7 @@ func TestResolveDiskUsageRootTaskContext(t *testing.T) {
 	}
 
 	t.Run("outside a task keeps profile resolution", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
+		home := cli.IsolateConfigRoot(t)
 		t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 		t.Setenv(daemon.TaskWorkspacesRootEnv, filepath.Join(t.TempDir(), "ignored"))
 
@@ -498,9 +494,8 @@ func TestResolveDiskUsageRootTaskContext(t *testing.T) {
 
 func TestRunDaemonDiskUsageHonorsProfileWorkspacesRoot(t *testing.T) {
 	pinHumanCLIContext(t)
-	home := t.TempDir()
+	cli.IsolateConfigRoot(t)
 	customRoot := filepath.Join(t.TempDir(), "configured-workspaces")
-	t.Setenv("HOME", home)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 	if err := cli.SaveCLIConfig(cli.CLIConfig{WorkspacesRoot: customRoot}); err != nil {
 		t.Fatalf("SaveCLIConfig: %v", err)
@@ -525,10 +520,9 @@ func TestRunDaemonDiskUsageHonorsProfileWorkspacesRoot(t *testing.T) {
 
 func TestResolveDiskUsageRootEnvOverridesProfileConfig(t *testing.T) {
 	pinHumanCLIContext(t)
-	home := t.TempDir()
+	cli.IsolateConfigRoot(t)
 	configRoot := filepath.Join(t.TempDir(), "configured-workspaces")
 	envRoot := filepath.Join(t.TempDir(), "env-workspaces")
-	t.Setenv("HOME", home)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", envRoot)
 	if err := cli.SaveCLIConfig(cli.CLIConfig{WorkspacesRoot: configRoot}); err != nil {
 		t.Fatalf("SaveCLIConfig: %v", err)
@@ -545,12 +539,11 @@ func TestResolveDiskUsageRootEnvOverridesProfileConfig(t *testing.T) {
 
 func TestEnumerateDiskUsageRootsUsesAndDeduplicatesProfileConfig(t *testing.T) {
 	pinHumanCLIContext(t)
-	home := t.TempDir()
+	cli.IsolateConfigRoot(t)
 	defaultRoot := filepath.Join(t.TempDir(), "default-root")
 	sharedRoot := filepath.Join(t.TempDir(), "shared-root")
 	uniqueRoot := filepath.Join(t.TempDir(), "unique-root")
 	neverRanRoot := filepath.Join(t.TempDir(), "never-ran-root")
-	t.Setenv("HOME", home)
 	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
 
 	configs := []struct {

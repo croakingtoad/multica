@@ -603,6 +603,7 @@
     "pipeline": {
       "stat_percent": "已完成",
       "stat_tasks": "个任务",
+      "part_tasks_other": "个任务",
       "stat_gaps": "个部分未拆解",
       "gate_covered": "关口：{{total}} 个部分中已覆盖 {{covered}} 个",
       "blocked_on_phase": "被 {{title}} 阻塞",

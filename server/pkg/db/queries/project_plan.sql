@@ -49,7 +49,64 @@ WHERE id = $1
   AND workspace_id = $3;
 
 -- name: ListProjectPlanRollups :many
-WITH part_rollup AS (
+-- A part's task counts span every linked issue AND its whole sub-issue subtree,
+-- at any depth: the epic is one task and each of its sub-issues is another, so
+-- progress rolls up without every child having to be linked by hand.
+-- membership_rows still counts only explicitly linked issues, which keeps
+-- parts_covered / parts_without_tasks untouched.
+--
+-- The recursion is cycle-safe: parent_issue_id is not guaranteed acyclic, and
+-- part_subtree.path carries the nodes already expanded on the current
+-- root-to-node path, so a corrupt cycle can never re-expand a node. Each issue
+-- has at most one parent, so the path bounds the recursion. An issue a part
+-- reaches through more than one link (e.g. both an epic and one of its own
+-- children) is counted once via COUNT(DISTINCT).
+WITH RECURSIVE
+part_links AS (
+    SELECT
+        link.project_plan_part_id AS part_id,
+        anchor.id AS issue_id,
+        anchor.status
+    FROM project_plan_part_issue AS link
+    JOIN issue AS anchor
+      ON anchor.id = link.issue_id
+     AND anchor.workspace_id = sqlc.arg('workspace_id')
+     AND anchor.project_id = sqlc.arg('project_id')
+    WHERE link.project_plan_id = sqlc.arg('project_plan_id')
+),
+part_subtree(part_id, issue_id, status, path) AS (
+    SELECT part_id, issue_id, status, ARRAY[issue_id]
+    FROM part_links
+    UNION ALL
+    SELECT
+        s.part_id,
+        child.id,
+        child.status,
+        s.path || child.id
+    FROM part_subtree AS s
+    JOIN issue AS child
+      ON child.parent_issue_id = s.issue_id
+     AND child.workspace_id = sqlc.arg('workspace_id')
+     AND child.project_id = sqlc.arg('project_id')
+    WHERE NOT child.id = ANY(s.path)
+),
+part_tasks AS (
+    SELECT
+        part_id,
+        COUNT(DISTINCT issue_id) FILTER (
+            WHERE issue_effective_status(sqlc.arg('workspace_id'), status) <> 'cancelled'
+        )::bigint AS tasks_total,
+        COUNT(DISTINCT issue_id) FILTER (
+            WHERE issue_effective_status(sqlc.arg('workspace_id'), status) = 'done'
+        )::bigint AS tasks_done,
+        COUNT(DISTINCT issue_id) FILTER (
+            WHERE issue_effective_status(sqlc.arg('workspace_id'), status)
+                NOT IN ('backlog', 'todo', 'cancelled')
+        )::bigint AS tasks_started
+    FROM part_subtree
+    GROUP BY part_id
+),
+part_rollup AS (
     SELECT
         part.id,
         part.project_plan_id,
@@ -62,24 +119,15 @@ WITH part_rollup AS (
         part.created_at,
         part.updated_at,
         COUNT(link.id)::bigint AS membership_rows,
-        COUNT(issue.id) FILTER (
-            WHERE issue_effective_status(issue.workspace_id, issue.status) <> 'cancelled'
-        )::bigint AS tasks_total,
-        COUNT(issue.id) FILTER (
-            WHERE issue_effective_status(issue.workspace_id, issue.status) = 'done'
-        )::bigint AS tasks_done,
-        COUNT(issue.id) FILTER (
-            WHERE issue_effective_status(issue.workspace_id, issue.status)
-                NOT IN ('backlog', 'todo', 'cancelled')
-        )::bigint AS tasks_started
+        COALESCE(tasks.tasks_total, 0)::bigint AS tasks_total,
+        COALESCE(tasks.tasks_done, 0)::bigint AS tasks_done,
+        COALESCE(tasks.tasks_started, 0)::bigint AS tasks_started
     FROM project_plan_part AS part
     LEFT JOIN project_plan_part_issue AS link
       ON link.project_plan_id = part.project_plan_id
      AND link.project_plan_part_id = part.id
-    LEFT JOIN issue
-      ON issue.id = link.issue_id
-     AND issue.workspace_id = sqlc.arg('workspace_id')
-     AND issue.project_id = sqlc.arg('project_id')
+    LEFT JOIN part_tasks AS tasks
+      ON tasks.part_id = part.id
     WHERE part.project_plan_id = sqlc.arg('project_plan_id')
     GROUP BY
         part.id,
@@ -91,7 +139,10 @@ WITH part_rollup AS (
         part.attributes,
         part.position,
         part.created_at,
-        part.updated_at
+        part.updated_at,
+        tasks.tasks_total,
+        tasks.tasks_done,
+        tasks.tasks_started
 )
 SELECT
     phase.id AS phase_id,
