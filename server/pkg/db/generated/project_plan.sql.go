@@ -1333,7 +1333,10 @@ type ListProjectPlanRollupsRow struct {
 // has at most one parent, so the path bounds the recursion. An issue a part
 // reaches through more than one link (e.g. both an epic and one of its own
 // children) is counted once via COUNT(DISTINCT).
-// Phase and plan totals apply COUNT(DISTINCT tree.issue_id) across all parts, so they are not the sum of per-part totals when one issue belongs to multiple parts.
+//
+// Phase and plan totals deduplicate an issue when it is reachable through more
+// than one part (e.g. an epic linked to one part and its child linked to
+// another), so they are not the sum of the per-part totals.
 func (q *Queries) ListProjectPlanRollups(ctx context.Context, arg ListProjectPlanRollupsParams) ([]ListProjectPlanRollupsRow, error) {
 	rows, err := q.db.Query(ctx, listProjectPlanRollups, arg.ProjectPlanID, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
