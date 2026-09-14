@@ -1079,10 +1079,12 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		runtimeID                                                                                          string
 		decodeMs, runtimeLookupMs, workspaceCheckMs                                                        int64
 		authMs, updateMs, probeModelMs, popModelMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs int64
+		probePathCheckMs, popPathCheckMs                                                                   int64
 		probeModelTimedOut, probeSkillsTimedOut, probeImportTimedOut                                       bool
+		probePathCheckTimedOut                                                                             bool
 	)
 	defer func() {
-		logHeartbeatEndpointSlow(runtimeID, outcome, authPath, start, decodeMs, runtimeLookupMs, workspaceCheckMs, authMs, updateMs, probeModelMs, popModelMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs, probeModelTimedOut, probeSkillsTimedOut, probeImportTimedOut)
+		logHeartbeatEndpointSlow(runtimeID, outcome, authPath, start, decodeMs, runtimeLookupMs, workspaceCheckMs, authMs, updateMs, probeModelMs, popModelMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs, probePathCheckMs, popPathCheckMs, probeModelTimedOut, probeSkillsTimedOut, probeImportTimedOut, probePathCheckTimedOut)
 	}()
 
 	decodeStart := time.Now()
@@ -1159,6 +1161,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	probeModelTimedOut = m.ProbeModelTimedOut
 	probeSkillsTimedOut = m.ProbeSkillsTimedOut
 	probeImportTimedOut = m.ProbeImportTimedOut
+	probePathCheckMs = m.ProbePathCheckMs
+	popPathCheckMs = m.PopPathCheckMs
+	probePathCheckTimedOut = m.ProbePathCheckTimedOut
 	if err != nil {
 		outcome = "error_update"
 		writeError(w, http.StatusInternalServerError, "heartbeat failed")
@@ -1184,6 +1189,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(ack.PendingLocalSkillImports) > 0 {
 		resp["pending_local_skill_imports"] = ack.PendingLocalSkillImports
+	}
+	if ack.PendingPathCheck != nil {
+		resp["pending_path_check"] = ack.PendingPathCheck
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1346,7 +1354,9 @@ func (h *Handler) recordHeartbeatState(
 // HTTP slow-log can stay structured. The WS path discards them.
 type heartbeatMetrics struct {
 	ProbeModelMs, PopModelMs, ProbeSkillsMs, PopSkillsMs, ProbeImportMs, PopImportMs int64
+	ProbePathCheckMs, PopPathCheckMs                                                 int64
 	ProbeModelTimedOut, ProbeSkillsTimedOut, ProbeImportTimedOut                     bool
+	ProbePathCheckTimedOut                                                           bool
 }
 
 // processHeartbeat pulls pending actions for both HTTP and WebSocket
@@ -1497,6 +1507,35 @@ func (h *Handler) processHeartbeat(ctx context.Context, runtimeID string, suppor
 		}
 	}
 
+	// Probe then claim the daemon path-check queue, same pattern as the
+	// local-skill queues above: bounded probe, unbounded claim.
+	probePathCheckStart := time.Now()
+	probePathCheckCtx, cancelProbePathCheck := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasPathCheck, probeErr := h.PathCheckStore.HasPending(probePathCheckCtx, runtimeID)
+	cancelProbePathCheck()
+	m.ProbePathCheckMs = time.Since(probePathCheckStart).Milliseconds()
+	switch {
+	case probeErr == nil && hasPathCheck:
+		popStart := time.Now()
+		pendingPathCheck, popErr := h.PathCheckStore.PopPending(ctx, runtimeID)
+		m.PopPathCheckMs = time.Since(popStart).Milliseconds()
+		if popErr != nil {
+			slog.Warn("path check PopPending failed", "error", popErr, "runtime_id", runtimeID)
+		} else if pendingPathCheck != nil {
+			ack.PendingPathCheck = &protocol.DaemonHeartbeatPendingPathCheck{
+				ID:   pendingPathCheck.ID,
+				Path: pendingPathCheck.Path,
+			}
+		}
+	case probeErr != nil:
+		if errors.Is(probeErr, context.DeadlineExceeded) || errors.Is(probeErr, context.Canceled) {
+			m.ProbePathCheckTimedOut = true
+			slog.Warn("path check HasPending timed out", "runtime_id", runtimeID, "elapsed_ms", m.ProbePathCheckMs)
+		} else {
+			slog.Warn("path check HasPending failed", "error", probeErr, "runtime_id", runtimeID)
+		}
+	}
+
 	return ack, m, nil
 }
 
@@ -1506,9 +1545,9 @@ func (h *Handler) processHeartbeat(ctx context.Context, runtimeID string, suppor
 // auth_ms is further decomposed into decode_ms, runtime_lookup_ms, and
 // workspace_check_ms; auth_path labels which token kind authenticated the
 // request ("daemon_token", "pat", or "jwt"). Mirrors logClaimEndpointSlow.
-func logHeartbeatEndpointSlow(runtimeID, outcome, authPath string, start time.Time, decodeMs, runtimeLookupMs, workspaceCheckMs, authMs, updateMs, probeModelMs, popModelMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs int64, probeModelTimedOut, probeSkillsTimedOut, probeImportTimedOut bool) {
+func logHeartbeatEndpointSlow(runtimeID, outcome, authPath string, start time.Time, decodeMs, runtimeLookupMs, workspaceCheckMs, authMs, updateMs, probeModelMs, popModelMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs, probePathCheckMs, popPathCheckMs int64, probeModelTimedOut, probeSkillsTimedOut, probeImportTimedOut, probePathCheckTimedOut bool) {
 	totalMs := time.Since(start).Milliseconds()
-	if totalMs < 500 && !probeModelTimedOut && !probeSkillsTimedOut && !probeImportTimedOut {
+	if totalMs < 500 && !probeModelTimedOut && !probeSkillsTimedOut && !probeImportTimedOut && !probePathCheckTimedOut {
 		return
 	}
 	slog.Info("heartbeat_endpoint slow",
@@ -1527,9 +1566,12 @@ func logHeartbeatEndpointSlow(runtimeID, outcome, authPath string, start time.Ti
 		"pop_skills_ms", popSkillsMs,
 		"probe_import_ms", probeImportMs,
 		"pop_import_ms", popImportMs,
+		"probe_path_check_ms", probePathCheckMs,
+		"pop_path_check_ms", popPathCheckMs,
 		"probe_model_timed_out", probeModelTimedOut,
 		"probe_skills_timed_out", probeSkillsTimedOut,
 		"probe_import_timed_out", probeImportTimedOut,
+		"probe_path_check_timed_out", probePathCheckTimedOut,
 	)
 }
 

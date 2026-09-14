@@ -54,6 +54,14 @@ vi.mock("@multica/core/runtimes", () => ({
   runtimeAdvertisesLocalWorktree: () => true,
 }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
+// The section reads the viewing user to scope the machine list to daemons they
+// own. The real store throws until an app registers one.
+vi.mock("@multica/core/auth", () => {
+  const state = { user: { id: "u1" } };
+  const useAuthStore = (selector: (s: typeof state) => unknown) => selector(state);
+  useAuthStore.getState = () => state;
+  return { useAuthStore };
+});
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "workspace-1", slug: "ws", repos: [] }),
 }));
