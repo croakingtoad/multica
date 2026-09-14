@@ -61,6 +61,7 @@ WHERE id = $1
 -- has at most one parent, so the path bounds the recursion. An issue a part
 -- reaches through more than one link (e.g. both an epic and one of its own
 -- children) is counted once via COUNT(DISTINCT).
+-- Phase and plan totals apply COUNT(DISTINCT tree.issue_id) across all parts, so they are not the sum of per-part totals when one issue belongs to multiple parts.
 WITH RECURSIVE
 part_links AS (
     SELECT
