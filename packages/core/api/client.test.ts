@@ -3395,6 +3395,7 @@ describe("ApiClient lifecycle hook reads", () => {
     expect(url).toContain("event=PreToolUse");
     // Encoded, not interpolated raw: a matcher value is arbitrary input.
     expect(url).toContain("value=mcp__fs__read+file");
+  });
 });
 
 // Daemon path checks (LOCO-171). The picker turns this response into "you may
