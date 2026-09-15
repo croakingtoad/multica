@@ -3,9 +3,12 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -44,6 +47,21 @@ func SetMemberContext(ctx context.Context, workspaceID string, member db.Member)
 // (400) from "identifier provided but invalid" (404).
 var errWorkspaceNotFound = errors.New("workspace not found")
 
+// errWorkspaceUnavailable is returned when a workspace lookup fails because
+// its database dependency is unavailable.
+var errWorkspaceUnavailable = errors.New("workspace unavailable")
+
+func workspaceIDBySlug(ctx context.Context, queries *db.Queries, slug string) (string, error) {
+	ws, err := queries.GetWorkspaceBySlug(ctx, slug)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", errWorkspaceNotFound
+		}
+		return "", fmt.Errorf("%w: resolve workspace slug %q: %w", errWorkspaceUnavailable, slug, err)
+	}
+	return util.UUIDToString(ws.ID), nil
+}
+
 // ResolveWorkspaceIDFromRequest returns the workspace UUID for an HTTP
 // request using the same priority order as the workspace middleware. This is
 // the single source of truth for "which workspace is this request targeting?",
@@ -60,11 +78,11 @@ var errWorkspaceNotFound = errors.New("workspace not found")
 //  5. X-Workspace-ID header (CLI/daemon compat)
 //  6. ?workspace_id query (CLI/daemon compat)
 //
-// Returns "" when no identifier was provided OR a slug was provided but
-// doesn't resolve to any workspace. Callers that need to distinguish "no
-// identifier" (400) from "invalid slug" (404) should use the middleware's
-// internal resolver instead — this helper collapses both cases to "" for
-// simpler handler-level checks.
+// Returns "" when no identifier was provided OR a slug lookup fails. Callers
+// that need to distinguish "no identifier" (400), "invalid slug" (404), and
+// an unavailable lookup (503) should use the middleware's internal resolver
+// instead — this helper collapses those cases to "" for simpler handler-level
+// checks.
 func ResolveWorkspaceIDFromRequest(r *http.Request, queries *db.Queries) string {
 	// A mat_ task token is bound to exactly one workspace by the token
 	// row. Auth middleware writes that workspace into X-Workspace-ID
@@ -79,13 +97,23 @@ func ResolveWorkspaceIDFromRequest(r *http.Request, queries *db.Queries) string 
 		return id
 	}
 	if slug := r.Header.Get("X-Workspace-Slug"); slug != "" {
-		if ws, err := queries.GetWorkspaceBySlug(r.Context(), slug); err == nil {
-			return util.UUIDToString(ws.ID)
+		workspaceID, err := workspaceIDBySlug(r.Context(), queries, slug)
+		if err == nil {
+			return workspaceID
+		}
+		if errors.Is(err, errWorkspaceUnavailable) {
+			slog.Error("workspace resolution unavailable", "error", err)
+			return ""
 		}
 	}
 	if slug := r.URL.Query().Get("workspace_slug"); slug != "" {
-		if ws, err := queries.GetWorkspaceBySlug(r.Context(), slug); err == nil {
-			return util.UUIDToString(ws.ID)
+		workspaceID, err := workspaceIDBySlug(r.Context(), queries, slug)
+		if err == nil {
+			return workspaceID
+		}
+		if errors.Is(err, errWorkspaceUnavailable) {
+			slog.Error("workspace resolution unavailable", "error", err)
+			return ""
 		}
 	}
 	if id := r.Header.Get("X-Workspace-ID"); id != "" {
@@ -97,6 +125,7 @@ func ResolveWorkspaceIDFromRequest(r *http.Request, queries *db.Queries) string 
 // workspaceResolver extracts a workspace UUID from the request.
 // Returns ("", nil) if no workspace identifier was provided at all.
 // Returns ("", errWorkspaceNotFound) if a slug was provided but doesn't exist.
+// Returns ("", errWorkspaceUnavailable) if the workspace lookup failed.
 // Returns (uuid, nil) on success.
 type workspaceResolver func(r *http.Request) (string, error)
 
@@ -125,18 +154,10 @@ func resolveWorkspaceUUID(queries *db.Queries) workspaceResolver {
 		}
 		// Slug path (preferred — frontend sends this after the URL refactor)
 		if slug := r.URL.Query().Get("workspace_slug"); slug != "" {
-			ws, err := queries.GetWorkspaceBySlug(r.Context(), slug)
-			if err != nil {
-				return "", errWorkspaceNotFound
-			}
-			return util.UUIDToString(ws.ID), nil
+			return workspaceIDBySlug(r.Context(), queries, slug)
 		}
 		if slug := r.Header.Get("X-Workspace-Slug"); slug != "" {
-			ws, err := queries.GetWorkspaceBySlug(r.Context(), slug)
-			if err != nil {
-				return "", errWorkspaceNotFound
-			}
-			return util.UUIDToString(ws.ID), nil
+			return workspaceIDBySlug(r.Context(), queries, slug)
 		}
 		// UUID fallback (CLI, daemon, legacy clients)
 		if id := r.URL.Query().Get("workspace_id"); id != "" {
@@ -197,7 +218,12 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			workspaceID, resolveErr := resolve(r)
 			if resolveErr != nil {
-				writeError(w, http.StatusNotFound, "workspace not found")
+				if errors.Is(resolveErr, errWorkspaceNotFound) {
+					writeError(w, http.StatusNotFound, "workspace not found")
+					return
+				}
+				slog.Error("workspace resolution unavailable", "error", resolveErr)
+				writeError(w, http.StatusServiceUnavailable, "workspace unavailable")
 				return
 			}
 			if workspaceID == "" {
@@ -240,7 +266,12 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 				WorkspaceID: wsUUID,
 			})
 			if err != nil {
-				writeError(w, http.StatusNotFound, "workspace not found")
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeError(w, http.StatusNotFound, "workspace not found")
+					return
+				}
+				slog.Error("workspace membership lookup unavailable", "error", err)
+				writeError(w, http.StatusServiceUnavailable, "workspace unavailable")
 				return
 			}
 
