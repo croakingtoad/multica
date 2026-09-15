@@ -2,6 +2,8 @@ import "@testing-library/jest-dom/vitest";
 
 type StorageName = "localStorage" | "sessionStorage";
 
+// Keep this installer aligned with packages/core/test/setup.ts,
+// apps/web/test/setup.ts, and apps/desktop/test/setup.ts; all four change together.
 function createMemoryStorage(name: StorageName): Storage {
   // A same-origin frame still exposes jsdom's real in-memory Storage when
   // Node's broken global shadows the top-level one.

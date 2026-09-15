@@ -1,18 +1,22 @@
 type StorageName = "localStorage" | "sessionStorage";
 
+// Keep this installer aligned with packages/views/test/setup.ts,
+// apps/web/test/setup.ts, and apps/desktop/test/setup.ts; all four change together.
 function createMemoryStorage(name: StorageName): Storage {
-  // A same-origin frame still exposes jsdom's real in-memory Storage when
-  // Node's broken global shadows the top-level one.
+  // This setup requires jsdom to use a tuple origin. An opaque origin such as
+  // about:blank makes the frame's Web Storage access throw and aborts import.
   const frame = document.createElement("iframe");
   document.documentElement.append(frame);
   const storage = frame.contentWindow![name];
+  // The frame has its own Storage.prototype, so use the top realm's prototype
+  // for instanceof checks and Storage.prototype spies.
   Object.setPrototypeOf(storage, Storage.prototype);
   frame.remove();
   return storage;
 }
 
 function installMemoryStorage(name: StorageName) {
-  if (window[name] instanceof Storage) {
+  if (globalThis[name] instanceof Storage) {
     return;
   }
 
