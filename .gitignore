@@ -8,6 +8,7 @@ dist
 .turbo
 .next
 apps/web/next-env.d.ts
+apps/docs/next-env.d.ts
 out
 build
 bin
