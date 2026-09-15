@@ -1219,6 +1219,34 @@ part_rollup AS (
         tasks.tasks_total,
         tasks.tasks_done,
         tasks.tasks_started
+),
+phase_tasks AS (
+    SELECT
+        part.project_plan_phase_id AS phase_id,
+        COUNT(DISTINCT tree.issue_id) FILTER (
+            WHERE issue_effective_status($2, tree.status) <> 'cancelled'
+        )::bigint AS tasks_total,
+        COUNT(DISTINCT tree.issue_id) FILTER (
+            WHERE issue_effective_status($2, tree.status) = 'done'
+        )::bigint AS tasks_done
+    FROM project_plan_part AS part
+    JOIN part_subtree AS tree
+      ON tree.part_id = part.id
+    WHERE part.project_plan_id = $1
+    GROUP BY part.project_plan_phase_id
+),
+plan_tasks AS (
+    SELECT
+        COUNT(DISTINCT tree.issue_id) FILTER (
+            WHERE issue_effective_status($2, tree.status) <> 'cancelled'
+        )::bigint AS tasks_total,
+        COUNT(DISTINCT tree.issue_id) FILTER (
+            WHERE issue_effective_status($2, tree.status) = 'done'
+        )::bigint AS tasks_done
+    FROM project_plan_part AS part
+    JOIN part_subtree AS tree
+      ON tree.part_id = part.id
+    WHERE part.project_plan_id = $1
 )
 SELECT
     phase.id AS phase_id,
@@ -1240,10 +1268,10 @@ SELECT
     COALESCE(part.tasks_total, 0)::bigint AS part_tasks_total,
     COALESCE(part.tasks_done, 0)::bigint AS part_tasks_done,
     COALESCE(part.tasks_started, 0)::bigint AS part_tasks_started,
-    COALESCE(SUM(part.tasks_total) OVER (PARTITION BY phase.id), 0)::bigint AS phase_tasks_total,
-    COALESCE(SUM(part.tasks_done) OVER (PARTITION BY phase.id), 0)::bigint AS phase_tasks_done,
-    COALESCE(SUM(part.tasks_total) OVER (), 0)::bigint AS plan_tasks_total,
-    COALESCE(SUM(part.tasks_done) OVER (), 0)::bigint AS plan_tasks_done,
+    COALESCE(phase_tasks.tasks_total, 0)::bigint AS phase_tasks_total,
+    COALESCE(phase_tasks.tasks_done, 0)::bigint AS phase_tasks_done,
+    COALESCE(plan_tasks.tasks_total, 0)::bigint AS plan_tasks_total,
+    COALESCE(plan_tasks.tasks_done, 0)::bigint AS plan_tasks_done,
     COUNT(part.id) OVER ()::bigint AS plan_parts_total,
     COUNT(part.id) FILTER (WHERE part.membership_rows > 0) OVER ()::bigint AS plan_parts_covered,
     COUNT(part.id) FILTER (WHERE part.membership_rows = 0) OVER ()::bigint AS plan_parts_without_tasks
@@ -1251,6 +1279,9 @@ FROM project_plan_phase AS phase
 LEFT JOIN part_rollup AS part
   ON part.project_plan_id = phase.project_plan_id
  AND part.project_plan_phase_id = phase.id
+LEFT JOIN phase_tasks
+  ON phase_tasks.phase_id = phase.id
+LEFT JOIN plan_tasks ON TRUE
 WHERE phase.project_plan_id = $1
 ORDER BY phase.position, part.position NULLS LAST, part.id
 `
@@ -1302,6 +1333,7 @@ type ListProjectPlanRollupsRow struct {
 // has at most one parent, so the path bounds the recursion. An issue a part
 // reaches through more than one link (e.g. both an epic and one of its own
 // children) is counted once via COUNT(DISTINCT).
+// Phase and plan totals apply COUNT(DISTINCT tree.issue_id) across all parts, so they are not the sum of per-part totals when one issue belongs to multiple parts.
 func (q *Queries) ListProjectPlanRollups(ctx context.Context, arg ListProjectPlanRollupsParams) ([]ListProjectPlanRollupsRow, error) {
 	rows, err := q.db.Query(ctx, listProjectPlanRollups, arg.ProjectPlanID, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
