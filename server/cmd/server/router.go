@@ -444,6 +444,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	invitationRateLimits.Workspace.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_WORKSPACE_24H", invitationRateLimits.Workspace.Limit)
 	invitationRateLimits.Recipient.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_RECIPIENT_24H", invitationRateLimits.Recipient.Limit)
 	h.InvitationRateLimiters = handler.NewMemoryInvitationRateLimiters(invitationRateLimits)
+	pathCheckRateLimit := handler.DefaultPathCheckRateLimit()
+	pathCheckRateLimit.Limit = envPositiveInt("RATE_LIMIT_PATH_CHECK", pathCheckRateLimit.Limit)
+	h.PathCheckRateLimiter = handler.NewMemoryPathCheckRateLimiter(pathCheckRateLimit)
 	h.Metrics = opts.BusinessMetrics
 	h.FeatureFlags = opts.FeatureFlags
 	h.TaskService.FeatureFlags = opts.FeatureFlags
@@ -507,6 +510,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.WebhookIPRateLimiter = handler.NewRedisWebhookIPRateLimiter(rdb, handler.DefaultWebhookIPRateLimit())
 		h.WebhookAbsoluteIPRateLimiter = handler.NewRedisWebhookAbsoluteIPRateLimiter(rdb, handler.DefaultWebhookAbsoluteIPRateLimit())
 		h.InvitationRateLimiters = handler.NewRedisInvitationRateLimiters(rdb, invitationRateLimits)
+		h.PathCheckStore = handler.NewRedisPathCheckStore(rdb)
+		h.PathCheckRateLimiter = handler.NewRedisPathCheckRateLimiter(rdb, pathCheckRateLimit)
 	}
 
 	// Channel engine (MUL-3620): the platform-agnostic inbound runtime.
@@ -1464,6 +1469,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
+		r.Post("/runtimes/{runtimeId}/path-checks/{requestId}/result", h.ReportDaemonPathCheckResult)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -1564,6 +1570,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// because they are JSON-API consumers that always have
 		// workspace context.
 		r.Get("/api/attachments/{id}/download", h.DownloadAttachment)
+
+		// Daemon path checks (LOCO-1772): the project file picker asks ONE
+		// of the caller's online daemons whether an absolute path is a
+		// usable directory. Owner-gated inside the handler (not workspace
+		// membership): a second member gets 404, never a result.
+		r.Route("/api/workspaces/{workspaceId}/daemons/{daemonId}/path-checks", func(r chi.Router) {
+			r.Post("/", h.InitiateDaemonPathCheck)
+			r.Get("/{requestId}", h.GetDaemonPathCheck)
+		})
 
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
