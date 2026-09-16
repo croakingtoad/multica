@@ -17,6 +17,8 @@ export default defineConfig({
   test: {
     globals: true,
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
+    // Keep jsdom on a tuple origin: test/setup.ts reads Web Storage from a
+    // same-origin frame, and an opaque URL such as about:blank throws here.
     environment: "jsdom",
     setupFiles: ["./test/setup.ts"],
     passWithNoTests: true,

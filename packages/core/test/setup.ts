@@ -1,9 +1,7 @@
-import "@testing-library/jest-dom/vitest";
-
 type StorageName = "localStorage" | "sessionStorage";
 
-// Keep this installer aligned with packages/core/test/setup.ts,
-// packages/views/test/setup.ts, and apps/desktop/test/setup.ts; all four change together.
+// Keep this installer aligned with packages/views/test/setup.ts,
+// apps/web/test/setup.ts, and apps/desktop/test/setup.ts; all four change together.
 function createMemoryStorage(name: StorageName): Storage {
   // A same-origin frame still exposes jsdom's real in-memory Storage when
   // Node's broken global shadows the top-level one. That requires jsdom to be
@@ -35,25 +33,9 @@ function installMemoryStorage(name: StorageName) {
   });
 }
 
-// Everything below patches gaps in jsdom. Pure-logic suites opt out of jsdom
-// with `// @vitest-environment node` and share this file, so there is no DOM to
-// patch there — bail out rather than guard each stub.
+// Pure-logic suites use Vitest's default node environment, so there is no DOM
+// to patch. Suites that exercise browser persistence opt into jsdom per file.
 if (typeof window !== "undefined") {
-  // jsdom doesn't provide ResizeObserver; stub it so components that rely on it
-  // (e.g. input-otp) can render in tests.
-  if (typeof globalThis.ResizeObserver === "undefined") {
-    globalThis.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    } as unknown as typeof ResizeObserver;
-  }
-
-  // jsdom doesn't implement elementFromPoint; input-otp uses it internally.
-  if (typeof document.elementFromPoint !== "function") {
-    document.elementFromPoint = () => null;
-  }
-
   installMemoryStorage("localStorage");
   installMemoryStorage("sessionStorage");
 }
