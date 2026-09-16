@@ -1,29 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useCommentDraftStore } from "./comment-draft-store";
 import { setCurrentWorkspace } from "../../platform/workspace-storage";
 import type { Attachment } from "../../types";
 
 const flush = () => new Promise((resolve) => queueMicrotask(() => resolve(null)));
-
-// Node 25 ships a partial `localStorage` shim under jsdom that's missing
-// `clear`/`removeItem`; replace it with a real in-memory Storage so persist
-// can round-trip values.
-beforeAll(() => {
-  if (typeof globalThis.localStorage?.clear !== "function") {
-    const values = new Map<string, string>();
-    const storage: Storage = {
-      get length() { return values.size; },
-      clear: () => values.clear(),
-      getItem: (k) => values.get(k) ?? null,
-      key: (i) => Array.from(values.keys())[i] ?? null,
-      removeItem: (k) => { values.delete(k); },
-      setItem: (k, v) => { values.set(k, v); },
-    };
-    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
-    Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
-  }
-});
 
 function makeAttachment(id: string): Attachment {
   return {
