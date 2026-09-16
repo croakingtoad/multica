@@ -103,7 +103,6 @@ func ResolveWorkspaceIDFromRequest(r *http.Request, queries *db.Queries) string 
 		}
 		if errors.Is(err, errWorkspaceUnavailable) {
 			slog.Error("workspace resolution unavailable", "error", err)
-			return ""
 		}
 	}
 	if slug := r.URL.Query().Get("workspace_slug"); slug != "" {
@@ -113,7 +112,6 @@ func ResolveWorkspaceIDFromRequest(r *http.Request, queries *db.Queries) string 
 		}
 		if errors.Is(err, errWorkspaceUnavailable) {
 			slog.Error("workspace resolution unavailable", "error", err)
-			return ""
 		}
 	}
 	if id := r.Header.Get("X-Workspace-ID"); id != "" {

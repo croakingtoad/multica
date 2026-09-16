@@ -263,13 +263,14 @@ func TestWorkspaceMiddlewareResolutionStatus(t *testing.T) {
 		}
 	})
 
-	t.Run("resolver does not fall back after database failure", func(t *testing.T) {
+	t.Run("resolver falls back after database failure", func(t *testing.T) {
+		const fallbackWorkspaceID = "00000000-0000-0000-0000-000000000001"
 		req := httptest.NewRequest(http.MethodGet, "/api/anything", nil)
 		req.Header.Set("X-Workspace-Slug", "anything")
-		req.Header.Set("X-Workspace-ID", "00000000-0000-0000-0000-000000000001")
+		req.Header.Set("X-Workspace-ID", fallbackWorkspaceID)
 
-		if got := ResolveWorkspaceIDFromRequest(req, queries); got != "" {
-			t.Fatalf("expected empty workspace ID after database failure, got %q", got)
+		if got := ResolveWorkspaceIDFromRequest(req, queries); got != fallbackWorkspaceID {
+			t.Fatalf("expected fallback workspace ID %q after database failure, got %q", fallbackWorkspaceID, got)
 		}
 	})
 }
