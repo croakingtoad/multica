@@ -12,6 +12,28 @@ import type {
 } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 
+async function withTimeZone(zone: string, fn: () => Promise<void>) {
+  const originalDateTimeFormat = Intl.DateTimeFormat;
+
+  Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
+    constructor(
+      locales?: string | string[],
+      options?: Intl.DateTimeFormatOptions,
+    ) {
+      super(
+        locales,
+        options?.timeZone ? options : { ...options, timeZone: zone },
+      );
+    }
+  } as typeof Intl.DateTimeFormat;
+
+  try {
+    await fn();
+  } finally {
+    Intl.DateTimeFormat = originalDateTimeFormat;
+  }
+}
+
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
   checkout: vi.fn(),
@@ -1332,6 +1354,46 @@ describe("BillingTab", () => {
       screen.queryByText(/subscription is scheduled to cancel on Mar 1, 2030/),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/Pro remains available/)).not.toBeInTheDocument();
+  });
+
+  it("renders subscription dates in UTC west of UTC", async () => {
+    Object.assign(mocks.entitlements, {
+      plan: "pro",
+      status: "active",
+      currentPeriodEnd: "2030-02-15T00:00:00Z",
+    });
+    Object.assign(mocks.summary, {
+      graceUntil: null,
+      cancelAtPeriodEnd: false,
+      hasStripeCustomer: true,
+    });
+    setSeatCapacity();
+
+    await withTimeZone("America/New_York", async () => {
+      renderWithI18n(<BillingTab />);
+
+      expect(screen.getByText("Feb 15, 2030")).toBeInTheDocument();
+    });
+  });
+
+  it("renders subscription dates in UTC east of UTC", async () => {
+    Object.assign(mocks.entitlements, {
+      plan: "pro",
+      status: "active",
+      currentPeriodEnd: "2030-04-01T23:00:00Z",
+    });
+    Object.assign(mocks.summary, {
+      graceUntil: null,
+      cancelAtPeriodEnd: false,
+      hasStripeCustomer: true,
+    });
+    setSeatCapacity();
+
+    await withTimeZone("Asia/Tokyo", async () => {
+      renderWithI18n(<BillingTab />);
+
+      expect(screen.getByText("Apr 1, 2030")).toBeInTheDocument();
+    });
   });
 
   it("shows Cloud's explicit unlimited limits on a normal load", () => {
