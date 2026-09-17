@@ -3339,10 +3339,11 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 	}
 	refreshUntouchedNullableIssueParams(&params, current, rawFields)
 
-	issue, err := qtx.UpdateIssue(ctx, params)
+	updated, err := qtx.UpdateIssue(ctx, params)
 	if err != nil {
 		return db.Issue{}, current, false, fmt.Errorf("update locked issue: %w", err)
 	}
+	issue := updated.Issue()
 
 	attachmentsChanged := false
 	if len(attachmentIDs) > 0 {
@@ -3380,6 +3381,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := requestUserID(r)
 	workspaceID := uuidToString(prevIssue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	writeAudit := h.issueWriteAuditFromRequest(r, actorType, actorID, issueUpdateEndpoint)
 
 	// Read body as raw bytes so we can detect which fields were explicitly sent.
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -3409,12 +3412,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		ProjectID:     prevIssue.ProjectID,
 		Stage:         prevIssue.Stage,
 	}
+	applyIssueWriteAudit(&params, writeAudit)
 	if req.ExpectedRevision != nil {
 		if *req.ExpectedRevision < 1 {
 			writeError(w, http.StatusBadRequest, "expected_revision must be a positive integer")
 			return
 		}
 		if prevIssue.Revision != *req.ExpectedRevision {
+			if err := h.recordIssueRevisionConflict(r.Context(), prevIssue, req, *req.ExpectedRevision, writeAudit); err != nil {
+				slog.Error("record issue revision conflict", append(logger.RequestAttrs(r), "error", err, "issue_id", id)...)
+				writeError(w, http.StatusInternalServerError, "failed to record issue revision conflict")
+				return
+			}
 			writeRevisionConflict(w, "issue", prevIssue.ID, *req.ExpectedRevision, prevIssue.Revision)
 			return
 		}
@@ -3592,7 +3601,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	var issue db.Issue
 	attachmentsChanged := false
-	if req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
+	if req.Title != nil || req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
 		var lockedPrev db.Issue
 		issue, lockedPrev, attachmentsChanged, err = h.updateIssueAtomically(
 			r.Context(), prevIssue.WorkspaceID, params, rawFields, req.TitleBase, req.DescriptionBase, attachmentIDs, statusKeyForGuard,
@@ -3603,7 +3612,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = h.runWithIssueStatusGuard(r.Context(), prevIssue.WorkspaceID, statusKeyForGuard, func(q *db.Queries) error {
 			var innerErr error
-			issue, innerErr = q.UpdateIssue(r.Context(), params)
+			updated, updateErr := q.UpdateIssue(r.Context(), params)
+			issue, innerErr = updated.Issue(), updateErr
 			return innerErr
 		})
 	}
@@ -3618,6 +3628,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, pgx.ErrNoRows) && req.ExpectedRevision != nil {
 			current, reloadErr := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: prevIssue.ID, WorkspaceID: prevIssue.WorkspaceID})
 			if reloadErr == nil {
+				if auditErr := h.recordIssueRevisionConflict(r.Context(), current, req, *req.ExpectedRevision, writeAudit); auditErr != nil {
+					slog.Error("record raced issue revision conflict", append(logger.RequestAttrs(r), "error", auditErr, "issue_id", id)...)
+					writeError(w, http.StatusInternalServerError, "failed to record issue revision conflict")
+					return
+				}
 				writeRevisionConflict(w, "issue", current.ID, *req.ExpectedRevision, current.Revision)
 				return
 			}
@@ -3626,9 +3641,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update issue: "+err.Error())
 		return
 	}
-
-	// Determine actor identity: agent (via X-Agent-ID header) or member.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
@@ -4180,6 +4192,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	var childDoneCompleted []db.Issue
 	var childAttentionNeeded []db.Issue
 	batchActorType, batchActorID := h.resolveActor(r, userID, workspaceID)
+	batchWriteAudit := h.issueWriteAuditFromRequest(r, batchActorType, batchActorID, issueBatchUpdateEndpoint)
 	for _, issueID := range req.IssueIDs {
 		issueUUID, err := util.ParseUUID(issueID)
 		if err != nil {
@@ -4203,6 +4216,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			ProjectID:     prevIssue.ProjectID,
 			Stage:         prevIssue.Stage,
 		}
+		applyIssueWriteAudit(&params, batchWriteAudit)
 
 		if req.Updates.Title != nil {
 			params.Title = pgtype.Text{String: *req.Updates.Title, Valid: true}
@@ -4332,7 +4346,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var issue db.Issue
-		if req.Updates.Description != nil {
+		if req.Updates.Description != nil || req.Updates.Title != nil {
 			// One batch-level base cannot describe multiple issue documents.
 			// Preserve every marked channel-media block conservatively, matching
 			// legacy single-update clients that omit description_base.
@@ -4346,7 +4360,8 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		} else {
 			err = h.runWithIssueStatusGuard(r.Context(), wsUUID, batchStatusKey, func(q *db.Queries) error {
 				var innerErr error
-				issue, innerErr = q.UpdateIssue(r.Context(), params)
+				updated, updateErr := q.UpdateIssue(r.Context(), params)
+				issue, innerErr = updated.Issue(), updateErr
 				return innerErr
 			})
 		}

@@ -933,6 +933,35 @@ type IssueViewPreference struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type IssueWriteAudit struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	ActorType           string             `json:"actor_type"`
+	ActorID             pgtype.UUID        `json:"actor_id"`
+	SourceTaskID        pgtype.UUID        `json:"source_task_id"`
+	ClientPlatform      string             `json:"client_platform"`
+	ClientVersion       pgtype.Text        `json:"client_version"`
+	ClientOs            pgtype.Text        `json:"client_os"`
+	Endpoint            string             `json:"endpoint"`
+	RequestedFields     []string           `json:"requested_fields"`
+	ChangedFields       []string           `json:"changed_fields"`
+	OldTitleBytes       pgtype.Int8        `json:"old_title_bytes"`
+	NewTitleBytes       pgtype.Int8        `json:"new_title_bytes"`
+	OldTitleHash        pgtype.Text        `json:"old_title_hash"`
+	NewTitleHash        pgtype.Text        `json:"new_title_hash"`
+	OldDescriptionBytes pgtype.Int8        `json:"old_description_bytes"`
+	NewDescriptionBytes pgtype.Int8        `json:"new_description_bytes"`
+	OldDescriptionHash  pgtype.Text        `json:"old_description_hash"`
+	NewDescriptionHash  pgtype.Text        `json:"new_description_hash"`
+	ExpectedRevision    pgtype.Int8        `json:"expected_revision"`
+	RevisionBefore      int64              `json:"revision_before"`
+	RevisionAfter       int64              `json:"revision_after"`
+	RevisionConflict    bool               `json:"revision_conflict"`
+	Outcome             string             `json:"outcome"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
 type LarkBindingToken struct {
 	TokenHash      string             `json:"token_hash"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

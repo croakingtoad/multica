@@ -321,6 +321,8 @@ var concurrentIndexCleanups = map[string]string{
 	"477_project_plan_part_id_index":                            "idx_project_plan_part_id",
 	"478_project_plan_part_issue_id_index":                      "idx_project_plan_part_issue_id",
 	"479_project_plan_dependency_id_index":                      "idx_project_plan_dependency_id",
+	"481_issue_write_audit_id_index":                            "idx_issue_write_audit_id",
+	"482_issue_write_audit_issue_created_index":                 "idx_issue_write_audit_issue_created",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction
