@@ -172,7 +172,8 @@ func (a dbSessionQueries) UpdateChatMessageContentForChannelMedia(ctx context.Co
 	return a.q.UpdateChatMessageContentForChannelMedia(ctx, arg)
 }
 func (a dbSessionQueries) MaterializeIssueChannelMediaMarkdown(ctx context.Context, arg db.MaterializeIssueChannelMediaMarkdownParams) (db.Issue, error) {
-	return a.q.MaterializeIssueChannelMediaMarkdown(ctx, arg)
+	row, err := a.q.MaterializeIssueChannelMediaMarkdown(ctx, arg)
+	return row.Issue(), err
 }
 func (a dbSessionQueries) CreateAttachment(ctx context.Context, arg db.CreateAttachmentParams) (db.Attachment, error) {
 	created, err := a.q.CreateAttachment(ctx, arg)

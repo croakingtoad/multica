@@ -1558,27 +1558,94 @@ func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id pgtype.UUID) (M
 }
 
 const materializeIssueChannelMediaMarkdown = `-- name: MaterializeIssueChannelMediaMarkdown :one
+WITH previous AS (
+    SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at FROM issue
+    WHERE issue.id = $1 AND issue.workspace_id = $2
+    FOR UPDATE
+), updated AS (
 UPDATE issue
 SET description = CASE
-        WHEN $1::text IS NOT NULL
-             AND COALESCE(description, '') = $1::text
-            THEN $2::text
-        WHEN description IS NULL OR description = '' THEN $3
-        ELSE description || E'\n\n' || $3
+        WHEN $3::text IS NOT NULL
+             AND COALESCE(previous.description, '') = $3::text
+            THEN $4::text
+        WHEN previous.description IS NULL OR previous.description = '' THEN $5
+        ELSE previous.description || E'\n\n' || $5
     END,
-    revision = revision + 1,
+    revision = previous.revision + 1,
     updated_at = now()
-WHERE id = $4
-  AND workspace_id = $5
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at
+FROM previous
+WHERE issue.id = previous.id
+  AND issue.workspace_id = previous.workspace_id
+RETURNING issue.id, issue.workspace_id, issue.title, issue.description, issue.status, issue.priority, issue.assignee_type, issue.assignee_id, issue.creator_type, issue.creator_id, issue.parent_issue_id, issue.acceptance_criteria, issue.context_refs, issue.position, issue.due_date, issue.created_at, issue.updated_at, issue.number, issue.project_id, issue.origin_type, issue.origin_id, issue.first_executed_at, issue.start_date, issue.metadata, issue.stage, issue.properties, issue.revision, issue.last_activity_at
+), audit AS (
+    INSERT INTO issue_write_audit (
+        workspace_id, issue_id, actor_type, actor_id, source_task_id,
+        client_platform, client_version, client_os, endpoint,
+        requested_fields, changed_fields,
+        old_description_bytes, new_description_bytes,
+        old_description_hash, new_description_hash,
+        expected_revision, revision_before, revision_after,
+        revision_conflict, outcome
+    )
+    SELECT
+        updated.workspace_id, updated.id, 'system', NULL, NULL,
+        'internal', NULL, NULL, 'channel_media_materialization',
+        ARRAY['description']::text[],
+        CASE WHEN previous.description IS DISTINCT FROM updated.description
+            THEN ARRAY['description']::text[] ELSE ARRAY[]::text[] END,
+        octet_length(COALESCE(previous.description, ''))::bigint,
+        octet_length(COALESCE(updated.description, ''))::bigint,
+        encode(sha256(convert_to(COALESCE(previous.description, ''), 'UTF8')), 'hex'),
+        encode(sha256(convert_to(COALESCE(updated.description, ''), 'UTF8')), 'hex'),
+        NULL, previous.revision, updated.revision, false,
+        CASE WHEN previous.description IS DISTINCT FROM updated.description
+            THEN 'applied' ELSE 'no_change' END
+    FROM updated
+    JOIN previous ON previous.id = updated.id
+    RETURNING id
+)
+SELECT updated.id, updated.workspace_id, updated.title, updated.description, updated.status, updated.priority, updated.assignee_type, updated.assignee_id, updated.creator_type, updated.creator_id, updated.parent_issue_id, updated.acceptance_criteria, updated.context_refs, updated.position, updated.due_date, updated.created_at, updated.updated_at, updated.number, updated.project_id, updated.origin_type, updated.origin_id, updated.first_executed_at, updated.start_date, updated.metadata, updated.stage, updated.properties, updated.revision, updated.last_activity_at
+FROM updated
+CROSS JOIN (SELECT count(*) FROM audit) AS audit_written
 `
 
 type MaterializeIssueChannelMediaMarkdownParams struct {
+	ID              pgtype.UUID `json:"id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 	BaseDescription pgtype.Text `json:"base_description"`
 	Description     string      `json:"description"`
 	Markdown        pgtype.Text `json:"markdown"`
-	ID              pgtype.UUID `json:"id"`
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+}
+
+type MaterializeIssueChannelMediaMarkdownRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Title              string             `json:"title"`
+	Description        pgtype.Text        `json:"description"`
+	Status             string             `json:"status"`
+	Priority           string             `json:"priority"`
+	AssigneeType       pgtype.Text        `json:"assignee_type"`
+	AssigneeID         pgtype.UUID        `json:"assignee_id"`
+	CreatorType        string             `json:"creator_type"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
+	ContextRefs        []byte             `json:"context_refs"`
+	Position           float64            `json:"position"`
+	DueDate            pgtype.Date        `json:"due_date"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	Number             int32              `json:"number"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	OriginType         pgtype.Text        `json:"origin_type"`
+	OriginID           pgtype.UUID        `json:"origin_id"`
+	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
+	StartDate          pgtype.Date        `json:"start_date"`
+	Metadata           []byte             `json:"metadata"`
+	Stage              pgtype.Int4        `json:"stage"`
+	Properties         []byte             `json:"properties"`
+	Revision           int64              `json:"revision"`
+	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
 }
 
 // Detached channel media resolves after /issue creation. When the description
@@ -1588,15 +1655,15 @@ type MaterializeIssueChannelMediaMarkdownParams struct {
 // preserving user-authored bytes takes precedence over layout fidelity.
 // This is asynchronous system materialization, not a new user action, so it
 // intentionally preserves last_activity_at while still advancing revision.
-func (q *Queries) MaterializeIssueChannelMediaMarkdown(ctx context.Context, arg MaterializeIssueChannelMediaMarkdownParams) (Issue, error) {
+func (q *Queries) MaterializeIssueChannelMediaMarkdown(ctx context.Context, arg MaterializeIssueChannelMediaMarkdownParams) (MaterializeIssueChannelMediaMarkdownRow, error) {
 	row := q.db.QueryRow(ctx, materializeIssueChannelMediaMarkdown,
+		arg.ID,
+		arg.WorkspaceID,
 		arg.BaseDescription,
 		arg.Description,
 		arg.Markdown,
-		arg.ID,
-		arg.WorkspaceID,
 	)
-	var i Issue
+	var i MaterializeIssueChannelMediaMarkdownRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
@@ -1628,6 +1695,88 @@ func (q *Queries) MaterializeIssueChannelMediaMarkdown(ctx context.Context, arg 
 		&i.LastActivityAt,
 	)
 	return i, err
+}
+
+const recordIssueWriteConflict = `-- name: RecordIssueWriteConflict :exec
+INSERT INTO issue_write_audit (
+    workspace_id, issue_id, actor_type, actor_id, source_task_id,
+    client_platform, client_version, client_os, endpoint,
+    requested_fields, changed_fields,
+    old_title_bytes, new_title_bytes, old_title_hash, new_title_hash,
+    old_description_bytes, new_description_bytes,
+    old_description_hash, new_description_hash,
+    expected_revision, revision_before, revision_after,
+    revision_conflict, outcome
+)
+SELECT
+    issue.workspace_id, issue.id,
+    $1::text,
+    $2::uuid,
+    $3::uuid,
+    $4::text,
+    $5::text,
+    $6::text,
+    $7::text,
+    array_remove(ARRAY[
+        CASE WHEN $8::text IS NOT NULL THEN 'title' END,
+        CASE WHEN $9::text IS NOT NULL THEN 'description' END
+    ], NULL)::text[],
+    ARRAY[]::text[],
+    CASE WHEN $8::text IS NOT NULL
+        THEN octet_length(issue.title)::bigint END,
+    CASE WHEN $8::text IS NOT NULL
+        THEN octet_length($8::text)::bigint END,
+    CASE WHEN $8::text IS NOT NULL
+        THEN encode(sha256(convert_to(issue.title, 'UTF8')), 'hex') END,
+    CASE WHEN $8::text IS NOT NULL
+        THEN encode(sha256(convert_to($8::text, 'UTF8')), 'hex') END,
+    CASE WHEN $9::text IS NOT NULL
+        THEN octet_length(COALESCE(issue.description, ''))::bigint END,
+    CASE WHEN $9::text IS NOT NULL
+        THEN octet_length($9::text)::bigint END,
+    CASE WHEN $9::text IS NOT NULL
+        THEN encode(sha256(convert_to(COALESCE(issue.description, ''), 'UTF8')), 'hex') END,
+    CASE WHEN $9::text IS NOT NULL
+        THEN encode(sha256(convert_to($9::text, 'UTF8')), 'hex') END,
+    $10::bigint,
+    issue.revision, issue.revision, true, 'revision_conflict'
+FROM issue
+WHERE issue.id = $11
+  AND issue.workspace_id = $12
+  AND ($8::text IS NOT NULL OR $9::text IS NOT NULL)
+`
+
+type RecordIssueWriteConflictParams struct {
+	AuditActorType      string      `json:"audit_actor_type"`
+	AuditActorID        pgtype.UUID `json:"audit_actor_id"`
+	AuditSourceTaskID   pgtype.UUID `json:"audit_source_task_id"`
+	AuditClientPlatform string      `json:"audit_client_platform"`
+	AuditClientVersion  pgtype.Text `json:"audit_client_version"`
+	AuditClientOs       pgtype.Text `json:"audit_client_os"`
+	AuditEndpoint       string      `json:"audit_endpoint"`
+	Title               pgtype.Text `json:"title"`
+	Description         pgtype.Text `json:"description"`
+	ExpectedRevision    int64       `json:"expected_revision"`
+	ID                  pgtype.UUID `json:"id"`
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) RecordIssueWriteConflict(ctx context.Context, arg RecordIssueWriteConflictParams) error {
+	_, err := q.db.Exec(ctx, recordIssueWriteConflict,
+		arg.AuditActorType,
+		arg.AuditActorID,
+		arg.AuditSourceTaskID,
+		arg.AuditClientPlatform,
+		arg.AuditClientVersion,
+		arg.AuditClientOs,
+		arg.AuditEndpoint,
+		arg.Title,
+		arg.Description,
+		arg.ExpectedRevision,
+		arg.ID,
+		arg.WorkspaceID,
+	)
+	return err
 }
 
 const setIssueMetadataKey = `-- name: SetIssueMetadataKey :one
@@ -1701,17 +1850,17 @@ const updateIssue = `-- name: UpdateIssue :one
 WITH candidate AS (
     SELECT
         i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at,
-        COALESCE($3::text, i.title) AS next_title,
-        COALESCE($4::text, i.description) AS next_description,
-        COALESCE($5::text, i.status) AS next_status,
-        COALESCE($6::text, i.priority) AS next_priority,
-        $7::text AS next_assignee_type,
-        $8::uuid AS next_assignee_id,
+        COALESCE($2::text, i.title) AS next_title,
+        COALESCE($3::text, i.description) AS next_description,
+        COALESCE($4::text, i.status) AS next_status,
+        COALESCE($5::text, i.priority) AS next_priority,
+        $6::text AS next_assignee_type,
+        $7::uuid AS next_assignee_id,
         CASE
             -- An explicit position wins. Cross-column drag-and-drop sends
             -- status and position together and means the slot it dropped on.
-            WHEN $9::double precision IS NOT NULL
-                THEN $9::double precision
+            WHEN $8::double precision IS NOT NULL
+                THEN $8::double precision
             -- position ranks an issue *within* its (workspace, status)
             -- column, so it stops meaning anything the moment the column
             -- changes: the value that put the issue on top of Todo lands it
@@ -1726,23 +1875,23 @@ WITH candidate AS (
             -- unstable across pages. Creation avoids the tie by computing its
             -- min under the workspace counter lock; a status change holds no
             -- such lock and is not worth taking one for.
-            WHEN i.status IS DISTINCT FROM COALESCE($5::text, i.status)
+            WHEN i.status IS DISTINCT FROM COALESCE($4::text, i.status)
                 THEN (
                     SELECT COALESCE(MIN(target.position), 0) - 1
                     FROM issue AS target
                     WHERE target.workspace_id = i.workspace_id
-                      AND target.status = $5::text
+                      AND target.status = $4::text
                 )
             ELSE i.position
         END AS next_position,
-        $10::date AS next_start_date,
-        $11::date AS next_due_date,
-        $12::uuid AS next_parent_issue_id,
-        $13::uuid AS next_project_id,
-        $14::integer AS next_stage
+        $9::date AS next_start_date,
+        $10::date AS next_due_date,
+        $11::uuid AS next_parent_issue_id,
+        $12::uuid AS next_project_id,
+        $13::integer AS next_stage
     FROM issue AS i
     WHERE i.id = $1
-      AND ($2::bigint IS NULL OR i.revision = $2::bigint)
+      AND ($14::bigint IS NULL OR i.revision = $14::bigint)
 ), changed AS (
     SELECT
         candidate.id, candidate.workspace_id, candidate.title, candidate.description, candidate.status, candidate.priority, candidate.assignee_type, candidate.assignee_id, candidate.creator_type, candidate.creator_id, candidate.parent_issue_id, candidate.acceptance_criteria, candidate.context_refs, candidate.position, candidate.due_date, candidate.created_at, candidate.updated_at, candidate.number, candidate.project_id, candidate.origin_type, candidate.origin_id, candidate.first_executed_at, candidate.start_date, candidate.metadata, candidate.stage, candidate.properties, candidate.revision, candidate.last_activity_at, candidate.next_title, candidate.next_description, candidate.next_status, candidate.next_priority, candidate.next_assignee_type, candidate.next_assignee_id, candidate.next_position, candidate.next_start_date, candidate.next_due_date, candidate.next_parent_issue_id, candidate.next_project_id, candidate.next_stage,
@@ -1763,7 +1912,7 @@ WITH candidate AS (
             next_parent_issue_id, next_project_id, next_stage
         ) AS did_activity
     FROM candidate
-)
+), updated AS (
 UPDATE issue AS i SET
     title = changed.next_title,
     description = changed.next_description,
@@ -1789,31 +1938,128 @@ WHERE i.id = changed.id
   -- Under READ COMMITTED, concurrent statements may both populate candidate
   -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
   -- after waiting for the first writer, leaving the stale writer with 0 rows.
-  AND ($2::bigint IS NULL OR i.revision = $2::bigint)
+  AND ($14::bigint IS NULL OR i.revision = $14::bigint)
 RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at
+), audit AS (
+    INSERT INTO issue_write_audit (
+        workspace_id, issue_id, actor_type, actor_id, source_task_id,
+        client_platform, client_version, client_os, endpoint,
+        requested_fields, changed_fields,
+        old_title_bytes, new_title_bytes, old_title_hash, new_title_hash,
+        old_description_bytes, new_description_bytes,
+        old_description_hash, new_description_hash,
+        expected_revision, revision_before, revision_after,
+        revision_conflict, outcome
+    )
+    SELECT
+        updated.workspace_id, updated.id,
+        $15::text,
+        $16::uuid,
+        $17::uuid,
+        $18::text,
+        $19::text,
+        $20::text,
+        $21::text,
+        array_remove(ARRAY[
+            CASE WHEN $2::text IS NOT NULL THEN 'title' END,
+            CASE WHEN $3::text IS NOT NULL THEN 'description' END
+        ], NULL)::text[],
+        array_remove(ARRAY[
+            CASE WHEN candidate.title IS DISTINCT FROM updated.title THEN 'title' END,
+            CASE WHEN candidate.description IS DISTINCT FROM updated.description THEN 'description' END
+        ], NULL)::text[],
+        CASE WHEN $2::text IS NOT NULL
+            THEN octet_length(candidate.title)::bigint END,
+        CASE WHEN $2::text IS NOT NULL
+            THEN octet_length(updated.title)::bigint END,
+        CASE WHEN $2::text IS NOT NULL
+            THEN encode(sha256(convert_to(candidate.title, 'UTF8')), 'hex') END,
+        CASE WHEN $2::text IS NOT NULL
+            THEN encode(sha256(convert_to(updated.title, 'UTF8')), 'hex') END,
+        CASE WHEN $3::text IS NOT NULL
+            THEN octet_length(COALESCE(candidate.description, ''))::bigint END,
+        CASE WHEN $3::text IS NOT NULL
+            THEN octet_length(COALESCE(updated.description, ''))::bigint END,
+        CASE WHEN $3::text IS NOT NULL
+            THEN encode(sha256(convert_to(COALESCE(candidate.description, ''), 'UTF8')), 'hex') END,
+        CASE WHEN $3::text IS NOT NULL
+            THEN encode(sha256(convert_to(COALESCE(updated.description, ''), 'UTF8')), 'hex') END,
+        $14::bigint,
+        candidate.revision,
+        updated.revision,
+        false,
+        CASE WHEN candidate.title IS DISTINCT FROM updated.title
+               OR candidate.description IS DISTINCT FROM updated.description
+            THEN 'applied' ELSE 'no_change' END
+    FROM updated
+    JOIN candidate ON candidate.id = updated.id
+    WHERE $2::text IS NOT NULL
+       OR $3::text IS NOT NULL
+    RETURNING id
+)
+SELECT updated.id, updated.workspace_id, updated.title, updated.description, updated.status, updated.priority, updated.assignee_type, updated.assignee_id, updated.creator_type, updated.creator_id, updated.parent_issue_id, updated.acceptance_criteria, updated.context_refs, updated.position, updated.due_date, updated.created_at, updated.updated_at, updated.number, updated.project_id, updated.origin_type, updated.origin_id, updated.first_executed_at, updated.start_date, updated.metadata, updated.stage, updated.properties, updated.revision, updated.last_activity_at
+FROM updated
+CROSS JOIN (SELECT count(*) FROM audit) AS audit_written
 `
 
 type UpdateIssueParams struct {
-	ID               pgtype.UUID   `json:"id"`
-	ExpectedRevision pgtype.Int8   `json:"expected_revision"`
-	Title            pgtype.Text   `json:"title"`
-	Description      pgtype.Text   `json:"description"`
-	Status           pgtype.Text   `json:"status"`
-	Priority         pgtype.Text   `json:"priority"`
-	AssigneeType     pgtype.Text   `json:"assignee_type"`
-	AssigneeID       pgtype.UUID   `json:"assignee_id"`
-	Position         pgtype.Float8 `json:"position"`
-	StartDate        pgtype.Date   `json:"start_date"`
-	DueDate          pgtype.Date   `json:"due_date"`
-	ParentIssueID    pgtype.UUID   `json:"parent_issue_id"`
-	ProjectID        pgtype.UUID   `json:"project_id"`
-	Stage            pgtype.Int4   `json:"stage"`
+	ID                  pgtype.UUID   `json:"id"`
+	Title               pgtype.Text   `json:"title"`
+	Description         pgtype.Text   `json:"description"`
+	Status              pgtype.Text   `json:"status"`
+	Priority            pgtype.Text   `json:"priority"`
+	AssigneeType        pgtype.Text   `json:"assignee_type"`
+	AssigneeID          pgtype.UUID   `json:"assignee_id"`
+	Position            pgtype.Float8 `json:"position"`
+	StartDate           pgtype.Date   `json:"start_date"`
+	DueDate             pgtype.Date   `json:"due_date"`
+	ParentIssueID       pgtype.UUID   `json:"parent_issue_id"`
+	ProjectID           pgtype.UUID   `json:"project_id"`
+	Stage               pgtype.Int4   `json:"stage"`
+	ExpectedRevision    pgtype.Int8   `json:"expected_revision"`
+	AuditActorType      string        `json:"audit_actor_type"`
+	AuditActorID        pgtype.UUID   `json:"audit_actor_id"`
+	AuditSourceTaskID   pgtype.UUID   `json:"audit_source_task_id"`
+	AuditClientPlatform string        `json:"audit_client_platform"`
+	AuditClientVersion  pgtype.Text   `json:"audit_client_version"`
+	AuditClientOs       pgtype.Text   `json:"audit_client_os"`
+	AuditEndpoint       string        `json:"audit_endpoint"`
 }
 
-func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue, error) {
+type UpdateIssueRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Title              string             `json:"title"`
+	Description        pgtype.Text        `json:"description"`
+	Status             string             `json:"status"`
+	Priority           string             `json:"priority"`
+	AssigneeType       pgtype.Text        `json:"assignee_type"`
+	AssigneeID         pgtype.UUID        `json:"assignee_id"`
+	CreatorType        string             `json:"creator_type"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
+	ContextRefs        []byte             `json:"context_refs"`
+	Position           float64            `json:"position"`
+	DueDate            pgtype.Date        `json:"due_date"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	Number             int32              `json:"number"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	OriginType         pgtype.Text        `json:"origin_type"`
+	OriginID           pgtype.UUID        `json:"origin_id"`
+	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
+	StartDate          pgtype.Date        `json:"start_date"`
+	Metadata           []byte             `json:"metadata"`
+	Stage              pgtype.Int4        `json:"stage"`
+	Properties         []byte             `json:"properties"`
+	Revision           int64              `json:"revision"`
+	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
+}
+
+func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (UpdateIssueRow, error) {
 	row := q.db.QueryRow(ctx, updateIssue,
 		arg.ID,
-		arg.ExpectedRevision,
 		arg.Title,
 		arg.Description,
 		arg.Status,
@@ -1826,8 +2072,16 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		arg.ParentIssueID,
 		arg.ProjectID,
 		arg.Stage,
+		arg.ExpectedRevision,
+		arg.AuditActorType,
+		arg.AuditActorID,
+		arg.AuditSourceTaskID,
+		arg.AuditClientPlatform,
+		arg.AuditClientVersion,
+		arg.AuditClientOs,
+		arg.AuditEndpoint,
 	)
-	var i Issue
+	var i UpdateIssueRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

@@ -324,6 +324,9 @@ deleted_comment_reactions AS (
 deleted_issue_reactions AS (
     DELETE FROM issue_reaction WHERE workspace_id = $1
 ),
+deleted_issue_write_audits AS (
+    DELETE FROM issue_write_audit WHERE workspace_id = $1
+),
 deleted_activity AS (
     DELETE FROM activity_log WHERE workspace_id = $1
 ),

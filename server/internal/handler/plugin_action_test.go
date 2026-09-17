@@ -229,6 +229,19 @@ func TestPluginIssueUsesStableDTOAndRevisionETag(t *testing.T) {
 	if got := patch.Header().Get("ETag"); got != fmt.Sprintf(`W/"%d"`, updated.Revision) {
 		t.Fatalf("updated ETag = %q", got)
 	}
+	var auditActorType, auditActorID, auditEndpoint string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT actor_type, actor_id::text, endpoint
+		FROM issue_write_audit
+		WHERE issue_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, issueID).Scan(&auditActorType, &auditActorID, &auditEndpoint); err != nil {
+		t.Fatalf("read Plugin issue-write audit: %v", err)
+	}
+	if auditActorType != "member" || auditActorID != testUserID || auditEndpoint != pluginIssuePatchEndpoint {
+		t.Fatalf("Plugin issue-write audit = (%q, %q, %q), want calling member and Plugin endpoint", auditActorType, auditActorID, auditEndpoint)
+	}
 
 	staleRequest := pluginActionRequest(http.MethodPatch, "/v1/issues/"+issueID, installationID,
 		map[string]any{"description": "stale"}, map[string]string{"issue_ref": issueID})

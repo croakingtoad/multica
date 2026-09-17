@@ -348,7 +348,7 @@ func (h *Handler) GetPluginIssue(w http.ResponseWriter, r *http.Request) {
 // drifting copy of them. Widening this set later is additive; getting the side
 // effects wrong now is not.
 func (h *Handler) PatchPluginIssue(w http.ResponseWriter, r *http.Request) {
-	caller, _, ok := h.pluginCaller(w, r, plugincontract.ScopeIssuesWrite)
+	caller, actor, ok := h.pluginCaller(w, r, plugincontract.ScopeIssuesWrite)
 	if !ok {
 		return
 	}
@@ -370,13 +370,6 @@ func (h *Handler) PatchPluginIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if expectedRevision != nil {
-		if issue.Revision != *expectedRevision {
-			writePublicIssueRevisionConflict(w, r)
-			return
-		}
-	}
-
 	var title *string
 	if req.Title != nil {
 		value := sanitizeNullBytes(*req.Title)
@@ -392,10 +385,16 @@ func (h *Handler) PatchPluginIssue(w http.ResponseWriter, r *http.Request) {
 		description = &value
 	}
 
+	auditActorID := caller.Installation.ID
+	if actor.isMember() {
+		auditActorID = actor.Member.UserID
+	}
+	writeAudit := h.issueWriteAuditFromRequest(r, actor.Type, uuidToString(auditActorID), pluginIssuePatchEndpoint)
 	updated, err := h.IssueService.UpdateContent(r.Context(), issue, service.IssueContentPatch{
 		Title:            title,
 		Description:      description,
 		ExpectedRevision: expectedRevision,
+		Audit:            writeAudit,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrIssueRevisionConflict) {

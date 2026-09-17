@@ -106,19 +106,55 @@ FOR UPDATE;
 -- preserving user-authored bytes takes precedence over layout fidelity.
 -- This is asynchronous system materialization, not a new user action, so it
 -- intentionally preserves last_activity_at while still advancing revision.
+WITH previous AS (
+    SELECT * FROM issue
+    WHERE issue.id = sqlc.arg(id) AND issue.workspace_id = sqlc.arg(workspace_id)
+    FOR UPDATE
+), updated AS (
 UPDATE issue
 SET description = CASE
         WHEN sqlc.narg('base_description')::text IS NOT NULL
-             AND COALESCE(description, '') = sqlc.narg('base_description')::text
+             AND COALESCE(previous.description, '') = sqlc.narg('base_description')::text
             THEN sqlc.arg('description')::text
-        WHEN description IS NULL OR description = '' THEN sqlc.arg(markdown)
-        ELSE description || E'\n\n' || sqlc.arg(markdown)
+        WHEN previous.description IS NULL OR previous.description = '' THEN sqlc.arg(markdown)
+        ELSE previous.description || E'\n\n' || sqlc.arg(markdown)
     END,
-    revision = revision + 1,
+    revision = previous.revision + 1,
     updated_at = now()
-WHERE id = sqlc.arg(id)
-  AND workspace_id = sqlc.arg(workspace_id)
-RETURNING *;
+FROM previous
+WHERE issue.id = previous.id
+  AND issue.workspace_id = previous.workspace_id
+RETURNING issue.*
+), audit AS (
+    INSERT INTO issue_write_audit (
+        workspace_id, issue_id, actor_type, actor_id, source_task_id,
+        client_platform, client_version, client_os, endpoint,
+        requested_fields, changed_fields,
+        old_description_bytes, new_description_bytes,
+        old_description_hash, new_description_hash,
+        expected_revision, revision_before, revision_after,
+        revision_conflict, outcome
+    )
+    SELECT
+        updated.workspace_id, updated.id, 'system', NULL, NULL,
+        'internal', NULL, NULL, 'channel_media_materialization',
+        ARRAY['description']::text[],
+        CASE WHEN previous.description IS DISTINCT FROM updated.description
+            THEN ARRAY['description']::text[] ELSE ARRAY[]::text[] END,
+        octet_length(COALESCE(previous.description, ''))::bigint,
+        octet_length(COALESCE(updated.description, ''))::bigint,
+        encode(sha256(convert_to(COALESCE(previous.description, ''), 'UTF8')), 'hex'),
+        encode(sha256(convert_to(COALESCE(updated.description, ''), 'UTF8')), 'hex'),
+        NULL, previous.revision, updated.revision, false,
+        CASE WHEN previous.description IS DISTINCT FROM updated.description
+            THEN 'applied' ELSE 'no_change' END
+    FROM updated
+    JOIN previous ON previous.id = updated.id
+    RETURNING id
+)
+SELECT updated.*
+FROM updated
+CROSS JOIN (SELECT count(*) FROM audit) AS audit_written;
 
 -- name: LockIssueForDelete :one
 -- Issue deletion must collect every attachment URL after it has won the same
@@ -222,7 +258,7 @@ WITH candidate AS (
             next_parent_issue_id, next_project_id, next_stage
         ) AS did_activity
     FROM candidate
-)
+), updated AS (
 UPDATE issue AS i SET
     title = changed.next_title,
     description = changed.next_description,
@@ -249,7 +285,115 @@ WHERE i.id = changed.id
   -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
   -- after waiting for the first writer, leaving the stale writer with 0 rows.
   AND (sqlc.narg('expected_revision')::bigint IS NULL OR i.revision = sqlc.narg('expected_revision')::bigint)
-RETURNING i.*;
+RETURNING i.*
+), audit AS (
+    INSERT INTO issue_write_audit (
+        workspace_id, issue_id, actor_type, actor_id, source_task_id,
+        client_platform, client_version, client_os, endpoint,
+        requested_fields, changed_fields,
+        old_title_bytes, new_title_bytes, old_title_hash, new_title_hash,
+        old_description_bytes, new_description_bytes,
+        old_description_hash, new_description_hash,
+        expected_revision, revision_before, revision_after,
+        revision_conflict, outcome
+    )
+    SELECT
+        updated.workspace_id, updated.id,
+        sqlc.arg('audit_actor_type')::text,
+        sqlc.narg('audit_actor_id')::uuid,
+        sqlc.narg('audit_source_task_id')::uuid,
+        sqlc.arg('audit_client_platform')::text,
+        sqlc.narg('audit_client_version')::text,
+        sqlc.narg('audit_client_os')::text,
+        sqlc.arg('audit_endpoint')::text,
+        array_remove(ARRAY[
+            CASE WHEN sqlc.narg('title')::text IS NOT NULL THEN 'title' END,
+            CASE WHEN sqlc.narg('description')::text IS NOT NULL THEN 'description' END
+        ], NULL)::text[],
+        array_remove(ARRAY[
+            CASE WHEN candidate.title IS DISTINCT FROM updated.title THEN 'title' END,
+            CASE WHEN candidate.description IS DISTINCT FROM updated.description THEN 'description' END
+        ], NULL)::text[],
+        CASE WHEN sqlc.narg('title')::text IS NOT NULL
+            THEN octet_length(candidate.title)::bigint END,
+        CASE WHEN sqlc.narg('title')::text IS NOT NULL
+            THEN octet_length(updated.title)::bigint END,
+        CASE WHEN sqlc.narg('title')::text IS NOT NULL
+            THEN encode(sha256(convert_to(candidate.title, 'UTF8')), 'hex') END,
+        CASE WHEN sqlc.narg('title')::text IS NOT NULL
+            THEN encode(sha256(convert_to(updated.title, 'UTF8')), 'hex') END,
+        CASE WHEN sqlc.narg('description')::text IS NOT NULL
+            THEN octet_length(COALESCE(candidate.description, ''))::bigint END,
+        CASE WHEN sqlc.narg('description')::text IS NOT NULL
+            THEN octet_length(COALESCE(updated.description, ''))::bigint END,
+        CASE WHEN sqlc.narg('description')::text IS NOT NULL
+            THEN encode(sha256(convert_to(COALESCE(candidate.description, ''), 'UTF8')), 'hex') END,
+        CASE WHEN sqlc.narg('description')::text IS NOT NULL
+            THEN encode(sha256(convert_to(COALESCE(updated.description, ''), 'UTF8')), 'hex') END,
+        sqlc.narg('expected_revision')::bigint,
+        candidate.revision,
+        updated.revision,
+        false,
+        CASE WHEN candidate.title IS DISTINCT FROM updated.title
+               OR candidate.description IS DISTINCT FROM updated.description
+            THEN 'applied' ELSE 'no_change' END
+    FROM updated
+    JOIN candidate ON candidate.id = updated.id
+    WHERE sqlc.narg('title')::text IS NOT NULL
+       OR sqlc.narg('description')::text IS NOT NULL
+    RETURNING id
+)
+SELECT updated.*
+FROM updated
+CROSS JOIN (SELECT count(*) FROM audit) AS audit_written;
+
+-- name: RecordIssueWriteConflict :exec
+INSERT INTO issue_write_audit (
+    workspace_id, issue_id, actor_type, actor_id, source_task_id,
+    client_platform, client_version, client_os, endpoint,
+    requested_fields, changed_fields,
+    old_title_bytes, new_title_bytes, old_title_hash, new_title_hash,
+    old_description_bytes, new_description_bytes,
+    old_description_hash, new_description_hash,
+    expected_revision, revision_before, revision_after,
+    revision_conflict, outcome
+)
+SELECT
+    issue.workspace_id, issue.id,
+    sqlc.arg('audit_actor_type')::text,
+    sqlc.narg('audit_actor_id')::uuid,
+    sqlc.narg('audit_source_task_id')::uuid,
+    sqlc.arg('audit_client_platform')::text,
+    sqlc.narg('audit_client_version')::text,
+    sqlc.narg('audit_client_os')::text,
+    sqlc.arg('audit_endpoint')::text,
+    array_remove(ARRAY[
+        CASE WHEN sqlc.narg('title')::text IS NOT NULL THEN 'title' END,
+        CASE WHEN sqlc.narg('description')::text IS NOT NULL THEN 'description' END
+    ], NULL)::text[],
+    ARRAY[]::text[],
+    CASE WHEN sqlc.narg('title')::text IS NOT NULL
+        THEN octet_length(issue.title)::bigint END,
+    CASE WHEN sqlc.narg('title')::text IS NOT NULL
+        THEN octet_length(sqlc.narg('title')::text)::bigint END,
+    CASE WHEN sqlc.narg('title')::text IS NOT NULL
+        THEN encode(sha256(convert_to(issue.title, 'UTF8')), 'hex') END,
+    CASE WHEN sqlc.narg('title')::text IS NOT NULL
+        THEN encode(sha256(convert_to(sqlc.narg('title')::text, 'UTF8')), 'hex') END,
+    CASE WHEN sqlc.narg('description')::text IS NOT NULL
+        THEN octet_length(COALESCE(issue.description, ''))::bigint END,
+    CASE WHEN sqlc.narg('description')::text IS NOT NULL
+        THEN octet_length(sqlc.narg('description')::text)::bigint END,
+    CASE WHEN sqlc.narg('description')::text IS NOT NULL
+        THEN encode(sha256(convert_to(COALESCE(issue.description, ''), 'UTF8')), 'hex') END,
+    CASE WHEN sqlc.narg('description')::text IS NOT NULL
+        THEN encode(sha256(convert_to(sqlc.narg('description')::text, 'UTF8')), 'hex') END,
+    sqlc.arg('expected_revision')::bigint,
+    issue.revision, issue.revision, true, 'revision_conflict'
+FROM issue
+WHERE issue.id = sqlc.arg('id')
+  AND issue.workspace_id = sqlc.arg('workspace_id')
+  AND (sqlc.narg('title')::text IS NOT NULL OR sqlc.narg('description')::text IS NOT NULL);
 
 -- name: UpdateIssueStatus :one
 -- Workspace_id in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.
