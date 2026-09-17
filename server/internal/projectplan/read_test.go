@@ -240,6 +240,77 @@ func TestReaderRollupsSubtreeSurvivesParentCycle(t *testing.T) {
 	}
 }
 
+func TestReaderRollupsDedupeTaskReachableThroughParts(t *testing.T) {
+	fixture := newPlanTestFixture(t)
+	planID := fixture.createManual(t, "Shared task plan")
+	phaseOneID := fixture.addPhase(t, planID, "Phase one", 0)
+	phaseTwoID := fixture.addPhase(t, planID, "Phase two", 1)
+	firstPartID := fixture.addPart(t, planID, phaseOneID, "First part", 0)
+	secondPartID := fixture.addPart(t, planID, phaseOneID, "Second part", 1)
+	crossPhasePartID := fixture.addPart(t, planID, phaseTwoID, "Cross-phase part", 0)
+
+	sharedIssueID := fixture.issue(t, "Shared issue", "")
+	setIssueStatus(t, fixture, sharedIssueID, "done")
+	crossPhaseIssueID := fixture.issue(t, "Cross-phase shared issue", "")
+	setIssueStatus(t, fixture, crossPhaseIssueID, "done")
+
+	// The unique plan/issue link key prevents a live issue from being linked
+	// twice directly, so make the same issue reachable through two ancestors.
+	sharedEpicOneID := fixture.issue(t, "Shared epic one", "")
+	sharedEpicTwoID := fixture.issue(t, "Shared epic two", "")
+	setIssueParent(t, fixture, sharedIssueID, sharedEpicOneID)
+	linkIssue(t, fixture, planID, firstPartID, sharedEpicOneID)
+	linkIssue(t, fixture, planID, secondPartID, sharedEpicTwoID)
+	linkIssue(t, fixture, planID, secondPartID, sharedIssueID)
+
+	crossPhaseEpicID := fixture.issue(t, "Cross-phase epic", "")
+	setIssueParent(t, fixture, crossPhaseIssueID, crossPhaseEpicID)
+	linkIssue(t, fixture, planID, firstPartID, crossPhaseEpicID)
+	linkIssue(t, fixture, planID, crossPhasePartID, crossPhaseIssueID)
+
+	// A task that is reachable both as an anchor and as a descendant of the
+	// same part is already deduped per part; preserve that behaviour.
+	innerIssueID := fixture.issue(t, "Inner issue", "")
+	outerIssueID := fixture.issue(t, "Outer issue", "")
+	setIssueParent(t, fixture, innerIssueID, outerIssueID)
+	linkIssue(t, fixture, planID, crossPhasePartID, outerIssueID)
+	linkIssue(t, fixture, planID, crossPhasePartID, innerIssueID)
+
+	overview, err := NewReader(db.New(fixture.pool)).ReadActive(
+		context.Background(), fixture.workspaceID, fixture.projectID,
+	)
+	if err != nil {
+		t.Fatalf("ReadActive: %v", err)
+	}
+
+	wantPartRollups := map[string]TaskRollup{
+		uuidString(firstPartID):      {TasksDone: 2, TasksTotal: 4, Percent: 50},
+		uuidString(secondPartID):     {TasksDone: 1, TasksTotal: 2, Percent: 50},
+		uuidString(crossPhasePartID): {TasksDone: 1, TasksTotal: 3, Percent: 33},
+	}
+	for _, phase := range overview.Phases {
+		for _, part := range phase.Parts {
+			want, ok := wantPartRollups[part.ID]
+			if ok && part.Rollup != want {
+				t.Errorf("part %q rollup = %+v, want %+v", part.Title, part.Rollup, want)
+			}
+		}
+	}
+
+	if got, want := overview.Phases[0].Rollup,
+		(TaskRollup{TasksDone: 2, TasksTotal: 5, Percent: 40}); got != want {
+		t.Errorf("shared phase rollup = %+v, want %+v", got, want)
+	}
+	if got, want := overview.Phases[1].Rollup,
+		(TaskRollup{TasksDone: 1, TasksTotal: 3, Percent: 33}); got != want {
+		t.Errorf("cross-phase rollup = %+v, want %+v", got, want)
+	}
+	if got, want := overview.Rollup,
+		(Rollup{TasksDone: 2, TasksTotal: 7, Percent: 29, PartsCovered: 3, PartsTotal: 3}); got != want {
+		t.Fatalf("plan rollup = %+v, want %+v", got, want)
+	}
+}
+
 func TestReaderRollupsCountLinkedSubtree(t *testing.T) {
 	fixture := newPlanTestFixture(t)
 	planID := fixture.createManual(t, "Subtree plan")

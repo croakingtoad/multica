@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -187,5 +190,114 @@ func TestResolveWorkspaceIDFromRequest(t *testing.T) {
 				t.Fatalf("expected %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestWorkspaceMiddlewareResolutionStatus(t *testing.T) {
+	pool := openPool(t)
+	queries := db.New(pool)
+	middleware := RequireWorkspaceMember(queries)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	t.Run("unknown slug returns not found", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/anything?workspace_slug=does-not-exist", nil)
+		res := httptest.NewRecorder()
+
+		middleware(next).ServeHTTP(res, req)
+
+		if res.Code != http.StatusNotFound {
+			t.Fatalf("expected %d, got %d: %s", http.StatusNotFound, res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("missing identifier returns bad request", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/anything", nil)
+		res := httptest.NewRecorder()
+
+		middleware(next).ServeHTTP(res, req)
+
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("expected %d, got %d: %s", http.StatusBadRequest, res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("task token cannot target another workspace", func(t *testing.T) {
+		const (
+			boundWorkspace  = "00000000-0000-0000-0000-000000000001"
+			targetWorkspace = "00000000-0000-0000-0000-000000000002"
+		)
+		req := httptest.NewRequest(http.MethodGet, "/api/anything", nil)
+		req.Header.Set("X-Actor-Source", "task_token")
+		req.Header.Set("X-Workspace-ID", boundWorkspace)
+		res := httptest.NewRecorder()
+		resolveTarget := func(*http.Request) (string, error) { return targetWorkspace, nil }
+
+		buildMiddleware(queries, resolveTarget, nil)(next).ServeHTTP(res, req)
+
+		if res.Code != http.StatusForbidden {
+			t.Fatalf("expected %d, got %d: %s", http.StatusForbidden, res.Code, res.Body.String())
+		}
+	})
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	pool.Close()
+
+	t.Run("unavailable database returns service unavailable", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/anything?workspace_slug=anything", nil)
+		req.Header.Set("X-Workspace-ID", "00000000-0000-0000-0000-000000000001")
+		res := httptest.NewRecorder()
+
+		middleware(next).ServeHTTP(res, req)
+
+		if res.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected %d, got %d: %s", http.StatusServiceUnavailable, res.Code, res.Body.String())
+		}
+		if !strings.Contains(logs.String(), "closed pool") {
+			t.Fatalf("expected underlying database error in log, got %q", logs.String())
+		}
+	})
+
+	t.Run("resolver falls back after database failure", func(t *testing.T) {
+		const fallbackWorkspaceID = "00000000-0000-0000-0000-000000000001"
+		req := httptest.NewRequest(http.MethodGet, "/api/anything", nil)
+		req.Header.Set("X-Workspace-Slug", "anything")
+		req.Header.Set("X-Workspace-ID", fallbackWorkspaceID)
+
+		if got := ResolveWorkspaceIDFromRequest(req, queries); got != fallbackWorkspaceID {
+			t.Fatalf("expected fallback workspace ID %q after database failure, got %q", fallbackWorkspaceID, got)
+		}
+	})
+}
+
+func TestWorkspaceMiddlewareMembershipLookupUnavailable(t *testing.T) {
+	pool := openPool(t)
+	queries := db.New(pool)
+	pool.Close()
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/anything?workspace_id=00000000-0000-0000-0000-000000000001", nil)
+	req.Header.Set("X-User-ID", "00000000-0000-0000-0000-000000000002")
+	res := httptest.NewRecorder()
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	RequireWorkspaceMember(queries)(next).ServeHTTP(res, req)
+
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected %d, got %d: %s", http.StatusServiceUnavailable, res.Code, res.Body.String())
+	}
+	if !strings.Contains(logs.String(), "closed pool") {
+		t.Fatalf("expected underlying database error in log, got %q", logs.String())
 	}
 }
