@@ -312,6 +312,19 @@ jobs:
         # exclude @multica/mobile.
         run: pnpm exec turbo build typecheck lint --filter='!@multica/docs' --filter='!@multica/mobile'
 
+      # LOCO-1808 — fail if any build artifact or generated file is
+      # uncommitted. Uses `git status --porcelain` rather than
+      # `git diff --exit-code` because the latter misses untracked files.
+      - name: Verify clean working tree after build
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
+        run: |
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "Build left the working tree dirty (LOCO-1808):"
+            echo "$dirty"
+            exit 1
+          fi
+
       # Blocking from the start: it reports nothing today, and it covers the
       # one regression knip structurally cannot see. packages/ui exports four
       # wildcards, which knip expands into entry-point globs over every file
