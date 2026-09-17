@@ -47,9 +47,28 @@ describe("proxy", () => {
 });
 
 describe("config", () => {
-  it("exports a matcher array", async () => {
+  it("excludes static and metadata paths from the middleware matcher", async () => {
     const { config } = await import("./proxy");
-    expect(Array.isArray(config.matcher)).toBe(true);
-    expect(config.matcher.length).toBeGreaterThan(0);
+
+    function toRegex(pattern: string): RegExp {
+      // Convert a Next.js matcher pattern to a RegExp.
+      // Escape slashes; escape literal dots that aren't regex operators.
+      const escaped = pattern
+        .replace(/\//g, "\\/")
+        .replace(/\.(?!\*|\+|\?)/g, "\\.");
+      return new RegExp(`^${escaped}$`);
+    }
+
+    const matchers = config.matcher.map(toRegex);
+    const matches = (path: string) => matchers.some((r) => r.test(path));
+
+    // Must NOT match — these should bypass the middleware proxy
+    expect(matches("/sitemap.xml")).toBe(false);
+    expect(matches("/robots.txt")).toBe(false);
+    expect(matches("/api/search")).toBe(false);
+
+    // Must match — ordinary docs paths
+    expect(matches("/agents")).toBe(true);
+    expect(matches("/")).toBe(true);
   });
 });
