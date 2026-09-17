@@ -3006,6 +3006,41 @@ func TestRunIssueUpdateNoStartSendsSuppressRun(t *testing.T) {
 	}
 }
 
+func TestRunIssueUpdateDescriptionSendsLatestExpectedRevision(t *testing.T) {
+	var body map[string]any
+	var revisionReads int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/MUL-1":
+			json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "status": "todo"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/issue-1":
+			revisionReads++
+			json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "revision": 7})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/issues/issue-1":
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "description": "replacement", "revision": 8})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+
+	cmd := newIssueUpdateTestCmd()
+	_ = cmd.Flags().Set("description", "replacement")
+	if err := runIssueUpdate(cmd, []string{"MUL-1"}); err != nil {
+		t.Fatalf("runIssueUpdate: %v", err)
+	}
+	if revisionReads != 1 {
+		t.Fatalf("current revision reads = %d, want 1", revisionReads)
+	}
+	if got := body["expected_revision"]; got != float64(7) {
+		t.Fatalf("expected_revision = %#v, want 7", got)
+	}
+}
+
 func TestRunIssueStatusNoStartSendsSuppressRun(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

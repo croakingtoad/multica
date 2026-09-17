@@ -1452,6 +1452,7 @@ func activeDuplicateIssueCreateMessage(err error) (string, bool) {
 
 func runIssueUpdate(cmd *cobra.Command, args []string) error {
 	noStart, _ := cmd.Flags().GetBool("no-start")
+	descriptionChanged := cmd.Flags().Changed("description") || cmd.Flags().Changed("description-stdin") || cmd.Flags().Changed("description-file")
 	statusChanged := cmd.Flags().Changed("status")
 	statusFlag, _ := cmd.Flags().GetString("status")
 	if statusChanged {
@@ -1485,7 +1486,7 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 		v, _ := cmd.Flags().GetString("title")
 		body["title"] = v
 	}
-	if cmd.Flags().Changed("description") || cmd.Flags().Changed("description-stdin") || cmd.Flags().Changed("description-file") {
+	if descriptionChanged {
 		desc, _, err := resolveTextFlag(cmd, "description")
 		if err != nil {
 			return err
@@ -1564,6 +1565,23 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 	}
 	if noStart {
 		body["suppress_run"] = true
+	}
+	if descriptionChanged {
+		// Description files are commonly prepared from an earlier issue read.
+		// Fence the final write against the revision visible immediately before
+		// the PUT so two agents cannot both read one revision and silently
+		// overwrite each other last-write-wins. The server applies this as a CAS
+		// in the same transaction as the description update.
+		var current struct {
+			Revision int64 `json:"revision"`
+		}
+		if err := client.GetJSON(ctx, "/api/issues/"+url.PathEscape(issueRef.ID), &current); err != nil {
+			return fmt.Errorf("load current issue revision before description update: %w", err)
+		}
+		if current.Revision < 1 {
+			return fmt.Errorf("load current issue revision before description update: server returned invalid revision %d", current.Revision)
+		}
+		body["expected_revision"] = current.Revision
 	}
 
 	var result map[string]any

@@ -104,6 +104,111 @@ func TestClaimTaskConcurrentCapacityRespected(t *testing.T) {
 	}
 }
 
+// TestClaimTaskSerializesSameIssueWithSpareCapacity distinguishes the
+// per-(issue, agent) claim fence from the agent-wide capacity limit. The agent
+// has room for two concurrent tasks and receives two independently queued
+// thread wakes for one issue. Only one may dispatch; the other must remain a
+// durable, observable queued row until its predecessor reaches a terminal
+// state.
+func TestClaimTaskSerializesSameIssueWithSpareCapacity(t *testing.T) {
+	ctx := context.Background()
+	pool := newTaskClaimRacePool(t)
+	agentID := createClaimCapacityFixture(t, ctx, pool)
+	agentUUID := util.MustParseUUID(agentID)
+
+	if _, err := pool.Exec(ctx, `UPDATE agent SET max_concurrent_tasks = 2 WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("give agent spare capacity: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		WITH task_scope AS (
+			SELECT id, first_value(issue_id) OVER (ORDER BY created_at, id) AS issue_id
+			FROM agent_task_queue
+			WHERE agent_id = $1 AND status = 'queued'
+		)
+		UPDATE agent_task_queue AS task
+		SET issue_id = task_scope.issue_id,
+			comment_thread_id = gen_random_uuid()
+		FROM task_scope
+		WHERE task.id = task_scope.id
+	`, agentID); err != nil {
+		t.Fatalf("put queued wakes on distinct threads of one issue: %v", err)
+	}
+
+	triggerName := fmt.Sprintf("claim_issue_serial_sleep_%d", time.Now().UnixNano())
+	createSleepTrigger(t, ctx, pool, triggerName, triggerName+"_fn", agentID)
+	svc := NewTaskService(db.New(pool), pool, nil, events.New())
+
+	const workers = 2
+	start := make(chan struct{})
+	claimed := make(chan string, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			task, err := svc.ClaimTask(ctx, agentUUID)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if task != nil {
+				claimed <- util.UUIDToString(task.ID)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(claimed)
+	close(errs)
+
+	for err := range errs {
+		t.Fatalf("claim task: %v", err)
+	}
+	var firstTaskID string
+	for id := range claimed {
+		if firstTaskID != "" {
+			t.Fatalf("same issue dispatched concurrently: %s and %s", firstTaskID, id)
+		}
+		firstTaskID = id
+	}
+	if firstTaskID == "" {
+		t.Fatal("expected one task to dispatch")
+	}
+
+	var dispatched, queued int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'dispatched'),
+		       count(*) FILTER (WHERE status = 'queued')
+		FROM agent_task_queue
+		WHERE agent_id = $1
+	`, agentID).Scan(&dispatched, &queued); err != nil {
+		t.Fatalf("read serialized queue state: %v", err)
+	}
+	if dispatched != 1 || queued != 1 {
+		t.Fatalf("serialized queue state = dispatched:%d queued:%d, want 1/1", dispatched, queued)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'completed', completed_at = now(), prepare_lease_expires_at = NULL
+		WHERE id = $1 AND status = 'dispatched'
+	`, firstTaskID); err != nil {
+		t.Fatalf("complete predecessor: %v", err)
+	}
+	second, err := svc.ClaimTask(ctx, agentUUID)
+	if err != nil {
+		t.Fatalf("claim queued successor: %v", err)
+	}
+	if second == nil {
+		t.Fatal("queued successor was lost after predecessor completed")
+	}
+	if util.UUIDToString(second.ID) == firstTaskID {
+		t.Fatalf("claimed predecessor %s twice", firstTaskID)
+	}
+}
+
 func createSleepTrigger(t *testing.T, ctx context.Context, pool *pgxpool.Pool, triggerName, functionName, agentID string) {
 	t.Helper()
 
