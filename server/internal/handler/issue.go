@@ -4346,7 +4346,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var issue db.Issue
-		if req.Updates.Description != nil {
+		if req.Updates.Description != nil || req.Updates.Title != nil {
 			// One batch-level base cannot describe multiple issue documents.
 			// Preserve every marked channel-media block conservatively, matching
 			// legacy single-update clients that omit description_base.

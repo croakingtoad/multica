@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"reflect"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -20,10 +22,14 @@ type issueWriteAuditProbe struct {
 	Endpoint            string
 	RequestedFields     []string
 	ChangedFields       []string
-	OldDescriptionBytes int64
-	NewDescriptionBytes int64
-	OldDescriptionHash  string
-	NewDescriptionHash  string
+	OldTitleBytes       pgtype.Int8
+	NewTitleBytes       pgtype.Int8
+	OldTitleHash        pgtype.Text
+	NewTitleHash        pgtype.Text
+	OldDescriptionBytes pgtype.Int8
+	NewDescriptionBytes pgtype.Int8
+	OldDescriptionHash  pgtype.Text
+	NewDescriptionHash  pgtype.Text
 	ExpectedRevision    pgtype.Int8
 	RevisionBefore      int64
 	RevisionAfter       int64
@@ -31,7 +37,17 @@ type issueWriteAuditProbe struct {
 	Outcome             string
 }
 
-func descriptionHash(value string) string {
+type countingIssueWriteTxStarter struct {
+	inner txStarter
+	calls int
+}
+
+func (s *countingIssueWriteTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+	s.calls++
+	return s.inner.Begin(ctx)
+}
+
+func issueTextHash(value string) string {
 	digest := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(digest[:])
 }
@@ -41,6 +57,7 @@ func issueWriteAuditFor(t *testing.T, issueID string) issueWriteAuditProbe {
 	var got issueWriteAuditProbe
 	dbfx.QueryRow(t, `
 		SELECT actor_type, actor_id, source_task_id, client_platform, endpoint, requested_fields, changed_fields,
+		       old_title_bytes, new_title_bytes, old_title_hash, new_title_hash,
 		       old_description_bytes, new_description_bytes,
 		       old_description_hash, new_description_hash, expected_revision,
 		       revision_before, revision_after, revision_conflict, outcome
@@ -50,6 +67,7 @@ func issueWriteAuditFor(t *testing.T, issueID string) issueWriteAuditProbe {
 		LIMIT 1
 	`, issueID).Scan(
 		&got.ActorType, &got.ActorID, &got.SourceTaskID, &got.ClientPlatform, &got.Endpoint, &got.RequestedFields, &got.ChangedFields,
+		&got.OldTitleBytes, &got.NewTitleBytes, &got.OldTitleHash, &got.NewTitleHash,
 		&got.OldDescriptionBytes, &got.NewDescriptionBytes,
 		&got.OldDescriptionHash, &got.NewDescriptionHash, &got.ExpectedRevision,
 		&got.RevisionBefore, &got.RevisionAfter, &got.RevisionConflict, &got.Outcome,
@@ -72,12 +90,14 @@ func assertDescriptionAudit(t *testing.T, got issueWriteAuditProbe, oldDescripti
 	if !reflect.DeepEqual(got.ChangedFields, []string{"description"}) {
 		t.Errorf("changed_fields = %v, want [description]", got.ChangedFields)
 	}
-	if got.OldDescriptionBytes != int64(len([]byte(oldDescription))) || got.NewDescriptionBytes != int64(len([]byte(newDescription))) {
+	if !got.OldDescriptionBytes.Valid || !got.NewDescriptionBytes.Valid ||
+		got.OldDescriptionBytes.Int64 != int64(len([]byte(oldDescription))) || got.NewDescriptionBytes.Int64 != int64(len([]byte(newDescription))) {
 		t.Errorf("description bytes = (%d, %d), want (%d, %d)",
-			got.OldDescriptionBytes, got.NewDescriptionBytes, len([]byte(oldDescription)), len([]byte(newDescription)))
+			got.OldDescriptionBytes.Int64, got.NewDescriptionBytes.Int64, len([]byte(oldDescription)), len([]byte(newDescription)))
 	}
-	if got.OldDescriptionHash != descriptionHash(oldDescription) || got.NewDescriptionHash != descriptionHash(newDescription) {
-		t.Errorf("description hashes = (%q, %q), want SHA-256 of before/after bodies", got.OldDescriptionHash, got.NewDescriptionHash)
+	if !got.OldDescriptionHash.Valid || !got.NewDescriptionHash.Valid ||
+		got.OldDescriptionHash.String != issueTextHash(oldDescription) || got.NewDescriptionHash.String != issueTextHash(newDescription) {
+		t.Errorf("description hashes = (%q, %q), want SHA-256 of before/after bodies", got.OldDescriptionHash.String, got.NewDescriptionHash.String)
 	}
 	if got.RevisionBefore != revisionBefore || got.RevisionAfter != revisionAfter {
 		t.Errorf("revisions = (%d, %d), want (%d, %d)", got.RevisionBefore, got.RevisionAfter, revisionBefore, revisionAfter)
@@ -167,6 +187,45 @@ func TestIssueDescriptionWritesAreAuditedAcrossUpdatePaths(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("batch title-only update", func(t *testing.T) {
+		const oldTitle = "batch title old"
+		const newTitle = "batch title new Ω"
+		issueID := dbfx.Issue(t, oldTitle, testutil.Cols{"description": "untouched description"})
+		dbfx.Cleanup(t, `DELETE FROM issue_write_audit WHERE issue_id = $1`, issueID)
+
+		req := auditUpdateRequest(http.MethodPost, "/api/issues/batch-update", map[string]any{
+			"issue_ids": []string{issueID}, "updates": map[string]any{"title": newTitle},
+		})
+		txStarter := &countingIssueWriteTxStarter{inner: testHandler.TxStarter}
+		h := *testHandler
+		h.TxStarter = txStarter
+		testutil.Call(t, h.BatchUpdateIssues, req).Want(http.StatusOK)
+		if txStarter.calls == 0 {
+			t.Error("title-only batch update started no transaction; want locked atomic write path")
+		}
+
+		got := issueWriteAuditFor(t, issueID)
+		if !reflect.DeepEqual(got.RequestedFields, []string{"title"}) || !reflect.DeepEqual(got.ChangedFields, []string{"title"}) {
+			t.Errorf("fields = (requested %v, changed %v), want title only", got.RequestedFields, got.ChangedFields)
+		}
+		if !got.OldTitleBytes.Valid || !got.NewTitleBytes.Valid ||
+			got.OldTitleBytes.Int64 != int64(len([]byte(oldTitle))) || got.NewTitleBytes.Int64 != int64(len([]byte(newTitle))) {
+			t.Errorf("title bytes = (%d, %d), want (%d, %d)",
+				got.OldTitleBytes.Int64, got.NewTitleBytes.Int64, len([]byte(oldTitle)), len([]byte(newTitle)))
+		}
+		if !got.OldTitleHash.Valid || !got.NewTitleHash.Valid ||
+			got.OldTitleHash.String != issueTextHash(oldTitle) || got.NewTitleHash.String != issueTextHash(newTitle) {
+			t.Errorf("title hashes = (%q, %q), want SHA-256 of before/after titles", got.OldTitleHash.String, got.NewTitleHash.String)
+		}
+		if got.OldDescriptionBytes.Valid || got.NewDescriptionBytes.Valid || got.OldDescriptionHash.Valid || got.NewDescriptionHash.Valid {
+			t.Errorf("description audit = (%+v, %+v, %+v, %+v), want all NULL",
+				got.OldDescriptionBytes, got.NewDescriptionBytes, got.OldDescriptionHash, got.NewDescriptionHash)
+		}
+		if got.RevisionBefore != 1 || got.RevisionAfter != 2 {
+			t.Errorf("revisions = (%d, %d), want (1, 2)", got.RevisionBefore, got.RevisionAfter)
+		}
+	})
 }
 
 func TestIssueDescriptionRevisionConflictIsAudited(t *testing.T) {
@@ -198,8 +257,9 @@ func TestIssueDescriptionRevisionConflictIsAudited(t *testing.T) {
 	if len(got.ChangedFields) != 0 {
 		t.Errorf("changed_fields = %v, want none for rejected write", got.ChangedFields)
 	}
-	if got.OldDescriptionBytes != int64(len("current")) || got.NewDescriptionBytes != int64(len("stale replacement")) {
-		t.Errorf("conflict description bytes = (%d, %d), want current/attempted lengths", got.OldDescriptionBytes, got.NewDescriptionBytes)
+	if !got.OldDescriptionBytes.Valid || !got.NewDescriptionBytes.Valid ||
+		got.OldDescriptionBytes.Int64 != int64(len("current")) || got.NewDescriptionBytes.Int64 != int64(len("stale replacement")) {
+		t.Errorf("conflict description bytes = (%d, %d), want current/attempted lengths", got.OldDescriptionBytes.Int64, got.NewDescriptionBytes.Int64)
 	}
 }
 
@@ -253,7 +313,8 @@ func TestChannelMediaDescriptionMaterializationIsAudited(t *testing.T) {
 	if got.ClientPlatform != "internal" || got.Endpoint != "channel_media_materialization" {
 		t.Errorf("materialization source = (%q, %q), want internal channel media", got.ClientPlatform, got.Endpoint)
 	}
-	if got.OldDescriptionBytes != int64(len(oldDescription)) || got.NewDescriptionBytes != int64(len(newDescription)) {
-		t.Errorf("materialization lengths = (%d, %d), want (%d, %d)", got.OldDescriptionBytes, got.NewDescriptionBytes, len(oldDescription), len(newDescription))
+	if !got.OldDescriptionBytes.Valid || !got.NewDescriptionBytes.Valid ||
+		got.OldDescriptionBytes.Int64 != int64(len(oldDescription)) || got.NewDescriptionBytes.Int64 != int64(len(newDescription)) {
+		t.Errorf("materialization lengths = (%d, %d), want (%d, %d)", got.OldDescriptionBytes.Int64, got.NewDescriptionBytes.Int64, len(oldDescription), len(newDescription))
 	}
 }
