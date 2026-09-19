@@ -305,12 +305,25 @@ jobs:
 
       - name: Build, type check, and lint
         if: ${{ needs.changes.outputs.frontend == 'true' }}
-        # Mobile lives in a parallel mobile-verify workflow (path-filtered
-        # to apps/mobile/** + packages/core/**) so it doesn't add
-        # ~50s of expo-lint + tsc to every web/desktop PR. Keep this
-        # filter in sync with the root package.json scripts, which also
-        # exclude @multica/mobile.
-        run: pnpm exec turbo build typecheck lint --filter='!@multica/docs' --filter='!@multica/mobile'
+        # Mobile's available typecheck, lint, and test tasks already run in
+        # the path-filtered Mobile Verify workflow; excluding it here avoids
+        # duplicate work on every web/desktop PR. Keep this filter in sync
+        # with the root package.json scripts, which also exclude
+        # @multica/mobile.
+        run: pnpm exec turbo build typecheck lint --filter='!@multica/mobile'
+
+      # LOCO-1808 — fail if any build artifact or generated file is
+      # uncommitted. Uses `git status --porcelain` rather than
+      # `git diff --exit-code` because the latter misses untracked files.
+      - name: Verify clean working tree after build
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
+        run: |
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "Build left the working tree dirty (LOCO-1808):"
+            echo "$dirty"
+            exit 1
+          fi
 
       # Blocking from the start: it reports nothing today, and it covers the
       # one regression knip structurally cannot see. packages/ui exports four
@@ -386,11 +399,13 @@ jobs:
 
       - name: Test web, core, and desktop
         if: ${{ needs.changes.outputs.frontend == 'true' }}
-        # Same filter rationale as frontend-build. Type errors are not this
-        # job's responsibility -- frontend-build owns the `typecheck` task.
-        # `test` reaches dependency sources through the hash-only
-        # `^cache-inputs` edge (see turbo.json), so no `tsc` runs here.
-        run: pnpm exec turbo test --filter='!@multica/docs' --filter='!@multica/mobile' --filter='!@multica/views'
+        # Same filter rationale as frontend-build. Views tests are covered by
+        # the frontend-views-test shards below under the same frontend change
+        # gate. Type errors are not this job's responsibility --
+        # frontend-build owns the `typecheck` task. `test` reaches dependency
+        # sources through the hash-only `^cache-inputs` edge (see turbo.json),
+        # so no `tsc` runs here.
+        run: pnpm exec turbo test --filter='!@multica/mobile' --filter='!@multica/views'
 
   # Split views across two runners. GitHub reports the matrix job's combined
   # result, so the aggregate gate can continue depending on this one job ID.
